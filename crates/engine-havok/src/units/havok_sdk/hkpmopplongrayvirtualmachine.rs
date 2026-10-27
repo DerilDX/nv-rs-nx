@@ -127,6 +127,8 @@ fn run_query(e: &mut Engine, this: Ptr, tree: Ptr, ray: Ptr) {
 /// Sets `this + 0x54` to 1, `this + 0x64` to `collector`, `this + 0x58` to `extra` and runs
 /// the shared query (see `run_query`) on `tree` and `ray`; then stores the byte at
 /// `this + 0x50` in the byte `out_hit` points to.
+/// Answers `out_hit`: the exe leaves it in `EAX` at every `RET` (the hkBool/hkResult result
+/// returned through a pointer, which callers read through `EAX`).
 pub fn fn_00dd2df0(
     e: &mut Engine,
     this: Ptr,
@@ -135,7 +137,7 @@ pub fn fn_00dd2df0(
     tree: Ptr,
     ray: Ptr,
     extra: u32,
-) {
+) -> Ptr {
     let one = x87_quiet_bits(0x3f80_0000);
     e.mem.set_u32(this.addr() + 0x54, one);
     e.mem.set_u32(this.addr() + 0x64, collector);
@@ -143,6 +145,7 @@ pub fn fn_00dd2df0(
     run_query(e, this, tree, ray);
     let hit = e.mem.u8(this.addr() + 0x50);
     e.mem.set_u8(out_hit.addr(), hit);
+    out_hit
 }
 
 // Translated from 00dd2ed0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -831,7 +834,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00dd_1f30,
             hkp_mopp_long_ray_virtual_machine_query_ray_on_tree(Ptr, Ptr, u32, Ptr, u32)
         ),
-        entry!(0x00dd_2df0, fn_00dd2df0(Ptr, Ptr, u32, Ptr, Ptr, u32)),
+        entry!(0x00dd_2df0, fn_00dd2df0(Ptr, Ptr, u32, Ptr, Ptr, u32) -> Ptr),
         entry!(0x00dd_2ed0, fn_00dd2ed0(Ptr, u32, Ptr, Ptr, u32, Ptr)),
     ]
 }
@@ -923,6 +926,20 @@ mod tests {
             .map(|i| unit * ((3.0 + i as f32) - (1.0 + (i % 4) as f32)))
             .collect();
         assert_eq!(*segment, expected);
+    }
+
+    #[test]
+    fn fn_00dd2df0_answers_its_result_pointer() {
+        let mut e = Engine::new();
+        let (this, tree, ray, _seen) = rig(&mut e, 0x0d);
+        let out = e.mem.alloc(4);
+        let extra = 0x5555u32;
+        // The exe leaves the result pointer in EAX at every RET; callers read through it.
+        assert_eq!(
+            e.call(0x00dd_2df0, &args![this, out, 0x77u32, tree, ray, extra])
+                .u32(),
+            args![out][0]
+        );
     }
 
     #[test]

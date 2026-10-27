@@ -206,7 +206,9 @@ fn all_accept(
 /// Thiscall, `RET 0xc`: asks the `[+0x2c]` objects of `*(this + 0x28)` (last first, count read
 /// once) through virtual slot `4` of their interface at `+8` with `(slot, first, second)` (the
 /// slot word starts as `second`); `out` gets 1 when all answer nonzero, else 0.
-pub fn fn_00e49bc0(e: &mut Engine, this: Ptr, out: u32, first: u32, second: u32) {
+/// Answers `out`: the exe leaves it in `EAX` at every `RET` (the hkBool result returned
+/// through a pointer), and virtual call sites test the flag through `EAX` (e.g. 00c90f6a).
+pub fn fn_00e49bc0(e: &mut Engine, this: Ptr, out: u32, first: u32, second: u32) -> u32 {
     let this = this.addr();
     let count = e.mem.i32(this.wrapping_add(0x2c));
     all_accept(
@@ -217,11 +219,14 @@ pub fn fn_00e49bc0(e: &mut Engine, this: Ptr, out: u32, first: u32, second: u32)
         4,
         &[first, second],
     );
+    out
 }
 
 // Translated from 00e49c20 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Thiscall, `RET 0x18`: as `00e49bc0` over `[+0x28]` objects of `*(this + 0x24)`, through
 /// virtual slot `4` of their interface at `+0xc`, with five words after the slot word.
+/// Answers `out`: the exe leaves it in `EAX` at every `RET` (the hkBool result returned
+/// through a pointer), and virtual call sites test the flag through `EAX` (e.g. 00cfae7e).
 #[allow(clippy::too_many_arguments)]
 pub fn fn_00e49c20(
     e: &mut Engine,
@@ -232,7 +237,7 @@ pub fn fn_00e49c20(
     word_4: u32,
     word_5: u32,
     word_6: u32,
-) {
+) -> u32 {
     let this = this.addr();
     let count = e.mem.i32(this.wrapping_add(0x28));
     all_accept(
@@ -243,11 +248,14 @@ pub fn fn_00e49c20(
         4,
         &[word_2, word_3, word_4, word_5, word_6],
     );
+    out
 }
 
 // Translated from 00e49c90 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Thiscall, `RET 0x14`: as `00e49bc0` over `[+0x24]` objects of `*(this + 0x20)`, through
 /// virtual slot `0` of their interface at `+0x10`, with four words after the slot word.
+/// Answers `out`: the exe leaves it in `EAX` at every `RET` (the hkBool/hkResult result
+/// returned through a pointer, which callers read through `EAX`).
 pub fn fn_00e49c90(
     e: &mut Engine,
     this: Ptr,
@@ -256,7 +264,7 @@ pub fn fn_00e49c90(
     word_3: u32,
     word_4: u32,
     word_5: u32,
-) {
+) -> u32 {
     let this = this.addr();
     let count = e.mem.i32(this.wrapping_add(0x24));
     all_accept(
@@ -267,11 +275,14 @@ pub fn fn_00e49c90(
         0,
         &[word_2, word_3, word_4, word_5],
     );
+    out
 }
 
 // Translated from 00e49cf0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Thiscall, `RET 0x20`: as `00e49bc0` over `[+0x28]` objects of `*(this + 0x24)`, through
 /// virtual slot `0` of their interface at `+0xc`, with seven words after the slot word.
+/// Answers `out`: the exe leaves it in `EAX` at every `RET` (the hkBool/hkResult result
+/// returned through a pointer, which callers read through `EAX`).
 #[allow(clippy::too_many_arguments)]
 pub fn fn_00e49cf0(
     e: &mut Engine,
@@ -284,7 +295,7 @@ pub fn fn_00e49cf0(
     word_6: u32,
     word_7: u32,
     word_8: u32,
-) {
+) -> u32 {
     let this = this.addr();
     let count = e.mem.i32(this.wrapping_add(0x28));
     all_accept(
@@ -295,12 +306,15 @@ pub fn fn_00e49cf0(
         0,
         &[word_2, word_3, word_4, word_5, word_6, word_7, word_8],
     );
+    out
 }
 
 // Translated from 00e49d60 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Thiscall, `RET 0xc`: as `00e49bc0` over `[+0x20]` objects of `*(this + 0x1c)`, through
 /// virtual slot `4` of their interface at `+0x14`, with two words after the slot word.
-pub fn fn_00e49d60(e: &mut Engine, this: Ptr, out: u32, first: u32, second: u32) {
+/// Answers `out`: the exe leaves it in `EAX` at every `RET` (the hkBool result returned
+/// through a pointer), and virtual call sites test the flag through `EAX` (e.g. 00c90f6a).
+pub fn fn_00e49d60(e: &mut Engine, this: Ptr, out: u32, first: u32, second: u32) -> u32 {
     let this = this.addr();
     let count = e.mem.i32(this.wrapping_add(0x20));
     all_accept(
@@ -311,6 +325,7 @@ pub fn fn_00e49d60(e: &mut Engine, this: Ptr, out: u32, first: u32, second: u32)
         4,
         &[first, second],
     );
+    out
 }
 
 /// Stores the vtables `010e90e8` at `+0`, `010e90dc`, `010e90c8`, `010e90bc` and `010e90b0` at
@@ -415,14 +430,14 @@ pub fn fn_00e49fe0(e: &mut Engine, this: Ptr) -> u32 {
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00e4_99d0, fn_00e499d0(Ptr, u32) -> u32),
-        entry!(0x00e4_9bc0, fn_00e49bc0(Ptr, u32, u32, u32)),
-        entry!(0x00e4_9c20, fn_00e49c20(Ptr, u32, u32, u32, u32, u32, u32)),
-        entry!(0x00e4_9c90, fn_00e49c90(Ptr, u32, u32, u32, u32, u32)),
+        entry!(0x00e4_9bc0, fn_00e49bc0(Ptr, u32, u32, u32) -> u32),
+        entry!(0x00e4_9c20, fn_00e49c20(Ptr, u32, u32, u32, u32, u32, u32) -> u32),
+        entry!(0x00e4_9c90, fn_00e49c90(Ptr, u32, u32, u32, u32, u32) -> u32),
         entry!(
             0x00e4_9cf0,
-            fn_00e49cf0(Ptr, u32, u32, u32, u32, u32, u32, u32, u32)
+            fn_00e49cf0(Ptr, u32, u32, u32, u32, u32, u32, u32, u32) -> u32
         ),
-        entry!(0x00e4_9d60, fn_00e49d60(Ptr, u32, u32, u32)),
+        entry!(0x00e4_9d60, fn_00e49d60(Ptr, u32, u32, u32) -> u32),
         entry!(0x00e4_9e50, fn_00e49e50(Ptr, u32) -> u32),
         entry!(0x00e4_9f40, fn_00e49f40(Ptr)),
         entry!(0x00e4_9fe0, fn_00e49fe0(Ptr) -> u32),
@@ -659,6 +674,19 @@ mod tests {
     }
 
     #[test]
+    fn fn_00e49bc0_answers_its_result_pointer() {
+        let mut e = engine();
+        let (this, _objects, _calls) = acceptors(&mut e, [0x28, 0x2c, 8, 4], &[1, 0, 1]);
+        let out = out_byte(&mut e);
+        // The exe leaves the result pointer in EAX at every RET; callers read through it.
+        assert_eq!(
+            e.call(0x00e4_9bc0, &args![this, out, 0x11u32, 0x22u32])
+                .u32(),
+            args![out][0]
+        );
+    }
+
+    #[test]
     fn wider_acceptors_pass_all_their_words() {
         let mut e = engine();
         let out = out_byte(&mut e);
@@ -687,6 +715,99 @@ mod tests {
         e.call(0x00e4_9d60, &args![this4, out, 9u32, 10u32]);
         assert_eq!(e.mem.u8(out), 0);
         assert_eq!(&calls.borrow()[0].0[2..], &[9, 10]);
+    }
+
+    #[test]
+    fn fn_00e49d60_answers_its_result_pointer() {
+        let mut e = engine();
+        let out = out_byte(&mut e);
+        let (this, objects, calls) = acceptors(&mut e, [0x24, 0x28, 0xc, 4], &[1, 1]);
+        e.call(0x00e4_9c20, &args![this, out, 2u32, 3u32, 4u32, 5u32, 6u32]);
+        assert_eq!(e.mem.u8(out), 1);
+        assert_eq!(&calls.borrow()[0].0[2..], &[2, 3, 4, 5, 6]);
+        assert_eq!(calls.borrow()[0].0[0], objects[1] + 0xc);
+        assert_eq!(calls.borrow()[0].1, 6);
+        let (this2, _, calls) = acceptors(&mut e, [0x20, 0x24, 0x10, 0], &[1, 0]);
+        e.call(0x00e4_9c90, &args![this2, out, 2u32, 3u32, 4u32, 5u32]);
+        assert_eq!(e.mem.u8(out), 0);
+        assert_eq!(calls.borrow().len(), 1);
+        assert_eq!(&calls.borrow()[0].0[2..], &[2, 3, 4, 5]);
+        assert_eq!(calls.borrow()[0].1, 5);
+        let (this3, _, calls) = acceptors(&mut e, [0x24, 0x28, 0xc, 0], &[1, 1, 1]);
+        e.call(
+            0x00e4_9cf0,
+            &args![this3, out, 2u32, 3u32, 4u32, 5u32, 6u32, 7u32, 8u32],
+        );
+        assert_eq!(e.mem.u8(out), 1);
+        assert_eq!(calls.borrow().len(), 3);
+        assert_eq!(&calls.borrow()[0].0[2..], &[2, 3, 4, 5, 6, 7, 8]);
+        assert_eq!(calls.borrow()[0].1, 8);
+        let (this4, _, _calls) = acceptors(&mut e, [0x1c, 0x20, 0x14, 4], &[1, 0]);
+        // The exe leaves the result pointer in EAX at every RET; callers read through it.
+        assert_eq!(
+            e.call(0x00e4_9d60, &args![this4, out, 9u32, 10u32]).u32(),
+            args![out][0]
+        );
+    }
+
+    #[test]
+    fn fn_00e49cf0_answers_its_result_pointer() {
+        let mut e = engine();
+        let out = out_byte(&mut e);
+        let (this, objects, calls) = acceptors(&mut e, [0x24, 0x28, 0xc, 4], &[1, 1]);
+        e.call(0x00e4_9c20, &args![this, out, 2u32, 3u32, 4u32, 5u32, 6u32]);
+        assert_eq!(e.mem.u8(out), 1);
+        assert_eq!(&calls.borrow()[0].0[2..], &[2, 3, 4, 5, 6]);
+        assert_eq!(calls.borrow()[0].0[0], objects[1] + 0xc);
+        assert_eq!(calls.borrow()[0].1, 6);
+        let (this2, _, calls) = acceptors(&mut e, [0x20, 0x24, 0x10, 0], &[1, 0]);
+        e.call(0x00e4_9c90, &args![this2, out, 2u32, 3u32, 4u32, 5u32]);
+        assert_eq!(e.mem.u8(out), 0);
+        assert_eq!(calls.borrow().len(), 1);
+        assert_eq!(&calls.borrow()[0].0[2..], &[2, 3, 4, 5]);
+        assert_eq!(calls.borrow()[0].1, 5);
+        let (this3, _, _calls) = acceptors(&mut e, [0x24, 0x28, 0xc, 0], &[1, 1, 1]);
+        // The exe leaves the result pointer in EAX at every RET; callers read through it.
+        assert_eq!(
+            e.call(
+                0x00e4_9cf0,
+                &args![this3, out, 2u32, 3u32, 4u32, 5u32, 6u32, 7u32, 8u32],
+            )
+            .u32(),
+            args![out][0]
+        );
+    }
+
+    #[test]
+    fn fn_00e49c90_answers_its_result_pointer() {
+        let mut e = engine();
+        let out = out_byte(&mut e);
+        let (this, objects, calls) = acceptors(&mut e, [0x24, 0x28, 0xc, 4], &[1, 1]);
+        e.call(0x00e4_9c20, &args![this, out, 2u32, 3u32, 4u32, 5u32, 6u32]);
+        assert_eq!(e.mem.u8(out), 1);
+        assert_eq!(&calls.borrow()[0].0[2..], &[2, 3, 4, 5, 6]);
+        assert_eq!(calls.borrow()[0].0[0], objects[1] + 0xc);
+        assert_eq!(calls.borrow()[0].1, 6);
+        let (this2, _, _calls) = acceptors(&mut e, [0x20, 0x24, 0x10, 0], &[1, 0]);
+        // The exe leaves the result pointer in EAX at every RET; callers read through it.
+        assert_eq!(
+            e.call(0x00e4_9c90, &args![this2, out, 2u32, 3u32, 4u32, 5u32])
+                .u32(),
+            args![out][0]
+        );
+    }
+
+    #[test]
+    fn fn_00e49c20_answers_its_result_pointer() {
+        let mut e = engine();
+        let out = out_byte(&mut e);
+        let (this, _objects, _calls) = acceptors(&mut e, [0x24, 0x28, 0xc, 4], &[1, 1]);
+        // The exe leaves the result pointer in EAX at every RET; callers read through it.
+        assert_eq!(
+            e.call(0x00e4_9c20, &args![this, out, 2u32, 3u32, 4u32, 5u32, 6u32])
+                .u32(),
+            args![out][0]
+        );
     }
 
     /// A router with an allocator whose allocate returns a fresh block and grants `granted`

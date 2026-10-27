@@ -122,42 +122,48 @@ pub fn fn_00cf5140(e: &mut Engine, this: Ptr, result: Ptr, input: Ptr, output: P
     profile_record(e, LABEL_LIST);
     let depth = e.mem.u32(output.addr() + 0x40);
     e.mem.set_u32(output.addr() + 0x40, depth.wrapping_add(1));
-    let mut best = u32::MAX;
     // The child casts write their `hkBool` into the stack slot of `input` and the filter's
-    // answer comes back through a separate byte.
-    let hit_slot = e.mem.alloc(4);
-    e.mem.set_u32(hit_slot, input.addr());
-    let filter_slot = e.mem.alloc(4);
-    let filter = e.mem.u32(input.addr() + 0x24);
-    let mut index = 0u32;
-    while (index as i32) < e.mem.u32(this.addr() + 0x1c) as i32 {
-        if child_enabled(e, this, index) {
-            let admitted = if filter == 0 {
-                true
-            } else {
-                let answer = e
-                    .vcall(
-                        filter,
-                        0,
-                        &args![filter_slot, input, this, this.addr() + 0x10, index],
-                    )
-                    .u32();
-                e.mem.u8(answer) != 0
-            };
-            if admitted {
-                let child = e
-                    .mem
-                    .u32(e.mem.u32(this.addr() + 0x18).wrapping_add(index << 4));
-                e.vcall(child, 0x20, &args![hit_slot, input, output]);
-                if e.mem.u8(hit_slot) != 0 {
-                    best = index;
+    // answer comes back through a separate byte. The exe's frame (`SUB ESP,0x8`, four pushes)
+    // taken with the arguments: the filter byte at +0x13 (00cf5222), the return address at
+    // +0x18 and `input`'s own slot at +0x20 (00cf51cc).
+    let best = e.with_stack(0x28, |e, frame| {
+        let frame = frame.addr();
+        let mut best = u32::MAX;
+        let hit_slot = frame + 0x20;
+        e.mem.set_u32(frame + 0x1c, result.addr());
+        e.mem.set_u32(hit_slot, input.addr());
+        e.mem.set_u32(frame + 0x24, output.addr());
+        let filter_slot = frame + 0x13;
+        let filter = e.mem.u32(input.addr() + 0x24);
+        let mut index = 0u32;
+        while (index as i32) < e.mem.u32(this.addr() + 0x1c) as i32 {
+            if child_enabled(e, this, index) {
+                let admitted = if filter == 0 {
+                    true
+                } else {
+                    let answer = e
+                        .vcall(
+                            filter,
+                            0,
+                            &args![filter_slot, input, this, this.addr() + 0x10, index],
+                        )
+                        .u32();
+                    e.mem.u8(answer) != 0
+                };
+                if admitted {
+                    let child = e
+                        .mem
+                        .u32(e.mem.u32(this.addr() + 0x18).wrapping_add(index << 4));
+                    e.vcall(child, 0x20, &args![hit_slot, input, output]);
+                    if e.mem.u8(hit_slot) != 0 {
+                        best = index;
+                    }
                 }
             }
+            index = index.wrapping_add(1);
         }
-        index = index.wrapping_add(1);
-    }
-    e.mem.free(hit_slot);
-    e.mem.free(filter_slot);
+        best
+    });
     let depth = e.mem.u32(output.addr() + 0x40).wrapping_sub(1);
     e.mem.set_u32(output.addr() + 0x40, depth);
     if best != u32::MAX {
@@ -178,39 +184,46 @@ pub fn fn_00cf5140(e: &mut Engine, this: Ptr, result: Ptr, input: Ptr, output: P
 pub fn fn_00cf52c0(e: &mut Engine, this: Ptr, input: Ptr, body: Ptr, collector: u32) {
     profile_record(e, LABEL_LIST);
     let filter = e.mem.u32(input.addr() + 0x24);
-    let filter_slot = e.mem.alloc(4);
-    let record = e.mem.alloc(16);
-    let mut index = 0u32;
-    while (index as i32) < e.mem.u32(this.addr() + 0x1c) as i32 {
-        if child_enabled(e, this, index) {
-            let admitted = if filter == 0 {
-                true
-            } else {
-                let answer = e
-                    .vcall(
-                        filter,
-                        0,
-                        &args![filter_slot, input, this, this.addr() + 0x10, index],
-                    )
-                    .u32();
-                e.mem.u8(answer) != 0
-            };
-            if admitted {
-                let child = e
-                    .mem
-                    .u32(e.mem.u32(this.addr() + 0x18).wrapping_add(index << 4));
-                let body_word = e.mem.u32(body.addr() + 8);
-                e.mem.set_u32(record, child);
-                e.mem.set_u32(record + 4, index);
-                e.mem.set_u32(record + 8, body_word);
-                e.mem.set_u32(record + 12, body.addr());
-                e.vcall(child, 0x24, &args![input, record, collector]);
+    // The exe's frame (`SUB ESP,0x14`, four pushes) taken with the arguments: the collector
+    // record at +0x14 (00cf5349 / 00cf53c4), the return address at +0x24; the filter's byte goes
+    // to `input`'s own slot, +0x28 (00cf539e).
+    e.with_stack(0x34, |e, frame| {
+        let frame = frame.addr();
+        e.mem.set_u32(frame + 0x28, input.addr());
+        e.mem.set_u32(frame + 0x2c, body.addr());
+        e.mem.set_u32(frame + 0x30, collector);
+        let filter_slot = frame + 0x28;
+        let record = frame + 0x14;
+        let mut index = 0u32;
+        while (index as i32) < e.mem.u32(this.addr() + 0x1c) as i32 {
+            if child_enabled(e, this, index) {
+                let admitted = if filter == 0 {
+                    true
+                } else {
+                    let answer = e
+                        .vcall(
+                            filter,
+                            0,
+                            &args![filter_slot, input, this, this.addr() + 0x10, index],
+                        )
+                        .u32();
+                    e.mem.u8(answer) != 0
+                };
+                if admitted {
+                    let child = e
+                        .mem
+                        .u32(e.mem.u32(this.addr() + 0x18).wrapping_add(index << 4));
+                    let body_word = e.mem.u32(body.addr() + 8);
+                    e.mem.set_u32(record, child);
+                    e.mem.set_u32(record + 4, index);
+                    e.mem.set_u32(record + 8, body_word);
+                    e.mem.set_u32(record + 12, body.addr());
+                    e.vcall(child, 0x24, &args![input, record, collector]);
+                }
             }
+            index = index.wrapping_add(1);
         }
-        index = index.wrapping_add(1);
-    }
-    e.mem.free(filter_slot);
-    e.mem.free(record);
+    });
     profile_record(e, LABEL_END);
 }
 
@@ -416,10 +429,14 @@ mod tests {
         e.mem.set_u32(input + 0x24, filter);
         let output = e.mem.alloc(0x50);
         let result = e.mem.alloc(4);
+        // The filter byte at +0x13 of the exe's 0x28-byte frame.
+        let frame = e.mem.alloc(0x28);
+        e.mem.free(frame);
         e.call(0x00cf_5140, &args![shape, result, input, output]);
         assert_eq!(*cast.borrow(), vec![children[1]]);
         assert_eq!(seen.borrow().len(), 2);
         let first = seen.borrow()[0].clone();
+        assert_eq!(first[1], frame + 0x13);
         assert_eq!(
             (first[0], first[3], first[4], first[5]),
             (filter, shape, shape + 0x10, 0)
@@ -443,6 +460,16 @@ mod tests {
         let input = e.mem.alloc(0x30);
         let body = e.mem.alloc(0x10);
         e.mem.set_u32(body + 8, 0x77);
+        // The record sits at +0x14 of the exe's 0x34-byte frame.
+        let frame = e.mem.alloc(0x34);
+        e.mem.free(frame);
+        let seen = Rc::clone(&records);
+        e.register_double(CHILD_DOUBLE, move |e, a| {
+            assert_eq!(a[2], frame + 0x14);
+            let record: Vec<u32> = (0..4).map(|i| e.mem.u32(a[2] + 4 * i)).collect();
+            seen.borrow_mut().push((a[0], a[1], a[3], record));
+            Ret::default()
+        });
         e.call(0x00cf_52c0, &args![shape, input, body, 0x5555u32]);
         let got = records.borrow().clone();
         assert_eq!(got.len(), 2);

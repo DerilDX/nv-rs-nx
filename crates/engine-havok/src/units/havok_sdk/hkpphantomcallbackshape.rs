@@ -57,14 +57,17 @@ pub fn hkp_phantom_callback_shape_get_aabb_impl(
 /// `hkpPhantomCallbackShape::castRayImpl` (Xbox PDB): `ECX` = shape and three stack words, of
 /// which the first, `result`, is where a byte 0 (no hit) is stored. Nothing is returned (`EAX`
 /// is left as it was).
+/// Answers `result`: the exe leaves it in `EAX` at every `RET` (the hkBool/hkResult result
+/// returned through a pointer, which callers read through `EAX`).
 pub fn hkp_phantom_callback_shape_cast_ray_impl(
     e: &mut Engine,
     _this: Ptr,
     result: u32,
     _input: u32,
     _output: u32,
-) {
+) -> u32 {
     e.mem.set_u8(result, 0);
+    result
 }
 
 /// This unit's translated functions, by exe address.
@@ -84,7 +87,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x00c9e3d0,
-            hkp_phantom_callback_shape_cast_ray_impl(Ptr, u32, u32, u32)
+            hkp_phantom_callback_shape_cast_ray_impl(Ptr, u32, u32, u32) -> u32
         ),
     ]
 }
@@ -142,5 +145,18 @@ mod tests {
         e.mem.set_u8(result, 1);
         e.call(0x00c9_e3d0, &args![0x10u32, result, 2u32, 3u32]);
         assert_eq!(e.mem.u8(result), 0);
+    }
+
+    #[test]
+    fn fn_00c9e3d0_answers_its_result_pointer() {
+        let mut e = Engine::new();
+        let result = e.mem.alloc(4);
+        e.mem.set_u8(result, 1);
+        // The exe leaves the result pointer in EAX at every RET; callers read through it.
+        assert_eq!(
+            e.call(0x00c9_e3d0, &args![0x10u32, result, 2u32, 3u32])
+                .u32(),
+            args![result][0]
+        );
     }
 }

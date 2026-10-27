@@ -1682,63 +1682,65 @@ pub fn start_menu_update_highlighted_save_game_info(e: &mut Engine, this: Ptr<St
             }
             set_string(e, name_tile, TRAIT_0FC4, player_name, true);
             name_shown = player_name != 0;
-            let text_object = e.mem.alloc(8);
-            let blank_text = e.mem.alloc(2);
-            e.mem.write(blank_text, &blank);
-            e.call(STRING_CONSTRUCT, &args![text_object]);
-            let title = fn_007d5140(e, Ptr::new(entry));
-            let level = fn_007d5160(e, Ptr::new(entry));
-            let level_text = setting_text(e, SETTING_011D3B2C);
-            e.call(
-                STRING_FORMAT,
-                &args![
-                    text_object,
-                    FORMAT_LEVEL,
-                    level_text,
-                    level,
-                    blank_text,
-                    title
-                ],
-            );
-            let level_tile = tile_of(e, this, TILE_PLAYER_LEVEL);
-            let characters = e.call(FIRST_WORD, &args![text_object]).u32();
-            set_string(e, level_tile, TRAIT_0FC4, characters, true);
-            level_shown = true;
-            let play_time = fn_007d5180(e, Ptr::new(entry));
-            let play_time_text = setting_text(e, SETTING_011D3954);
-            e.call(
-                STRING_FORMAT,
-                &args![
-                    text_object,
-                    FORMAT_TWO_STRINGS,
-                    play_time_text,
-                    blank_text,
-                    play_time
-                ],
-            );
-            let time_tile = tile_of(e, this, TILE_PLAY_TIME);
-            let characters = e.call(FIRST_WORD, &args![text_object]).u32();
-            set_string(e, time_tile, TRAIT_0FC4, characters, true);
-            time_shown = true;
-            let language_name = e.call(FILE_ENTRY_LANGUAGE, &args![entry]).u32();
-            let language_text = setting_text(e, SETTING_011D21B4);
-            e.call(
-                STRING_FORMAT,
-                &args![
-                    text_object,
-                    FORMAT_TWO_STRINGS,
-                    language_text,
-                    blank_text,
-                    language_name
-                ],
-            );
-            let version_tile = tile_of(e, this, TILE_SAVE_VERSION);
-            let characters = e.call(FIRST_WORD, &args![text_object]).u32();
-            set_string(e, version_tile, TRAIT_0FC4, characters, true);
-            language_shown = true;
-            e.call(STRING_DESTRUCT, &args![text_object]);
-            e.mem.free(blank_text);
-            e.mem.free(text_object);
+            // The exe's frame (`SUB ESP,0x20` under the exception record, then the record
+            // link): the text at `EBP-0x20` (+0x10), the blank at `EBP-0x28` (+8).
+            e.with_stack(0x30, |e, frame| {
+                let text_object = frame.addr() + 0x10;
+                let blank_text = frame.addr() + 8;
+                e.mem.write(blank_text, &blank);
+                e.call(STRING_CONSTRUCT, &args![text_object]);
+                let title = fn_007d5140(e, Ptr::new(entry));
+                let level = fn_007d5160(e, Ptr::new(entry));
+                let level_text = setting_text(e, SETTING_011D3B2C);
+                e.call(
+                    STRING_FORMAT,
+                    &args![
+                        text_object,
+                        FORMAT_LEVEL,
+                        level_text,
+                        level,
+                        blank_text,
+                        title
+                    ],
+                );
+                let level_tile = tile_of(e, this, TILE_PLAYER_LEVEL);
+                let characters = e.call(FIRST_WORD, &args![text_object]).u32();
+                set_string(e, level_tile, TRAIT_0FC4, characters, true);
+                level_shown = true;
+                let play_time = fn_007d5180(e, Ptr::new(entry));
+                let play_time_text = setting_text(e, SETTING_011D3954);
+                e.call(
+                    STRING_FORMAT,
+                    &args![
+                        text_object,
+                        FORMAT_TWO_STRINGS,
+                        play_time_text,
+                        blank_text,
+                        play_time
+                    ],
+                );
+                let time_tile = tile_of(e, this, TILE_PLAY_TIME);
+                let characters = e.call(FIRST_WORD, &args![text_object]).u32();
+                set_string(e, time_tile, TRAIT_0FC4, characters, true);
+                time_shown = true;
+                let language_name = e.call(FILE_ENTRY_LANGUAGE, &args![entry]).u32();
+                let language_text = setting_text(e, SETTING_011D21B4);
+                e.call(
+                    STRING_FORMAT,
+                    &args![
+                        text_object,
+                        FORMAT_TWO_STRINGS,
+                        language_text,
+                        blank_text,
+                        language_name
+                    ],
+                );
+                let version_tile = tile_of(e, this, TILE_SAVE_VERSION);
+                let characters = e.call(FIRST_WORD, &args![text_object]).u32();
+                set_string(e, version_tile, TRAIT_0FC4, characters, true);
+                language_shown = true;
+                e.call(STRING_DESTRUCT, &args![text_object]);
+            });
         }
     } else if e.call(INTERFACE_ACTIVE, &[]).bool() {
         let timer = e.call(IDLE_TIMER_GET, &[]).u32();
@@ -2814,17 +2816,20 @@ pub fn start_menu_initialize_save_load_list_item(e: &mut Engine, tile: Ptr, entr
         let text = setting_text(e, SETTING_011D4E04);
         set_string(e, tile, TRAIT_1004, text, true);
     } else {
-        let text_object = e.mem.alloc(8);
-        e.call(STRING_CONSTRUCT, &args![text_object]);
-        let number = fn_007d6950(e, entry);
-        e.call(
-            STRING_FORMAT,
-            &args![text_object, FORMAT_SAVE_NUMBER, number],
-        );
-        let characters = e.call(FIRST_WORD, &args![text_object]).u32();
-        set_string(e, tile, TRAIT_1004, characters, true);
-        e.call(STRING_DESTRUCT, &args![text_object]);
-        e.mem.free(text_object);
+        // The exe's frame (`SUB ESP,0xc` under the exception record, then the record link):
+        // the text at `EBP-0x14` (+8).
+        e.with_stack(0x1c, |e, frame| {
+            let text_object = frame.addr() + 8;
+            e.call(STRING_CONSTRUCT, &args![text_object]);
+            let number = fn_007d6950(e, entry);
+            e.call(
+                STRING_FORMAT,
+                &args![text_object, FORMAT_SAVE_NUMBER, number],
+            );
+            let characters = e.call(FIRST_WORD, &args![text_object]).u32();
+            set_string(e, tile, TRAIT_1004, characters, true);
+            e.call(STRING_DESTRUCT, &args![text_object]);
+        });
     }
     let location = if e.call(FILE_ENTRY_IS_CORRUPT, &args![entry]).bool() {
         setting_text(e, SETTING_011D46E4)
@@ -5147,6 +5152,13 @@ mod tests {
     }
 
     /// The argument words of every logged call to `addr`.
+    /// The block the next `with_stack(size)` takes (the last freed block of that size).
+    fn next_frame(e: &mut Engine, size: u32) -> u32 {
+        let frame = e.mem.alloc(size);
+        e.mem.free(frame);
+        frame
+    }
+
     fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
         e.call_log
             .as_ref()
@@ -5934,7 +5946,11 @@ mod tests {
                 .push(e.mem.cstr(a[if a.len() == 6 { 4 } else { 3 }]));
             Ret::default()
         });
+        let frame = next_frame(&mut e, 0x30);
         start_menu_update_highlighted_save_game_info(&mut e, menu);
+        // The 0x30-byte frame: the text at +0x10, the blank at +8.
+        assert_eq!(calls(&e, STRING_CONSTRUCT)[0][0], frame + 0x10);
+        assert_eq!(calls(&e, STRING_FORMAT)[0][4], frame + 8);
         assert_eq!(*blanks.borrow(), vec![Vec::<u8>::new(); 3]);
         // no player name: its tile is not shown
         assert!(calls(&e, TILE_SET_INT).contains(&vec![tile(12), 0x0fa3, 0]));
@@ -7088,7 +7104,10 @@ mod tests {
         // a numbered save: "#%04d" with the save number
         stub(&mut e, FILE_ENTRY_NAME_TEST_B10, 0);
         e.call_log = Some(Vec::new());
+        let frame = next_frame(&mut e, 0x1c);
         start_menu_initialize_save_load_list_item(&mut e, tile, entry_ptr);
+        // The 0x1c-byte frame: the save number text at +8.
+        assert_eq!(calls(&e, STRING_CONSTRUCT)[0][0], frame + 8);
         let formats = calls(&e, STRING_FORMAT);
         assert_eq!(formats.len(), 1);
         assert_eq!(formats[0][1..], [FORMAT_SAVE_NUMBER, 42]);

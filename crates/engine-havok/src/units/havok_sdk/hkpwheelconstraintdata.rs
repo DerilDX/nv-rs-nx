@@ -272,7 +272,9 @@ pub fn hkp_wheel_constraint_data_constructor(e: &mut Engine, this: Ptr) -> Ptr {
 /// when `hkRotation::isOrthonormal` (`00cb2e70`, with the epsilon at `01017d00`) accepts, in
 /// order, the rotations at `this + 0x20`, `this + 0x60` and the two local ones, and the float at
 /// `+0xa4` is not above the float at `+0xa8` (false for a NaN).
-pub fn hkp_wheel_constraint_data_is_valid(e: &mut Engine, this: Ptr, out: u32) {
+/// Answers `out`: the exe leaves it in `EAX` at every `RET` (the hkBool/hkResult result
+/// returned through a pointer, which callers read through `EAX`).
+pub fn hkp_wheel_constraint_data_is_valid(e: &mut Engine, this: Ptr, out: u32) -> u32 {
     let t = this.addr();
     e.with_stack(0x90, |e, frame| {
         let f = frame.addr();
@@ -307,6 +309,7 @@ pub fn hkp_wheel_constraint_data_is_valid(e: &mut Engine, this: Ptr, out: u32) {
         }
         e.mem.set_u8(out, u8::from(valid));
     });
+    out
 }
 
 // Translated from 00d4f000 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -350,7 +353,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             hkp_wheel_constraint_data_set_in_body_space(Ptr, u32, u32, u32, u32, u32, u32)
         ),
         entry!(0x00d4_edc0, hkp_wheel_constraint_data_constructor(Ptr) -> Ptr),
-        entry!(0x00d4_eec0, hkp_wheel_constraint_data_is_valid(Ptr, u32)),
+        entry!(0x00d4_eec0, hkp_wheel_constraint_data_is_valid(Ptr, u32) -> u32),
         entry!(0x00d4_f000, fn_00d4f000(Ptr) -> Ptr),
     ]
 }
@@ -636,6 +639,22 @@ mod tests {
         assert_eq!(run([1, 1, 1, 1], 0.5, -0.5).0, 0);
         assert_eq!(run([1, 1, 1, 1], f32::NAN, 0.5).0, 0);
         assert_eq!(run([1, 1, 1, 1], 0.25, 0.25).0, 1);
+    }
+
+    #[test]
+    fn fn_00d4eec0_answers_its_result_pointer() {
+        let (mut e, _) = setup();
+        e.register_double(IS_ORTHONORMAL, |e, a| {
+            e.mem.set_u8(a[1], 0);
+            Ret {
+                eax: a[1],
+                ..Ret::default()
+            }
+        });
+        let this = e.mem.alloc(0x140);
+        let out = e.mem.alloc(4);
+        // EAX is `out` at both RETs (the hkBool result pointer the callers read through).
+        assert_eq!(e.call(0x00d4_eec0, &args![this, out]).u32(), out);
     }
 
     #[test]

@@ -645,15 +645,16 @@ pub fn fn_00dba4d0(e: &mut Engine, this: Ptr, item: Ptr) {
 /// `text`): stores at `out` the interned copy of `text`, using the string map at `+0x4c` of
 /// `this`; null `text` stores null; a miss duplicates the text (`hkString::strDup`) and
 /// inserts the copy as key and value.
+/// Answers `out` (`EAX` at both `RET`s; the caller reads the uid through it, 00dc8dee).
 pub fn hk_version_patch_manager_uid_from_class_version_cache(
     e: &mut Engine,
     this: Ptr,
     out: Ptr,
     text: u32,
-) {
+) -> Ptr {
     if text == 0 {
         e.mem.set_u32(out.addr(), 0);
-        return;
+        return out;
     }
     let map = this.addr() + 0x4c;
     let mut interned = e
@@ -664,6 +665,7 @@ pub fn hk_version_patch_manager_uid_from_class_version_cache(
         e.call(STRING_MAP_INSERT, &args![map, interned, interned]);
     }
     e.mem.set_u32(out.addr(), interned);
+    out
 }
 
 // Translated from 00db83c0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2105,7 +2107,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00db_e710, hk_serialize_multi_map_u64_get_free_index(Ptr) -> i32),
         entry!(
             0x00dc_8d20,
-            hk_version_patch_manager_uid_from_class_version_cache(Ptr, Ptr, u32)
+            hk_version_patch_manager_uid_from_class_version_cache(Ptr, Ptr, u32) -> Ptr
         ),
         entry!(
             0x00dc_9ec0,
@@ -3212,6 +3214,15 @@ mod patch_tests {
         rig.e.call(0x00dc_8d20, &args![owner, out, text]);
         assert_eq!(rig.e.mem.u32(out), text);
         assert_eq!(rig.tags(), vec!["string_get"]);
+    }
+
+    #[test]
+    fn uid_from_class_version_cache_answers_its_out_pointer() {
+        let mut rig = Rig::new();
+        let owner = rig.e.mem.alloc(0x60);
+        let out = rig.record(&[0xdead]);
+        // EAX is `out` at both RETs; the caller reads the uid through it (00dc8dee).
+        assert_eq!(rig.e.call(0x00dc_8d20, &args![owner, out, 0u32]).u32(), out);
     }
 
     #[test]

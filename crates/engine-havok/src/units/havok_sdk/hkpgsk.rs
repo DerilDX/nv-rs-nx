@@ -2510,7 +2510,16 @@ pub fn hkp_gsk_linear_cast(
 /// shape B, then records the end label `010c41f8`. When the cast found a hit whose fraction
 /// (the local's float at +0x10) is not exactly zero, the local is copied back over `hit`
 /// (`009c1aa0`) and `*found = 1`; otherwise `*found = 0`.
-pub fn hkp_gsk_cast_ray(e: &mut Engine, this: Ptr, found: Ptr, shape: Ptr, ray: Ptr, hit: Ptr) {
+/// Answers `found`: the exe leaves it in `EAX` at every `RET` (the hkBool/hkResult result
+/// returned through a pointer, which callers read through `EAX`).
+pub fn hkp_gsk_cast_ray(
+    e: &mut Engine,
+    this: Ptr,
+    found: Ptr,
+    shape: Ptr,
+    ray: Ptr,
+    hit: Ptr,
+) -> Ptr {
     monitor_record(e, LABEL_CAST_RAY_START);
     e.with_stack(0xa0, |e, frame| {
         let f = frame.addr();
@@ -2547,6 +2556,7 @@ pub fn hkp_gsk_cast_ray(e: &mut Engine, this: Ptr, found: Ptr, shape: Ptr, ray: 
             e.mem.set_u8(found.addr(), 0);
         }
     });
+    found
 }
 
 /// This unit's translated functions, by exe address.
@@ -2588,7 +2598,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00da_9b30,
             hkp_gsk_linear_cast(Ptr, Ptr, Ptr, Ptr, Ptr, Ptr, Ptr)
         ),
-        entry!(0x00da_ac40, hkp_gsk_cast_ray(Ptr, Ptr, Ptr, Ptr, Ptr)),
+        entry!(0x00da_ac40, hkp_gsk_cast_ray(Ptr, Ptr, Ptr, Ptr, Ptr) -> Ptr),
     ]
 }
 
@@ -3794,6 +3804,23 @@ mod linear_cast_tests {
         assert_eq!(e.mem.u32(stream + 4), records + 0x18);
         assert_eq!(e.mem.u32(records), LABEL_CAST_RAY_START);
         assert_eq!(e.mem.u32(records + 0xc), LABEL_CAST_RAY_END);
+    }
+
+    #[test]
+    fn cast_ray_answers_its_found_pointer() {
+        let mut e = cast_engine();
+        monitor(&mut e, 0x100);
+        copy_double(&mut e);
+        let (shape_a, _) = sphere(&mut e, 1.0, &[SPHERE_CENTRE]);
+        let ray = make_ray(&mut e, ORIGIN, [20.0, 0.0, 0.0, 0.0]);
+        let hit = record(&mut e, 1.0);
+        let this = e.mem.alloc(0x200);
+        let found = e.mem.alloc(4);
+        // EAX is `found` at every RET (the hkBool result pointer the callers read through).
+        let answered = e
+            .call(CAST_RAY, &args![this, found, shape_a, ray, hit])
+            .u32();
+        assert_eq!(answered, found);
     }
 
     #[test]

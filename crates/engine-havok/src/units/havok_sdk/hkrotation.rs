@@ -159,23 +159,24 @@ fn column_deviation_00cb2e70(sum: f32) -> f32 {
 /// as the flag tests have it). The cross product test is SSE: lanes 0 to 2 of
 /// `|cross(c0, c1) - c2| <= epsilon` (`CMPLEPS`, false for a NaN) must all hold; lane 3 is
 /// computed but not looked at (`MOVMSKPS`, `AND 7`).
-pub fn hk_rotation_is_orthonormal(e: &mut Engine, this: Ptr, result: u32, epsilon: f32) {
+/// Answers `result` (`EAX` at both `RET`s; callers test the flag through it, 00cb903b).
+pub fn hk_rotation_is_orthonormal(e: &mut Engine, this: Ptr, result: u32, epsilon: f32) -> u32 {
     let base = this.addr();
     let epsilon_stack = x87_load32(epsilon.to_bits());
     let first = column_deviation_00cb2e70(column_square_sum_00cb2e70(e, base));
     if epsilon_stack < f64::from(first) {
         e.mem.set_u8(result, 0);
-        return;
+        return result;
     }
     let second = column_deviation_00cb2e70(column_square_sum_00cb2e70(e, base + 0x10));
     if f64::from(second) > epsilon_stack {
         e.mem.set_u8(result, 0);
-        return;
+        return result;
     }
     let third = column_deviation_00cb2e70(column_square_sum_00cb2e70(e, base + 0x20));
     if f64::from(third) > epsilon_stack {
         e.mem.set_u8(result, 0);
-        return;
+        return result;
     }
     let c0 = read_lanes_00cb2d90(e, base);
     let c1 = read_lanes_00cb2d90(e, base + 0x10);
@@ -197,6 +198,7 @@ pub fn hk_rotation_is_orthonormal(e: &mut Engine, this: Ptr, result: u32, epsilo
         }
     }
     e.mem.set_u8(result, u8::from(mask & 7 == 7));
+    result
 }
 
 /// This unit's translated functions, by exe address.
@@ -206,7 +208,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00cb2d70, hk_rotation_is_ok(Ptr, u32) -> u32),
         entry!(0x00cb2e30, hk_rotation_set_axis_angle(Ptr, u32, f32)),
         entry!(0x00cb2fc0, hk_rotation_renormalize(Ptr)),
-        entry!(0x00cb2e70, hk_rotation_is_orthonormal(Ptr, u32, f32)),
+        entry!(0x00cb2e70, hk_rotation_is_orthonormal(Ptr, u32, f32) -> u32),
     ]
 }
 
@@ -301,6 +303,21 @@ mod tests {
             1 => true,
             other => panic!("not a bool: {other}"),
         }
+    }
+
+    #[test]
+    fn is_orthonormal_answers_its_result_pointer() {
+        let identity = [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+        ];
+        let (mut e, matrix) = matrix_engine(identity);
+        let result = e.mem.alloc(4);
+        // EAX is `result` at both RETs; the callers test the flag through it (00cb903b).
+        let answered = e.call(0x00cb_2e70, &args![matrix, result, 0.01f32]).u32();
+        assert_eq!(answered, result);
+        assert_eq!(e.mem.u8(result), 1);
     }
 
     const IDENTITY: [[f32; 4]; 3] = [

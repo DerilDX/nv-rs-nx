@@ -194,36 +194,31 @@ fn fader(index: i32) -> Ptr<FaderData> {
     Ptr::new(FADERS).index(index as u32, FADER_SIZE)
 }
 
-/// `NiNode::SetName` with a temporary `NiFixedString` built from `text`.
-fn set_name(e: &mut Engine, object: u32, text: u32) {
-    e.with_stack(4, |e, name| {
-        e.call(FIXED_STRING_CONSTRUCT, &args![name, text]);
-        e.call(SET_NAME, &args![object, name]);
-        e.call(FIXED_STRING_DESTROY, &args![name]);
-    });
+/// `NiNode::SetName` with a temporary `NiFixedString` built from `text` in the caller's local
+/// `name`.
+fn set_name(e: &mut Engine, name: u32, object: u32, text: u32) {
+    e.call(FIXED_STRING_CONSTRUCT, &args![name, text]);
+    e.call(SET_NAME, &args![object, name]);
+    e.call(FIXED_STRING_DESTROY, &args![name]);
 }
 
-/// Builds a `NiPoint3` in a temporary and copies its three words to
+/// Builds a `NiPoint3` in the caller's local `temp` and copies its three words to
 /// `destination`.
-fn store_point3(e: &mut Engine, destination: u32, x: f32, y: f32, z: f32) {
-    e.with_stack(12, |e, temp| {
-        let point = e.call(POINT3_CONSTRUCT, &args![temp, x, y, z]).u32();
-        for word in 0..3 {
-            let value = e.mem.u32(point + 4 * word);
-            e.mem.set_u32(destination + 4 * word, value);
-        }
-    });
+fn store_point3(e: &mut Engine, temp: u32, destination: u32, x: f32, y: f32, z: f32) {
+    let point = e.call(POINT3_CONSTRUCT, &args![temp, x, y, z]).u32();
+    for word in 0..3 {
+        let value = e.mem.u32(point + 4 * word);
+        e.mem.set_u32(destination + 4 * word, value);
+    }
 }
 
-/// Builds a `NiPoint2` in a temporary and copies its two words.
-fn store_point2(e: &mut Engine, destination: u32, x: f32, y: f32) {
-    e.with_stack(8, |e, temp| {
-        let point = e.call(POINT2_CONSTRUCT, &args![temp, x, y]).u32();
-        for word in 0..2 {
-            let value = e.mem.u32(point + 4 * word);
-            e.mem.set_u32(destination + 4 * word, value);
-        }
-    });
+/// Builds a `NiPoint2` in the caller's local `temp` and copies its two words.
+fn store_point2(e: &mut Engine, temp: u32, destination: u32, x: f32, y: f32) {
+    let point = e.call(POINT2_CONSTRUCT, &args![temp, x, y]).u32();
+    for word in 0..2 {
+        let value = e.mem.u32(point + 4 * word);
+        e.mem.set_u32(destination + 4 * word, value);
+    }
 }
 
 /// A new array of four elements of `element_size` bytes, each constructed
@@ -255,71 +250,76 @@ pub fn fader_manager_add_root(
     mut distance: f32,
     below_menus: bool,
 ) {
-    let guard = e.mem.alloc(8);
-    e.call(
-        SCOPE_CONSTRUCT,
-        &args![guard, 0xdu32, 1u32, SOURCE_FILE, 0x50u32],
-    );
+    // The exe's frame (`SUB ESP,0x78` under the exception record, then the record link): the
+    // scope at `EBP-0x1c` (+0x6c), the root's name at `EBP-0x30` (+0x58, below the menus) or
+    // `EBP-0x34` (+0x54), the light's name at `EBP-0x40` (+0x48), the colour at `EBP-0x4c`
+    // (+0x3c) and the position at `EBP-0x58` (+0x30).
+    e.with_stack(0x88, |e, frame| {
+        let local = |offset: u32| frame.addr() + offset;
+        let guard = local(0x6c);
+        e.call(
+            SCOPE_CONSTRUCT,
+            &args![guard, 0xdu32, 1u32, SOURCE_FILE, 0x50u32],
+        );
 
-    let memory = e.call(OPERATOR_NEW, &args![0xacu32]).u32();
-    let root = if memory != 0 {
-        e.call(NODE_CONSTRUCT, &args![memory, 0u32]).u32()
-    } else {
-        0
-    };
-    if below_menus {
-        e.set(this, FaderManager::pRootBelowMenus, Ptr::new(root));
-        set_name(e, root, NAME_BELOW_MENUS);
-    } else {
-        e.set(this, FaderManager::pRootAboveMenus, Ptr::new(root));
-        set_name(e, root, NAME_ABOVE_MENUS);
-        let twenty: f64 = e.global(TWENTY);
-        distance = (distance as f64 - twenty) as f32;
-    }
+        let memory = e.call(OPERATOR_NEW, &args![0xacu32]).u32();
+        let root = if memory != 0 {
+            e.call(NODE_CONSTRUCT, &args![memory, 0u32]).u32()
+        } else {
+            0
+        };
+        if below_menus {
+            e.set(this, FaderManager::pRootBelowMenus, Ptr::new(root));
+            set_name(e, local(0x58), root, NAME_BELOW_MENUS);
+        } else {
+            e.set(this, FaderManager::pRootAboveMenus, Ptr::new(root));
+            set_name(e, local(0x54), root, NAME_ABOVE_MENUS);
+            let twenty: f64 = e.global(TWENTY);
+            distance = (distance as f64 - twenty) as f32;
+        }
 
-    let memory = e.call(OPERATOR_NEW, &args![0xfcu32]).u32();
-    let light = if memory != 0 {
-        e.call(LIGHT_CONSTRUCT, &args![memory]).u32()
-    } else {
-        0
-    };
-    set_name(e, light, NAME_LIGHT);
-    e.with_stack(12, |e, temp| {
+        let memory = e.call(OPERATOR_NEW, &args![0xfcu32]).u32();
+        let light = if memory != 0 {
+            e.call(LIGHT_CONSTRUCT, &args![memory]).u32()
+        } else {
+            0
+        };
+        set_name(e, local(0x48), light, NAME_LIGHT);
         let color = e
-            .call(POINT3_CONSTRUCT, &args![temp, 1.0f32, 1.0f32, 1.0f32])
+            .call(
+                POINT3_CONSTRUCT,
+                &args![local(0x3c), 1.0f32, 1.0f32, 1.0f32],
+            )
             .u32();
         e.call(LIGHT_SET_COLOR, &args![light, color]);
-    });
-    e.call(EMPTY_ONE_ARGUMENT, &args![light, root]);
-    e.vcall(root, 0xdc, &args![light, 1u32]);
+        e.call(EMPTY_ONE_ARGUMENT, &args![light, root]);
+        e.vcall(root, 0xdc, &args![light, 1u32]);
 
-    let width = e.call(SCREEN_WIDTH, &args![]).i32() as f32;
-    let height = e.call(SCREEN_HEIGHT, &args![]).i32() as f32;
-    let mut scale = 1.0f32;
-    let three_quarters: f64 = e.global(THREE_QUARTERS);
-    if height as f64 / width as f64 != three_quarters {
-        scale = through_x87(e.global(FOUR_THIRDS));
-    }
-    let wide_width: f64 = e.global(WIDE_WIDTH);
-    if width as f64 != wide_width {
-        scale = (wide_width / width as f64 * scale as f64) as f32;
-    }
-    if e.call(FORCES_UNIT_SCALE, &args![]).bool() {
-        scale = 1.0;
-    }
-    e.call(NODE_SET_SCALE, &args![root, through_x87(scale)]);
-    e.with_stack(12, |e, temp| {
+        let width = e.call(SCREEN_WIDTH, &args![]).i32() as f32;
+        let height = e.call(SCREEN_HEIGHT, &args![]).i32() as f32;
+        let mut scale = 1.0f32;
+        let three_quarters: f64 = e.global(THREE_QUARTERS);
+        if height as f64 / width as f64 != three_quarters {
+            scale = through_x87(e.global(FOUR_THIRDS));
+        }
+        let wide_width: f64 = e.global(WIDE_WIDTH);
+        if width as f64 != wide_width {
+            scale = (wide_width / width as f64 * scale as f64) as f32;
+        }
+        if e.call(FORCES_UNIT_SCALE, &args![]).bool() {
+            scale = 1.0;
+        }
+        e.call(NODE_SET_SCALE, &args![root, through_x87(scale)]);
         let position = e
             .call(
                 POINT3_CONSTRUCT,
-                &args![temp, 0.0f32, through_x87(distance), 0.0f32],
+                &args![local(0x30), 0.0f32, through_x87(distance), 0.0f32],
             )
             .u32();
         e.call(NODE_SET_TRANSLATION, &args![root, position]);
+        e.vcall(graph.addr(), 0xdc, &args![root, 1u32]);
+        e.call(SCOPE_DESTROY, &args![guard]);
     });
-    e.vcall(graph.addr(), 0xdc, &args![root, 1u32]);
-    e.call(SCOPE_DESTROY, &args![guard]);
-    e.mem.free(guard);
 }
 
 // Translated from 00700960 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -345,93 +345,122 @@ pub fn fader_manager_create_fader(
     duration: f32,
     immediate: bool,
 ) {
-    let guard = e.mem.alloc(8);
-    e.call(
-        SCOPE_CONSTRUCT,
-        &args![guard, 0xdu32, 1u32, SOURCE_FILE, 0x87u32],
-    );
-    let slot = fader(index);
-    if !e.get(slot, FaderData::pNode).is_null() {
-        if e.get(slot, FaderData::bFadingIn) {
-            e.call(SCOPE_DESTROY, &args![guard]);
-            e.mem.free(guard);
-            return;
-        }
-        fader_manager_remove_fader(e, this, index, true);
-    }
-
-    let vertices = new_element_array(e, 0xc);
-    let texture_coordinates = new_element_array(e, 8);
-    let triangles = e.call(BYTES_ALLOC, &args![0xcu32]).u32();
-    let half: f64 = e.global(HALF);
-    let half_width = (e.call(SCREEN_WIDTH, &args![]).i32() as f64 * half) as f32;
-    let half_height = (e.call(SCREEN_HEIGHT, &args![]).i32() as f64 * half) as f32;
-    store_point3(e, vertices, -half_width, 0.0, half_height);
-    store_point3(e, vertices + 0xc, -half_width, 0.0, -half_height);
-    store_point3(e, vertices + 0x18, half_width, 0.0, half_height);
-    store_point3(e, vertices + 0x24, half_width, 0.0, -half_height);
-    store_point2(e, texture_coordinates, 0.0, 0.0);
-    store_point2(e, texture_coordinates + 8, 0.0, 1.0);
-    store_point2(e, texture_coordinates + 0x10, 1.0, 0.0);
-    store_point2(e, texture_coordinates + 0x18, 1.0, 1.0);
-    for (offset, value) in [0u16, 1, 2, 2, 1, 3].into_iter().enumerate() {
-        e.mem.set_u16(triangles + 2 * offset as u32, value);
-    }
-
-    let memory = e.call(OPERATOR_NEW, &args![0xacu32]).u32();
-    let node = if memory != 0 {
-        e.call(NODE_CONSTRUCT, &args![memory, 0u32]).u32()
-    } else {
-        0
-    };
-    e.set(slot, FaderData::pNode, Ptr::new(node));
-    let name = e.get(slot, FaderData::pName);
-    let node = e.get(slot, FaderData::pNode).addr();
-    set_name(e, node, name);
-
-    let memory = e.call(OPERATOR_NEW, &args![0x1cu32]).u32();
-    let property = if memory != 0 {
-        e.call(PROPERTY_CONSTRUCT, &args![memory]).u32()
-    } else {
-        0
-    };
-    e.call(PROPERTY_SET_FLAG, &args![property, 1u32]);
-    let node = e.get(slot, FaderData::pNode).addr();
-    e.call(ATTACH_PROPERTY, &args![node, property]);
-
-    let memory = e.call(OPERATOR_NEW, &args![0xc4u32]).u32();
-    let shape = if memory != 0 {
+    // The exe's frame (`SUB ESP,0x10c` under the exception record, then the record link): the
+    // scope at `EBP-0x20` (+0xfc), the corner temporaries at `EBP-0x6c`, `-0x78`, `-0x84` and
+    // `-0x90` (+0xb0, +0xa4, +0x98, +0x8c), the texture coordinate temporaries at `EBP-0x98`,
+    // `-0xa0`, `-0xa8` and `-0xb0` (+0x84, +0x7c, +0x74, +0x6c), the node's name at `EBP-0xbc`
+    // (+0x60), the path at `EBP-0x38` (+0xe4), the shape's name at `EBP-0xd0` (+0x4c), the
+    // texture name at `EBP-0xd4` (+0x48), the texture pointer at `EBP-0x48` (+0xd4) and the
+    // update data at `EBP-0x44` (+0xd8).
+    e.with_stack(0x11c, |e, frame| {
+        let local = |offset: u32| frame.addr() + offset;
+        let guard = local(0xfc);
         e.call(
-            TRI_SHAPE_CONSTRUCT,
-            &args![
-                memory,
-                4u32,
-                vertices,
-                0u32,
-                0u32,
-                texture_coordinates,
-                1u32,
-                0u32,
-                2u32,
-                triangles
-            ],
-        )
-        .u32()
-    } else {
-        0
-    };
-    let node = e.get(slot, FaderData::pNode).addr();
-    e.vcall(node, 0xdc, &args![shape, 1u32]);
+            SCOPE_CONSTRUCT,
+            &args![guard, 0xdu32, 1u32, SOURCE_FILE, 0x87u32],
+        );
+        let slot = fader(index);
+        if !e.get(slot, FaderData::pNode).is_null() {
+            if e.get(slot, FaderData::bFadingIn) {
+                e.call(SCOPE_DESTROY, &args![guard]);
+                return;
+            }
+            fader_manager_remove_fader(e, this, index, true);
+        }
 
-    let path = e.mem.alloc(8);
-    e.call(STRING_CONSTRUCT, &args![path]);
-    let name = e.get(slot, FaderData::pName);
-    e.call(STRING_FORMAT, &args![path, TEXTURE_PATH_FORMAT, name]);
-    let characters = e.call(STRING_C_STR, &args![path]).u32();
-    set_name(e, shape, characters);
-    let texture_pointer = e.mem.alloc(4);
-    let characters = e.call(STRING_C_STR, &args![path]).u32();
-    e.with_stack(4, |e, texture_name| {
+        let vertices = new_element_array(e, 0xc);
+        let texture_coordinates = new_element_array(e, 8);
+        let triangles = e.call(BYTES_ALLOC, &args![0xcu32]).u32();
+        let half: f64 = e.global(HALF);
+        let half_width = (e.call(SCREEN_WIDTH, &args![]).i32() as f64 * half) as f32;
+        let half_height = (e.call(SCREEN_HEIGHT, &args![]).i32() as f64 * half) as f32;
+        store_point3(e, local(0xb0), vertices, -half_width, 0.0, half_height);
+        store_point3(
+            e,
+            local(0xa4),
+            vertices + 0xc,
+            -half_width,
+            0.0,
+            -half_height,
+        );
+        store_point3(
+            e,
+            local(0x98),
+            vertices + 0x18,
+            half_width,
+            0.0,
+            half_height,
+        );
+        store_point3(
+            e,
+            local(0x8c),
+            vertices + 0x24,
+            half_width,
+            0.0,
+            -half_height,
+        );
+        store_point2(e, local(0x84), texture_coordinates, 0.0, 0.0);
+        store_point2(e, local(0x7c), texture_coordinates + 8, 0.0, 1.0);
+        store_point2(e, local(0x74), texture_coordinates + 0x10, 1.0, 0.0);
+        store_point2(e, local(0x6c), texture_coordinates + 0x18, 1.0, 1.0);
+        for (offset, value) in [0u16, 1, 2, 2, 1, 3].into_iter().enumerate() {
+            e.mem.set_u16(triangles + 2 * offset as u32, value);
+        }
+
+        let memory = e.call(OPERATOR_NEW, &args![0xacu32]).u32();
+        let node = if memory != 0 {
+            e.call(NODE_CONSTRUCT, &args![memory, 0u32]).u32()
+        } else {
+            0
+        };
+        e.set(slot, FaderData::pNode, Ptr::new(node));
+        let name = e.get(slot, FaderData::pName);
+        let node = e.get(slot, FaderData::pNode).addr();
+        set_name(e, local(0x60), node, name);
+
+        let memory = e.call(OPERATOR_NEW, &args![0x1cu32]).u32();
+        let property = if memory != 0 {
+            e.call(PROPERTY_CONSTRUCT, &args![memory]).u32()
+        } else {
+            0
+        };
+        e.call(PROPERTY_SET_FLAG, &args![property, 1u32]);
+        let node = e.get(slot, FaderData::pNode).addr();
+        e.call(ATTACH_PROPERTY, &args![node, property]);
+
+        let memory = e.call(OPERATOR_NEW, &args![0xc4u32]).u32();
+        let shape = if memory != 0 {
+            e.call(
+                TRI_SHAPE_CONSTRUCT,
+                &args![
+                    memory,
+                    4u32,
+                    vertices,
+                    0u32,
+                    0u32,
+                    texture_coordinates,
+                    1u32,
+                    0u32,
+                    2u32,
+                    triangles
+                ],
+            )
+            .u32()
+        } else {
+            0
+        };
+        let node = e.get(slot, FaderData::pNode).addr();
+        e.vcall(node, 0xdc, &args![shape, 1u32]);
+
+        let path = local(0xe4);
+        e.call(STRING_CONSTRUCT, &args![path]);
+        let name = e.get(slot, FaderData::pName);
+        e.call(STRING_FORMAT, &args![path, TEXTURE_PATH_FORMAT, name]);
+        let characters = e.call(STRING_C_STR, &args![path]).u32();
+        set_name(e, local(0x4c), shape, characters);
+        let texture_pointer = local(0xd4);
+        let characters = e.call(STRING_C_STR, &args![path]).u32();
+        let texture_name = local(0x48);
         e.call(FIXED_STRING_CONSTRUCT, &args![texture_name, characters]);
         let texture = e
             .call(
@@ -441,62 +470,58 @@ pub fn fader_manager_create_fader(
             .u32();
         e.call(POINTER_CONSTRUCT, &args![texture_pointer, texture]);
         e.call(FIXED_STRING_DESTROY, &args![texture_name]);
-    });
 
-    let mut start_alpha = 0.0f32;
-    let zero: f64 = e.global(ZERO);
-    if immediate || duration as f64 == zero {
-        start_alpha = 1.0;
-        e.set_global(FRAMES_TO_WAIT, 3u8);
-    }
+        let mut start_alpha = 0.0f32;
+        let zero: f64 = e.global(ZERO);
+        if immediate || duration as f64 == zero {
+            start_alpha = 1.0;
+            e.set_global(FRAMES_TO_WAIT, 3u8);
+        }
 
-    let memory = e.call(OPERATOR_NEW, &args![0xb0u32]).u32();
-    let shader_property = if memory != 0 {
-        e.call(SHADER_PROPERTY_CONSTRUCT, &args![memory, 0u32])
-            .u32()
-    } else {
-        0
-    };
-    let texture = e.call(POINTER_GET, &args![texture_pointer]).u32();
-    e.call(SET_TILE_TEXTURE, &args![shader_property, texture]);
-    e.call(SHADER_PROPERTY_SET_BYTE, &args![shader_property, 3u32]);
-    e.call(SET_ALPHA, &args![shader_property, through_x87(start_alpha)]);
-    e.call(ATTACH_PROPERTY, &args![shape, shader_property]);
-    e.call(
-        POINTER_ASSIGN,
-        &args![
-            slot.addr() + FaderData::spShaderProperty.off,
-            shader_property
-        ],
-    );
-    e.call(PREPARE_OBJECT, &args![shape, 0u32, 0u32]);
-    let bound = e.call(SHAPE_BOUND, &args![shape]).u32();
-    e.call(COMPUTE_BOUND, &args![bound, 4u32, vertices]);
+        let memory = e.call(OPERATOR_NEW, &args![0xb0u32]).u32();
+        let shader_property = if memory != 0 {
+            e.call(SHADER_PROPERTY_CONSTRUCT, &args![memory, 0u32])
+                .u32()
+        } else {
+            0
+        };
+        let texture = e.call(POINTER_GET, &args![texture_pointer]).u32();
+        e.call(SET_TILE_TEXTURE, &args![shader_property, texture]);
+        e.call(SHADER_PROPERTY_SET_BYTE, &args![shader_property, 3u32]);
+        e.call(SET_ALPHA, &args![shader_property, through_x87(start_alpha)]);
+        e.call(ATTACH_PROPERTY, &args![shape, shader_property]);
+        e.call(
+            POINTER_ASSIGN,
+            &args![
+                slot.addr() + FaderData::spShaderProperty.off,
+                shader_property
+            ],
+        );
+        e.call(PREPARE_OBJECT, &args![shape, 0u32, 0u32]);
+        let bound = e.call(SHAPE_BOUND, &args![shape]).u32();
+        e.call(COMPUTE_BOUND, &args![bound, 4u32, vertices]);
 
-    let mut root = e.get(this, FaderManager::pRootAboveMenus).addr();
-    if e.get(slot, FaderData::bBelowMenus) {
-        root = e.get(this, FaderManager::pRootBelowMenus).addr();
-    }
-    let node = e.get(slot, FaderData::pNode).addr();
-    e.vcall(root, 0xdc, &args![node, 1u32]);
-    e.call(UPDATE_PROPERTIES, &args![root]);
-    e.with_stack(0x10, |e, update_data| {
+        let mut root = e.get(this, FaderManager::pRootAboveMenus).addr();
+        if e.get(slot, FaderData::bBelowMenus) {
+            root = e.get(this, FaderManager::pRootBelowMenus).addr();
+        }
+        let node = e.get(slot, FaderData::pNode).addr();
+        e.vcall(root, 0xdc, &args![node, 1u32]);
+        e.call(UPDATE_PROPERTIES, &args![root]);
+        let update_data = local(0xd8);
         e.call(
             UPDATE_DATA_CONSTRUCT,
             &args![update_data, 0.0f32, 0u32, 0u32],
         );
         e.call(UPDATE, &args![root, update_data]);
-    });
-    e.set(slot, FaderData::fDuration, through_x87(duration));
-    e.set(slot, FaderData::bFadingIn, !immediate);
-    e.set(slot, FaderData::fAlpha, start_alpha);
+        e.set(slot, FaderData::fDuration, through_x87(duration));
+        e.set(slot, FaderData::bFadingIn, !immediate);
+        e.set(slot, FaderData::fAlpha, start_alpha);
 
-    e.call(POINTER_DESTROY, &args![texture_pointer]);
-    e.mem.free(texture_pointer);
-    e.call(STRING_DESTROY, &args![path]);
-    e.mem.free(path);
-    e.call(SCOPE_DESTROY, &args![guard]);
-    e.mem.free(guard);
+        e.call(POINTER_DESTROY, &args![texture_pointer]);
+        e.call(STRING_DESTROY, &args![path]);
+        e.call(SCOPE_DESTROY, &args![guard]);
+    });
 }
 
 // Translated from 007010e0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -549,57 +574,60 @@ pub fn fader_manager_remove_fader(
 /// word is not read (the caller pushes 1).
 // Translation incomplete: 007011d0 - the C++ exception-unwinding frame (FS:[0]) that closes the profiling scope when a step throws is not translated
 pub fn fader_manager_update_faders(e: &mut Engine, _this: Ptr<FaderManager>, _unused_1: u32) {
-    let guard = e.mem.alloc(8);
-    e.call(
-        SCOPE_CONSTRUCT,
-        &args![guard, 0xdu32, 1u32, SOURCE_FILE, 0x10au32],
-    );
-    let one: f64 = e.global(ONE);
-    let zero: f64 = e.global(ZERO);
-    for index in 0..FADER_COUNT {
-        let slot = fader(index);
-        if e.get(slot, FaderData::pNode).is_null() {
-            continue;
-        }
-        if e.get(slot, FaderData::bFadingIn) {
-            if (e.get(slot, FaderData::fAlpha) as f64) < one {
-                let frame_time = frame_time(e);
-                let duration = e.get(slot, FaderData::fDuration);
-                let alpha = e.get(slot, FaderData::fAlpha);
-                let mut alpha = (frame_time as f64 / duration as f64 + alpha as f64) as f32;
-                if alpha as f64 > one {
-                    alpha = 1.0;
+    // The exe's frame (`SUB ESP,0x14` under the exception record, then the record link): the
+    // scope at `EBP-0x10` (+0x14).
+    e.with_stack(0x24, |e, frame| {
+        let guard = frame.addr() + 0x14;
+        e.call(
+            SCOPE_CONSTRUCT,
+            &args![guard, 0xdu32, 1u32, SOURCE_FILE, 0x10au32],
+        );
+        let one: f64 = e.global(ONE);
+        let zero: f64 = e.global(ZERO);
+        for index in 0..FADER_COUNT {
+            let slot = fader(index);
+            if e.get(slot, FaderData::pNode).is_null() {
+                continue;
+            }
+            if e.get(slot, FaderData::bFadingIn) {
+                if (e.get(slot, FaderData::fAlpha) as f64) < one {
+                    let frame_time = frame_time(e);
+                    let duration = e.get(slot, FaderData::fDuration);
+                    let alpha = e.get(slot, FaderData::fAlpha);
+                    let mut alpha = (frame_time as f64 / duration as f64 + alpha as f64) as f32;
+                    if alpha as f64 > one {
+                        alpha = 1.0;
+                    }
+                    e.set(slot, FaderData::fAlpha, alpha);
+                    set_shader_alpha(e, slot);
                 }
-                e.set(slot, FaderData::fAlpha, alpha);
+            } else if e.get(slot, FaderData::fAlpha) as f64 <= zero {
+                let node = e.get(slot, FaderData::pNode);
+                if !node.is_null() && e.call(NODE_PARENT, &args![node]).u32() != 0 {
+                    let parent = e.call(NODE_PARENT, &args![node]).u32();
+                    e.vcall(parent, 0xe8, &args![node]);
+                }
+                e.set(slot, FaderData::pNode, Ptr::NULL);
+                e.set(slot, FaderData::fAlpha, 0.0);
+            } else {
+                let wait = e.global::<u8>(FRAMES_TO_WAIT);
+                if wait as i8 != 0 {
+                    e.set_global(FRAMES_TO_WAIT, wait.wrapping_sub(1));
+                } else {
+                    let frame_time = frame_time(e);
+                    let duration = e.get(slot, FaderData::fDuration);
+                    let alpha = e.get(slot, FaderData::fAlpha);
+                    let alpha = (alpha as f64 - frame_time as f64 / duration as f64) as f32;
+                    e.set(slot, FaderData::fAlpha, alpha);
+                }
+                if (e.get(slot, FaderData::fAlpha) as f64) < zero {
+                    e.set(slot, FaderData::fAlpha, 0.0);
+                }
                 set_shader_alpha(e, slot);
             }
-        } else if e.get(slot, FaderData::fAlpha) as f64 <= zero {
-            let node = e.get(slot, FaderData::pNode);
-            if !node.is_null() && e.call(NODE_PARENT, &args![node]).u32() != 0 {
-                let parent = e.call(NODE_PARENT, &args![node]).u32();
-                e.vcall(parent, 0xe8, &args![node]);
-            }
-            e.set(slot, FaderData::pNode, Ptr::NULL);
-            e.set(slot, FaderData::fAlpha, 0.0);
-        } else {
-            let wait = e.global::<u8>(FRAMES_TO_WAIT);
-            if wait as i8 != 0 {
-                e.set_global(FRAMES_TO_WAIT, wait.wrapping_sub(1));
-            } else {
-                let frame_time = frame_time(e);
-                let duration = e.get(slot, FaderData::fDuration);
-                let alpha = e.get(slot, FaderData::fAlpha);
-                let alpha = (alpha as f64 - frame_time as f64 / duration as f64) as f32;
-                e.set(slot, FaderData::fAlpha, alpha);
-            }
-            if (e.get(slot, FaderData::fAlpha) as f64) < zero {
-                e.set(slot, FaderData::fAlpha, 0.0);
-            }
-            set_shader_alpha(e, slot);
         }
-    }
-    e.call(SCOPE_DESTROY, &args![guard]);
-    e.mem.free(guard);
+        e.call(SCOPE_DESTROY, &args![guard]);
+    });
 }
 
 /// Hands the fader's alpha to its shader property, when it has one.
@@ -1448,5 +1476,73 @@ mod tests {
         assert_eq!(calls(&w.e, DETACH), vec![vec![parent, node]]);
         assert_ne!(w.e.get(slot_of(1), FaderData::pNode).addr(), node);
         assert_eq!(calls(&w.e, OPERATOR_NEW).len(), 4);
+    }
+
+    // ---- the exe's stack frames ----
+
+    /// The block the next `with_stack(size)` takes (the last freed block of that size), with
+    /// the call log switched on.
+    fn next_frame(e: &mut Engine, size: u32) -> u32 {
+        let frame = e.mem.alloc(size);
+        e.mem.free(frame);
+        e.call_log = Some(vec![]);
+        frame
+    }
+
+    fn first_words(e: &Engine, addr: u32) -> Vec<u32> {
+        calls(e, addr).iter().map(|w| w[0]).collect()
+    }
+
+    #[test]
+    fn the_fader_frames_keep_their_locals_at_the_exe_offsets() {
+        // 007006c0 (0x88 bytes), below the menus: the scope at +0x6c, the names at +0x58 and
+        // +0x48, the colour at +0x3c, the position at +0x30.
+        let mut w = world();
+        let graph = w.e.mem.alloc(0x40);
+        w.e.mem.set_u32(graph, VTABLE);
+        let frame = next_frame(&mut w.e, 0x88);
+        w.e.call(0x0070_06c0, &args![w.manager, graph, 100.0f32, true]);
+        assert_eq!(first_words(&w.e, SCOPE_CONSTRUCT), vec![frame + 0x6c]);
+        assert_eq!(
+            first_words(&w.e, FIXED_STRING_CONSTRUCT),
+            vec![frame + 0x58, frame + 0x48]
+        );
+        assert_eq!(
+            first_words(&w.e, POINT3_CONSTRUCT),
+            vec![frame + 0x3c, frame + 0x30]
+        );
+        // Above the menus the root's name is at +0x54.
+        let frame = next_frame(&mut w.e, 0x88);
+        w.e.call(0x0070_06c0, &args![w.manager, graph, 100.0f32, false]);
+        assert_eq!(first_words(&w.e, FIXED_STRING_CONSTRUCT)[0], frame + 0x54);
+
+        // 00700960 (0x11c bytes).
+        let mut w = world();
+        roots(&mut w);
+        named_slot(&mut w, 1, false);
+        let frame = next_frame(&mut w.e, 0x11c);
+        w.e.call(0x0070_0960, &args![w.manager, 1i32, 2.0f32, false]);
+        let at = |offsets: &[u32]| offsets.iter().map(|o| frame + o).collect::<Vec<u32>>();
+        assert_eq!(first_words(&w.e, SCOPE_CONSTRUCT), at(&[0xfc]));
+        assert_eq!(
+            first_words(&w.e, POINT3_CONSTRUCT),
+            at(&[0xb0, 0xa4, 0x98, 0x8c])
+        );
+        assert_eq!(
+            first_words(&w.e, POINT2_CONSTRUCT),
+            at(&[0x84, 0x7c, 0x74, 0x6c])
+        );
+        assert_eq!(
+            first_words(&w.e, FIXED_STRING_CONSTRUCT),
+            at(&[0x60, 0x4c, 0x48])
+        );
+        assert_eq!(first_words(&w.e, STRING_CONSTRUCT), at(&[0xe4]));
+        assert_eq!(first_words(&w.e, POINTER_CONSTRUCT), at(&[0xd4]));
+        assert_eq!(first_words(&w.e, UPDATE_DATA_CONSTRUCT), at(&[0xd8]));
+
+        // 007011d0 (0x24 bytes): the scope at +0x14.
+        let frame = next_frame(&mut w.e, 0x24);
+        w.e.call(0x0070_11d0, &args![w.manager, 1u32]);
+        assert_eq!(first_words(&w.e, SCOPE_CONSTRUCT), vec![frame + 0x14]);
     }
 }

@@ -107,11 +107,14 @@ pub fn get_aabb_impl(
 pub fn get_maximum_projection(e: &mut Engine, this: Ptr<HkpTransformShape>, direction: Ptr) -> f32 {
     let v = load_vec(e, direction.addr());
     let local = through_columns(e, this, v);
-    let buffer = e.mem.alloc(16);
-    store_vec(e, buffer, local);
-    let child = e.get(this, HkpTransformShape::m_childShape);
-    let projection = x87_quiet(e.vcall(child.addr(), 0xc, &args![buffer]).f32());
-    e.mem.free(buffer);
+    // The exe's frame (`AND ESP,0xfffffff0`, `SUB ESP,0x18`, two pushes): 0x20 bytes from a
+    // 16-byte boundary, the child-space direction at +0x10 (00cf5a90).
+    let projection = e.with_stack(0x20 + 0x10, |e, raw| {
+        let buffer = ((raw.addr() + 0xf) & !0xf) + 0x10;
+        store_vec(e, buffer, local);
+        let child = e.get(this, HkpTransformShape::m_childShape);
+        x87_quiet(e.vcall(child.addr(), 0xc, &args![buffer]).f32())
+    });
     let scaled: Vec4 = std::array::from_fn(|lane| projection * local[lane]);
     let c0 = load_vec(e, this.addr() + TRANSFORM);
     let c1 = load_vec(e, this.addr() + TRANSFORM + 0x10);
@@ -143,32 +146,36 @@ pub fn cast_ray_impl(
 ) -> Ptr {
     profile_record(e, LABEL_TRANSFORM);
     let from = point_into_child_space(e, this, input.addr());
-    let local = e.mem.alloc(0x30);
-    let bytes = e.mem.bytes(input.addr(), 0x30);
-    e.mem.write(local, &bytes);
-    let to = point_into_child_space(e, this, input.addr() + 0x10);
-    store_vec(e, local, from);
-    store_vec(e, local + 0x10, to);
-    let depth = e.mem.u32(output.addr() + 0x40);
-    e.mem.set_u32(output.addr() + 0x40, depth.wrapping_add(1));
-    let child = e.get(this, HkpTransformShape::m_childShape);
-    e.vcall(child.addr(), 0x20, &args![result, local, output]);
-    e.mem.free(local);
-    let depth = e.mem.u32(output.addr() + 0x40).wrapping_sub(1);
-    e.mem.set_u32(output.addr() + 0x40, depth);
-    if e.mem.u8(result.addr()) != 0 {
-        let normal = e.mem.bytes(output.addr(), 16);
-        let copy = e.mem.alloc(16);
-        e.mem.write(copy, &normal);
-        e.call(
-            SET_ROTATED_DIR,
-            &args![output, this.addr() + TRANSFORM, copy],
-        );
-        e.mem.free(copy);
+    // The exe's frame (`AND ESP,0xfffffff0`, `SUB ESP,0x44`, three pushes): 0x50 bytes from a
+    // 16-byte boundary, the normal's copy at +0x10 (00cf5c5d) and the child-space input at
+    // +0x20 (00cf5b8c).
+    e.with_stack(0x50 + 0x10, |e, raw| {
+        let frame = (raw.addr() + 0xf) & !0xf;
+        let local = frame + 0x20;
+        let bytes = e.mem.bytes(input.addr(), 0x30);
+        e.mem.write(local, &bytes);
+        let to = point_into_child_space(e, this, input.addr() + 0x10);
+        store_vec(e, local, from);
+        store_vec(e, local + 0x10, to);
         let depth = e.mem.u32(output.addr() + 0x40);
-        e.mem
-            .set_u32(output.addr() + 0x20 + depth.wrapping_mul(4), 0);
-    }
+        e.mem.set_u32(output.addr() + 0x40, depth.wrapping_add(1));
+        let child = e.get(this, HkpTransformShape::m_childShape);
+        e.vcall(child.addr(), 0x20, &args![result, local, output]);
+        let depth = e.mem.u32(output.addr() + 0x40).wrapping_sub(1);
+        e.mem.set_u32(output.addr() + 0x40, depth);
+        if e.mem.u8(result.addr()) != 0 {
+            let normal = e.mem.bytes(output.addr(), 16);
+            let copy = frame + 0x10;
+            e.mem.write(copy, &normal);
+            e.call(
+                SET_ROTATED_DIR,
+                &args![output, this.addr() + TRANSFORM, copy],
+            );
+            let depth = e.mem.u32(output.addr() + 0x40);
+            e.mem
+                .set_u32(output.addr() + 0x20 + depth.wrapping_mul(4), 0);
+        }
+    });
     profile_record(e, LABEL_END);
     result
 }
@@ -188,28 +195,31 @@ pub fn cast_ray_with_collector_impl(
 ) {
     profile_record(e, LABEL_TRANSFORM);
     let from = point_into_child_space(e, this, input.addr());
-    let local = e.mem.alloc(0x30);
-    let to = point_into_child_space(e, this, input.addr() + 0x10);
-    let bytes = e.mem.bytes(input.addr(), 0x30);
-    e.mem.write(local, &bytes);
-    store_vec(e, local, from);
-    store_vec(e, local + 0x10, to);
-    let composed = e.mem.alloc(0x40);
-    let body_transform = e.mem.u32(body.addr() + 8);
-    e.call(
-        TRANSFORM_SET_MUL,
-        &args![composed, body_transform, this.addr() + TRANSFORM],
-    );
-    let child = e.get(this, HkpTransformShape::m_childShape);
-    let record = e.mem.alloc(16);
-    e.mem.set_u32(record, child.addr());
-    e.mem.set_u32(record + 4, 0);
-    e.mem.set_u32(record + 8, composed);
-    e.mem.set_u32(record + 12, body.addr());
-    e.vcall(child.addr(), 0x24, &args![local, record, collector]);
-    e.mem.free(record);
-    e.mem.free(composed);
-    e.mem.free(local);
+    // The exe's frame (`AND ESP,0xfffffff0`, `SUB ESP,0x84`, three pushes): 0x90 bytes from a
+    // 16-byte boundary, the collector record at +0x10 (00cf5deb), the child-space input at
+    // +0x20 (00cf5d7a) and the composed transform at +0x50 (00cf5dce).
+    e.with_stack(0x90 + 0x10, |e, raw| {
+        let frame = (raw.addr() + 0xf) & !0xf;
+        let local = frame + 0x20;
+        let to = point_into_child_space(e, this, input.addr() + 0x10);
+        let bytes = e.mem.bytes(input.addr(), 0x30);
+        e.mem.write(local, &bytes);
+        store_vec(e, local, from);
+        store_vec(e, local + 0x10, to);
+        let composed = frame + 0x50;
+        let body_transform = e.mem.u32(body.addr() + 8);
+        e.call(
+            TRANSFORM_SET_MUL,
+            &args![composed, body_transform, this.addr() + TRANSFORM],
+        );
+        let child = e.get(this, HkpTransformShape::m_childShape);
+        let record = frame + 0x10;
+        e.mem.set_u32(record, child.addr());
+        e.mem.set_u32(record + 4, 0);
+        e.mem.set_u32(record + 8, composed);
+        e.mem.set_u32(record + 12, body.addr());
+        e.vcall(child.addr(), 0x24, &args![local, record, collector]);
+    });
     profile_record(e, LABEL_END);
 }
 
@@ -490,7 +500,11 @@ mod tests {
         });
         let direction = e.mem.alloc(16);
         store_vec(&mut e, direction, [1.0, 2.0, 3.0, 0.0]);
+        // The child-space direction sits at +0x10 of the exe's aligned 0x20-byte frame.
+        let block = e.mem.alloc(0x30);
+        e.mem.free(block);
         let got = e.call(0x00cf_5a20, &args![shape, direction]).f32();
+        assert_eq!(e.mem.f32(((block + 0xf) & !0xf) + 0x10), 2.0);
         // local = (2, -1, 3, 0); scaled = (4, -2, 6, 0); back (rotated by the columns, plus
         // the translation) = (-2 * -1 + 4 * 0 + 6 * 0 + 1, -2 * 0 + 4 * 1 + 0 + 2,
         // 0 + 0 + 6 + 3, ...) = (3, 6, 9); dotted with the direction: 3 + 12 + 27.
@@ -529,6 +543,10 @@ mod tests {
         e.mem.set_u32(output + 0x40, 1);
         e.mem.set_u32(output + 0x20 + 4, 9);
         let result = e.mem.alloc(4);
+        // The child-space input at +0x20 of the exe's aligned 0x50-byte frame.
+        let block = e.mem.alloc(0x60);
+        e.mem.free(block);
+        let frame = (block + 0xf) & !0xf;
         let got = e
             .call(0x00cf_5b20, &args![shape, result, input, output])
             .u32();
@@ -536,6 +554,7 @@ mod tests {
         let seen = seen.borrow();
         assert_eq!(seen.len(), 1);
         let call = &seen[0];
+        assert_eq!(call[2], frame + 0x20);
         assert_eq!((call[0], call[1], call[3]), (child, result, output));
         // from - translation = (1, 1, 1, 0) -> (1, -1, 1, 0); to - translation = 0.
         let floats: Vec<f32> = call[4..16].iter().map(|w| f32::from_bits(*w)).collect();
@@ -597,8 +616,15 @@ mod tests {
         let body = e.mem.alloc(0x10);
         let body_transform = e.mem.alloc(0x40);
         e.mem.set_u32(body + 8, body_transform);
+        // The record at +0x10, the input at +0x20 and the transform at +0x50 of the exe's
+        // aligned 0x90-byte frame.
+        let block = e.mem.alloc(0xa0);
+        e.mem.free(block);
+        let frame = (block + 0xf) & !0xf;
         e.call(0x00cf_5cc0, &args![shape, input, body, 0x5555u32]);
+        assert_eq!(seen.borrow()[0].0[1..3], [frame + 0x20, frame + 0x10]);
         let composed = composed.borrow();
+        assert_eq!(composed[0][0], frame + 0x50);
         assert_eq!(composed.len(), 1);
         assert_eq!(
             (composed[0][1], composed[0][2]),

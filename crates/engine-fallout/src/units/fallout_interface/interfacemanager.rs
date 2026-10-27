@@ -565,6 +565,7 @@ const QUERY_00719AE0: u32 = 0x0071_9ae0;
 const ACTION_00718930: u32 = 0x0071_8930;
 const IS_TOP_MENU_ID: u32 = 0x0070_2450;
 const IS_TOP_MENU_FADED_IN: u32 = 0x0070_24e0;
+/// Takes no `this`: none of its 8 exe callers (0070c72c ...) sets ECX for it.
 const IS_PIPBOY_MENU_TOPMOST: u32 = 0x0071_7920;
 const OBJECT_FLAG_0070ED80: u32 = 0x0070_ed80;
 const PIPBOY_MENU_CLASS: u32 = 0x0070_ede0;
@@ -2247,8 +2248,8 @@ fn set_cursor_hidden(e: &mut Engine, this: Ptr<InterfaceManager>, hidden: bool) 
 
 /// Part of `Idle`: `menu_blocks_pointer`, true when the pipboy (or the menu the code
 /// names) keeps the pointer from acting.
-fn idle_pointer_blocked(e: &mut Engine, this: Ptr<InterfaceManager>) -> bool {
-    if !e.call(IS_PIPBOY_MENU_TOPMOST, &args![this]).bool() {
+fn idle_pointer_blocked(e: &mut Engine, _this: Ptr<InterfaceManager>) -> bool {
+    if !e.call(IS_PIPBOY_MENU_TOPMOST, &args![]).bool() {
         return true;
     }
     if e.call(HAS_360_CONTROLLER_GETTER, &args![]).bool()
@@ -2550,11 +2551,11 @@ fn pointer_scaled(e: &mut Engine, this: Ptr<InterfaceManager>) -> (f32, f32) {
 /// `value / menu height - 195`.
 fn pointer_to_pipboy_space(
     e: &mut Engine,
-    this: Ptr<InterfaceManager>,
+    _this: Ptr<InterfaceManager>,
     point: (f32, f32),
 ) -> (f32, f32) {
     let (mut x, mut y) = point;
-    if e.call(IS_PIPBOY_MENU_TOPMOST, &args![this]).bool() {
+    if e.call(IS_PIPBOY_MENU_TOPMOST, &args![]).bool() {
         let margin: f64 = e.global(PIPBOY_MARGIN);
         let height = e.call(GET_MENU_HEIGHT, &args![]).f64();
         x = (x as f64 / height - margin) as f32;
@@ -3076,7 +3077,7 @@ fn idle_dispatch_key(
     let frontmost = e.call(GET_FRONTMOST_MENU, &args![menu_manager]).u32();
     let mut taken = false;
     let mut pipboy_key = false;
-    if e.call(IS_PIPBOY_MENU_TOPMOST, &args![this]).bool() {
+    if e.call(IS_PIPBOY_MENU_TOPMOST, &args![]).bool() {
         let controls_owner = e.global::<u32>(CONTROLS_OWNER);
         let controls = e.call(CONTROLS_GET, &args![controls_owner]).u32();
         let page_key = e
@@ -3279,7 +3280,7 @@ fn idle_console_and_hot_keys(e: &mut Engine, this: Ptr<InterfaceManager>, state:
     }
     idle_pipboy_hot_keys(e, this, state);
     let top = e.call(GET_ENTER_STACK_TOP, &args![this]).u32();
-    if top == 0 || e.call(IS_PIPBOY_MENU_TOPMOST, &args![this]).bool() {
+    if top == 0 || e.call(IS_PIPBOY_MENU_TOPMOST, &args![]).bool() {
         interface_manager_update_pipboy(e, this);
     }
     e.call(TUTORIAL_MANAGER_UPDATE, &args![this.addr() + 0x4d4]);
@@ -3749,7 +3750,9 @@ pub fn interface_manager_do_gamepad_event(e: &mut Engine, this: Ptr<InterfaceMan
     // Every visible root child gets `DoGamepad(menu, -1, 0.0)` first, from
     // the last child to the first; the first that takes it ends the event.
     while tail != 0 {
-        let child = e.with_stack(4, |e, slot| {
+        // The frame of `0070f6e0` (0x84 bytes): the tail element at `EBP-0x50` (+0x34).
+        let child = e.with_stack(0x84, |e, frame| {
+            let slot = Ptr::<()>::new(frame.addr() + 0x34);
             e.mem.set_u32(slot.addr(), tail);
             let root = e.call(GET_MENUS_ROOT, &args![this]).u32();
             let element = e.call(LIST_PREVIOUS_ELEMENT, &args![root + 4, slot]).u32();
@@ -3785,7 +3788,10 @@ pub fn interface_manager_do_gamepad_event(e: &mut Engine, this: Ptr<InterfaceMan
             flag_b = e.call(TILE_IS_TRUE, &args![over, 0xfd0u32]).u8();
         }
         if event == 0 {
-            event = e.with_stack(4, |e, out| {
+            // The exe's frame of `0070f6e0` (`SUB ESP,0x74` under the exception record, then the
+            // record link): the released byte at `EBP-0xd` (+0x77).
+            event = e.with_stack(0x84, |e, frame| {
+                let out = Ptr::new(frame.addr() + 0x77);
                 let result = interface_manager_get_top_gamepad_button(e, this, flag_a, flag_b, out);
                 released = e.mem.u8(out.addr()) != 0;
                 result
@@ -3864,17 +3870,20 @@ fn gamepad_direction_event(
 ) {
     e.set(this, InterfaceManager::bMouseInMotion, 0);
     let trait_id = direction_trait(event);
-    // The trait id the reacting tile was found under (out parameter).
-    e.with_stack(4, |e, found_trait| {
+    // The trait id the reacting tile was found under (out parameter). The frame is that of
+    // `0070f6e0` (0x84 bytes): the trait at `EBP-0x30` (+0x54), the focus seed at `EBP-0x40`
+    // (+0x44), the visited list at `EBP-0x48` (+0x3c), the current tile at `EBP-0x34` (+0x50)
+    // and the candidate at `EBP-0x4c` (+0x38).
+    e.with_stack(0x84, |e, frame| {
+        let found_trait = Ptr::<()>::new(frame.addr() + 0x54);
         e.mem.set_u32(found_trait.addr(), 0xfc3);
         let current = e.call(GET_MOUSE_OVER_TARGET, &args![this]).u32();
         if current == 0 {
             // No tile has the focus: take the one with the largest focus
             // value, or the first reacting tile of the menu.
-            let mut best = e.with_stack(4, |e, seed| {
-                e.mem.set_u32(seed.addr(), 0x8000_0000);
-                e.call(SCAN_FOR_MAX_FOCUS, &args![this, seed, 0u32]).u32()
-            });
+            let seed = frame.addr() + 0x44;
+            e.mem.set_u32(seed, 0x8000_0000);
+            let mut best = e.call(SCAN_FOR_MAX_FOCUS, &args![this, seed, 0u32]).u32();
             e.call(SET_CURRENT_FOCUS_TARGET, &args![this, best, 0xfc3u32, 1u32]);
             if best == 0 {
                 best = e
@@ -3904,9 +3913,9 @@ fn gamepad_direction_event(
         // add `005ae3d0`, contains `005f65d0`, clear `00470470`, destroy
         // `0046ffb0`); the add and contains functions take the address of
         // the variable that holds the tile.
-        let visited = Ptr::<()>::new(e.mem.alloc(8));
-        let current_cell = Ptr::<()>::new(e.mem.alloc(4));
-        let candidate_cell = Ptr::<()>::new(e.mem.alloc(4));
+        let visited = Ptr::<()>::new(frame.addr() + 0x3c);
+        let current_cell = Ptr::<()>::new(frame.addr() + 0x50);
+        let candidate_cell = Ptr::<()>::new(frame.addr() + 0x38);
         let mut candidate = e
             .call(
                 TILE_GET_FIRST_REF_COPY,
@@ -3970,9 +3979,6 @@ fn gamepad_direction_event(
             }
         }
         e.call(SIMPLE_LIST_DESTROY, &args![visited]);
-        e.mem.free(candidate_cell.addr());
-        e.mem.free(current_cell.addr());
-        e.mem.free(visited.addr());
     });
 }
 
@@ -4037,7 +4043,9 @@ fn gamepad_button_event(
     if focus == 0 {
         return;
     }
-    let (mut candidate, found) = e.with_stack(4, |e, found_trait| {
+    // The frame of `0070f6e0` (0x84 bytes): the trait at `EBP-0x68` (+0x1c).
+    let (mut candidate, found) = e.with_stack(0x84, |e, frame| {
+        let found_trait = Ptr::<()>::new(frame.addr() + 0x1c);
         let mut candidate = e
             .call(
                 TILE_GET_FIRST_REF_COPY,
@@ -13731,6 +13739,54 @@ mod tests {
             calls(&e, STRING_SET).last().unwrap()[1],
             DISPLAY_FALLBACK_STRING
         );
+    }
+    /// The block the next `with_stack(size)` takes (the last freed block of that size).
+    fn next_frame(e: &mut Engine, size: u32) -> u32 {
+        let frame = e.mem.alloc(size);
+        e.mem.free(frame);
+        frame
+    }
+
+    #[test]
+    fn the_gamepad_event_locals_are_at_the_frame_offsets_of_0070f6e0() {
+        // A direction: the trait at +0x54, the visited list at +0x3c, the current tile at +0x50
+        // and the candidate at +0x38 of the 0x84-byte frame.
+        let (mut e, m, _) = menu_world();
+        returns(&mut e, GET_MOUSE_OVER_TARGET, 0x9400);
+        e.register(TILE_GET_FIRST_REF_COPY, |e, a| {
+            e.mem.set_u32(a[2], 0xfc3);
+            Ret {
+                eax: 0x9500,
+                ..Ret::default()
+            }
+        });
+        returns(&mut e, TILE_IS_TRUE, 1);
+        let frame = next_frame(&mut e, 0x84);
+        interface_manager_do_gamepad_event(&mut e, m, 1);
+        assert_eq!(calls(&e, TILE_GET_FIRST_REF_COPY)[0][2], frame + 0x54);
+        assert_eq!(calls(&e, SIMPLE_LIST_CONSTRUCT), vec![vec![frame + 0x3c]]);
+        assert_eq!(
+            calls(&e, LIST_PUSH_FRONT_005AE3D0),
+            vec![vec![frame + 0x3c, frame + 0x50]]
+        );
+        assert_eq!(
+            calls(&e, LIST_CONTAINS)[0],
+            vec![frame + 0x3c, frame + 0x38]
+        );
+        // No focus: the seed at +0x44.
+        let (mut e, m, _) = menu_world();
+        returns(&mut e, GET_MOUSE_OVER_TARGET, 0);
+        returns(&mut e, TILE_GET_FIRST_REF_COPY, 0);
+        let frame = next_frame(&mut e, 0x84);
+        interface_manager_do_gamepad_event(&mut e, m, 3);
+        assert_eq!(calls(&e, SCAN_FOR_MAX_FOCUS)[0][1], frame + 0x44);
+        // A button: the trait at +0x1c.
+        let (mut e, m, _) = menu_world();
+        returns(&mut e, GET_MOUSE_OVER_TARGET, 0x9600);
+        returns(&mut e, TILE_IS_VISIBLE, 1);
+        let frame = next_frame(&mut e, 0x84);
+        interface_manager_do_gamepad_event(&mut e, m, 10);
+        assert_eq!(calls(&e, TILE_GET_FIRST_REF_COPY)[0][2], frame + 0x1c);
     }
     // @@TESTS-END@@
 }

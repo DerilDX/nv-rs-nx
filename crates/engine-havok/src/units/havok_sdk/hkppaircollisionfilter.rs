@@ -99,13 +99,15 @@ fn store_count(e: &mut Engine, map: u32, key: u64, value: u64) {
 /// words (`out`, `a`, `b`). If the object at `+0x28` is not null, asks its interface at `+0x14`
 /// (vtable slot 4: a scratch word for the result, `a`, `b`) for a pointer to a result byte, and
 /// when that byte is 0 stores 0 at `out` and stops; otherwise stores 1 at `out`.
+/// Answers `out`: the exe leaves it in `EAX` at every `RET` (the hkBool result returned
+/// through a pointer), and virtual call sites test the flag through `EAX` (e.g. 00c90f6a).
 pub fn hkp_pair_collision_filter_is_collision_enabled(
     e: &mut Engine,
     this: Ptr,
     out: u32,
     a: u32,
     b: u32,
-) {
+) -> u32 {
     let object = e.mem.u32(this.addr() + FILTER_OBJECT);
     if object != 0 {
         let result = e.with_stack(4, |e, scratch| {
@@ -113,10 +115,11 @@ pub fn hkp_pair_collision_filter_is_collision_enabled(
         });
         if e.mem.u8(result) == 0 {
             e.mem.set_u8(out, 0);
-            return;
+            return out;
         }
     }
     e.mem.set_u8(out, 1);
+    out
 }
 
 // Translated from 00def160 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -212,16 +215,19 @@ pub fn fn_00def350(e: &mut Engine, this: Ptr, object: u32) -> Ptr {
 /// either pointer is 0, stores 1 at `out`. Otherwise looks the pair (`pair_key`, the pointers
 /// taken as signed words) up in the map at `+0x30` (`00cb1c60`) and stores 1 if the index found
 /// is (signed) greater than the word at `+0x38`, else 0.
-pub fn fn_00def3d0(e: &mut Engine, this: Ptr, out: u32, a: u32, b: u32) {
+/// Answers `out`: the exe leaves it in `EAX` at every `RET` (the hkBool/hkResult result
+/// returned through a pointer, which callers read through `EAX`).
+pub fn fn_00def3d0(e: &mut Engine, this: Ptr, out: u32, a: u32, b: u32) -> u32 {
     if a != 0 && b != 0 {
         let map = this.addr() + MAP;
         let (low, high) = halves(pair_key(a, b));
         let index = e.call(MAP_FIND_KEY, &args![map, low, high]).u32();
         let highest = e.mem.u32(map + 8);
         e.mem.set_u8(out, u8::from(index as i32 > highest as i32));
-        return;
+        return out;
     }
     e.mem.set_u8(out, 1);
+    out
 }
 
 // Translated from 00def450 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -268,13 +274,13 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(
             0x00def120,
-            hkp_pair_collision_filter_is_collision_enabled(Ptr, u32, u32, u32)
+            hkp_pair_collision_filter_is_collision_enabled(Ptr, u32, u32, u32) -> u32
         ),
         entry!(0x00def160, fn_00def160(Ptr)),
         entry!(0x00def1e0, fn_00def1e0(Ptr, u32, u32) -> u32),
         entry!(0x00def2b0, fn_00def2b0(Ptr, u32, u32) -> u32),
         entry!(0x00def350, fn_00def350(Ptr, u32) -> Ptr),
-        entry!(0x00def3d0, fn_00def3d0(Ptr, u32, u32, u32)),
+        entry!(0x00def3d0, fn_00def3d0(Ptr, u32, u32, u32) -> u32),
         entry!(
             0x00def450,
             hkp_pair_collision_filter_is_collision_enabled_ov2(Ptr, u32, u32, u32) -> u32
@@ -492,6 +498,19 @@ mod tests {
         e.mem.set_u32(filter + FILTER_OBJECT, object);
         e.call(0x00de_f120, &args![filter, out, 1u32, 2u32]);
         assert_eq!(e.mem.u8(out), 1);
+    }
+
+    #[test]
+    fn fn_00def120_answers_its_result_pointer() {
+        let mut e = engine();
+        let filter = e.mem.alloc(0x60);
+        let out = e.mem.alloc(4);
+        e.mem.set_u8(out, 9);
+        // The exe leaves the result pointer in EAX at every RET; callers read through it.
+        assert_eq!(
+            e.call(0x00de_f120, &args![filter, out, 1u32, 2u32]).u32(),
+            args![out][0]
+        );
     }
 
     /// Entity handles: byte `+0x18` = `flag`, byte `+0x10` = -0x20, so the entity is

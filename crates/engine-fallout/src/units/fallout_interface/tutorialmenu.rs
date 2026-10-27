@@ -287,42 +287,45 @@ pub fn tutorial_menu_set_page(e: &mut Engine, this: Ptr<TutorialMenu>, mut page:
     if page >= page_count {
         return;
     }
-    let text = e.mem.alloc(8);
-    e.call(STRING_CONSTRUCT, &args![text]);
-    e.set(this, TutorialMenu::iCurrentPage, page);
-    e.call(
-        STRING_FORMAT,
-        &args![text, PAGE_FORMAT, page.wrapping_add(1), page_count],
-    );
-    let c_str = e.call(STRING_C_STR, &args![text]).u32();
-    let tile = tile_at(e, this, 0x3c);
-    set_string(e, tile, TRAIT_STRING, c_str);
+    // The exe's frame (`SUB ESP,0x10` under the exception record, then the record link):
+    // the page text at `EBP-0x18` (+8).
+    e.with_stack(0x20, |e, frame| {
+        let text = frame.addr() + 0x8;
+        e.call(STRING_CONSTRUCT, &args![text]);
+        e.set(this, TutorialMenu::iCurrentPage, page);
+        e.call(
+            STRING_FORMAT,
+            &args![text, PAGE_FORMAT, page.wrapping_add(1), page_count],
+        );
+        let c_str = e.call(STRING_C_STR, &args![text]).u32();
+        let tile = tile_at(e, this, 0x3c);
+        set_string(e, tile, TRAIT_STRING, c_str);
 
-    let mut node = e.get(this, TutorialMenu::pHelpManual);
-    while node != 0 {
-        let steps_left = page;
-        page = page.wrapping_sub(1);
-        if steps_left == 0 {
-            break;
+        let mut node = e.get(this, TutorialMenu::pHelpManual);
+        while node != 0 {
+            let steps_left = page;
+            page = page.wrapping_sub(1);
+            if steps_left == 0 {
+                break;
+            }
+            node = e.call(WORD_AT_FOUR, &args![node]).u32();
         }
-        node = e.call(WORD_AT_FOUR, &args![node]).u32();
-    }
-    if node == 0 {
-        e.call(PRINT_MESSAGE, &args![0x12u32, END_OF_MANUAL, page]);
-    } else {
-        let item = e.call(THIS_ITEM, &args![node]).u32();
-        let form = e.mem.u32(item);
-        let message = e
-            .call(
-                RT_DYNAMIC_CAST,
-                &args![form, 0i32, TYPE_FORM, TYPE_MESSAGE, 0i32],
-            )
-            .u32();
-        tutorial_menu_set_title_and_text(e, this, message);
-        tutorial_menu_update_prev_next(e, this);
-    }
-    e.call(STRING_DESTROY, &args![text]);
-    e.mem.free(text);
+        if node == 0 {
+            e.call(PRINT_MESSAGE, &args![0x12u32, END_OF_MANUAL, page]);
+        } else {
+            let item = e.call(THIS_ITEM, &args![node]).u32();
+            let form = e.mem.u32(item);
+            let message = e
+                .call(
+                    RT_DYNAMIC_CAST,
+                    &args![form, 0i32, TYPE_FORM, TYPE_MESSAGE, 0i32],
+                )
+                .u32();
+            tutorial_menu_set_title_and_text(e, this, message);
+            tutorial_menu_update_prev_next(e, this);
+        }
+        e.call(STRING_DESTROY, &args![text]);
+    });
 }
 
 // Translated from 007e9010 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -532,20 +535,23 @@ fn finish_create(e: &mut Engine, root: u32, start_message: &mut u32, with_button
     }
 
     if found {
-        let text = e.mem.alloc(8);
-        e.call(STRING_CONSTRUCT, &args![text]);
-        let me = menu(e);
-        let current = e.get(me, TutorialMenu::iCurrentPage);
-        let count = e.get(me, TutorialMenu::iNumPages);
-        e.call(
-            STRING_FORMAT,
-            &args![text, PAGE_FORMAT, current.wrapping_add(1), count],
-        );
-        let c_str = e.call(STRING_C_STR, &args![text]).u32();
-        let tile = tile_at(e, menu(e), 0x3c);
-        set_string(e, tile, TRAIT_STRING, c_str);
-        e.call(STRING_DESTROY, &args![text]);
-        e.mem.free(text);
+        // The frame of `007e8890` (`SUB ESP,0x48` under the exception record, then `ESI` and
+        // the record link): the page text at `EBP-0x28` (+0x34).
+        e.with_stack(0x5c, |e, frame| {
+            let text = frame.addr() + 0x34;
+            e.call(STRING_CONSTRUCT, &args![text]);
+            let me = menu(e);
+            let current = e.get(me, TutorialMenu::iCurrentPage);
+            let count = e.get(me, TutorialMenu::iNumPages);
+            e.call(
+                STRING_FORMAT,
+                &args![text, PAGE_FORMAT, current.wrapping_add(1), count],
+            );
+            let c_str = e.call(STRING_C_STR, &args![text]).u32();
+            let tile = tile_at(e, menu(e), 0x3c);
+            set_string(e, tile, TRAIT_STRING, c_str);
+            e.call(STRING_DESTROY, &args![text]);
+        });
     } else {
         let tile = tile_at(e, menu(e), 0x3c);
         set_trait_from_int(e, tile, TRAIT_VISIBLE, 0);
@@ -680,6 +686,13 @@ mod tests {
         e.register(DESCRIPTION, |_, _| word(0));
         e.call_log = Some(vec![]);
         e
+    }
+
+    /// The block the next `with_stack(size)` takes (the last freed block of that size).
+    fn next_frame(e: &mut Engine, size: u32) -> u32 {
+        let frame = e.mem.alloc(size);
+        e.mem.free(frame);
+        frame
     }
 
     fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
@@ -907,7 +920,10 @@ mod tests {
         let items = messages(&mut e, 3);
         let this = menu_with(&mut e, &items, 0, 5);
         e.call_log = Some(vec![]);
+        let frame = next_frame(&mut e, 0x20);
         e.call(0x007e_8ed0, &args![this, 4u32]);
+        // The 0x20-byte frame: the page text at +8.
+        assert_eq!(calls(&e, STRING_CONSTRUCT)[0][0], frame + 8);
         // The walk takes three steps before the end, leaving 4 - 3 = 1.
         assert_eq!(calls(&e, PRINT_MESSAGE), vec![vec![0x12, END_OF_MANUAL, 1]]);
         assert!(calls(&e, RT_DYNAMIC_CAST).is_empty());
@@ -1130,7 +1146,10 @@ mod tests {
     fn create_uses_the_gamepad_manual_and_the_first_message_by_default() {
         let mut w = world(2);
         w.e.register(GAMEPAD_IN_USE, |_, _| word(1));
+        let frame = next_frame(&mut w.e, 0x5c);
         assert!(w.e.call(0x007e_8890, &args![0u32, true]).bool());
+        // The 0x5c-byte frame of 007e8890: the page text at +0x34.
+        assert!(calls(&w.e, STRING_CONSTRUCT).contains(&vec![frame + 0x34]));
         assert_eq!(calls(&w.e, LOOKUP_FORM), vec![vec![0x165]]);
         assert_eq!(w.e.get(w.menu, TutorialMenu::iCurrentPage), 0);
         assert_eq!(w.e.get(w.menu, TutorialMenu::iNumPages), 2);

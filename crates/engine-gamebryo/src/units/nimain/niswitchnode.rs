@@ -248,11 +248,18 @@ pub fn ni_switch_node_detach_child(e: &mut Engine, this: Ptr<NiSwitchNode>, chil
             break;
         }
     }
-    let local = e.mem.alloc(4);
-    e.call(NI_NODE_DETACH_CHILD_OV2, &args![this, child, local]);
-    let detached = e.mem.u32(local);
-    finish_detach(e, this, out, detached);
-    e.mem.free(local);
+    // The exe's frame is its three pushes (0xc bytes) and the return address; it hands
+    // `NiNode::DetachChild` its own `child` argument slot (+0x10, 00a93d1e) for the detached
+    // pointer, so the frame reaches over the arguments as the caller pushed them.
+    e.with_stack(0x18, |e, frame| {
+        let frame = frame.addr();
+        e.mem.set_u32(frame + 0x10, 0); // the exe clears the slot before the call (00a93d26)
+        e.mem.set_u32(frame + 0x14, out);
+        let local = frame + 0x10;
+        e.call(NI_NODE_DETACH_CHILD_OV2, &args![this, child, local]);
+        let detached = e.mem.u32(local);
+        finish_detach(e, this, out, detached);
+    });
 }
 
 // Translated from 00a93dd0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -272,11 +279,17 @@ pub fn ni_switch_node_detach_child_at(
         let revisions = this.at(NiSwitchNode::m_kChildRevID);
         e.call(REVISION_ARRAY_REMOVE_AT, &args![revisions, index]);
     }
-    let local = e.mem.alloc(4);
-    e.call(NI_NODE_DETACH_CHILD_AT_OV2, &args![this, index, local]);
-    let detached = e.mem.u32(local);
-    finish_detach(e, this, out, detached);
-    e.mem.free(local);
+    // As in `DetachChild`: the detached pointer goes to the `index` argument slot (+0x10 of the
+    // frame of three pushes and the return address, 00a93dfa).
+    e.with_stack(0x18, |e, frame| {
+        let frame = frame.addr();
+        e.mem.set_u32(frame + 0x10, 0); // cleared before the call (00a93e02)
+        e.mem.set_u32(frame + 0x14, out);
+        let local = frame + 0x10;
+        e.call(NI_NODE_DETACH_CHILD_AT_OV2, &args![this, index, local]);
+        let detached = e.mem.u32(local);
+        finish_detach(e, this, out, detached);
+    });
 }
 
 // Translated from 00a93ef0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1054,6 +1067,24 @@ mod tests {
             -1,
             "its child is gone"
         );
+    }
+
+    #[test]
+    fn detaching_hands_the_callee_the_argument_slot_of_the_exe_frame() {
+        let mut f = Fixture::new();
+        let (node, kids) = f.switch_node(3);
+        let out = f.e.mem.alloc(4);
+        let frame = f.e.mem.alloc(0x18);
+        f.e.mem.free(frame);
+        f.log();
+        ni_switch_node_detach_child(&mut f.e, node, kids[2], out);
+        let log = f.take_log();
+        assert_eq!(calls(&log, NI_NODE_DETACH_CHILD_OV2)[0][2], frame + 0x10);
+        let out = f.e.mem.alloc(4);
+        f.log();
+        ni_switch_node_detach_child_at(&mut f.e, node, 1, out);
+        let log = f.take_log();
+        assert_eq!(calls(&log, NI_NODE_DETACH_CHILD_AT_OV2)[0][2], frame + 0x10);
     }
 
     #[test]

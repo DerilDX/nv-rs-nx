@@ -2070,6 +2070,7 @@ address	cc	params	ret	unit	callees	consts	buffers	computed_reads
 00944340	thiscall	ptr	bool	crates/engine-fallout/src/units/fallout_ai/playercharacter.rs			0:1696:0:1665.1	0
 00944360	thiscall	ptr	bool	crates/engine-fallout/src/units/fallout_ai/playercharacter.rs			0:1664:0:1646.1	0
 009443a0	thiscall	ptr	f32	crates/engine-fallout/src/units/fallout_ai/playercharacter.rs			0:3648:0:3624.4	0
+009443c0	thiscall	ptr	bool	crates/engine-fallout/src/units/fallout_ai/playercharacter.rs		i1	0:32:0:	0
 009443f0	cdecl		f32	crates/engine-fallout/src/units/fallout_ai/playercharacter.rs		f3f800000		0
 00946280	thiscall	ptr	bool	crates/engine-fallout/src/units/fallout_ai/playercharacter.rs		i65,i1,i0,d0000000000000000	0:432:0:408.4	0
 00948030	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_ai/playercharacter.rs		i1992	0:32:0:	0
@@ -2308,7 +2309,7 @@ address	cc	params	ret	unit	callees	consts	buffers	computed_reads
 00a62660	thiscall	ptr	ptr	crates/engine-gamebryo/src/units/nianimation/nibsplinebasisdata.rs			0:32:0:	0
 00a63840	thiscall	ptr,u32	u32	crates/engine-gamebryo/src/units/nimain/nistream.rs			0:32:0:4.4	0
 00a66960	thiscall	ptr,u32	u32	crates/engine-gamebryo/src/units/nimain/nigeometrydata.rs			0:64:0:44.4	0
-00a669c0	cdecl		u32	crates/engine-gamebryo/src/units/nimain/nigeometrydata.rs				0
+00a669c0	cdecl	ptr	u32	crates/engine-gamebryo/src/units/nimain/nigeometrydata.rs			0:32:0:	0
 00a669e0	thiscall	ptr	u16	crates/engine-gamebryo/src/units/nimain/nigeometrydata.rs			0:32:0:8.2	0
 00a66f90	thiscall	ptr	u32	crates/engine-gamebryo/src/units/nimain/nigeometrydata.rs	00e7cd40	i0,i61440,i4,i1	0:64:0:8.2;12.2;32.4;36.4;40.4;44.4	0
 00a6a000	cdecl	ptr	u32	crates/engine-gamebryo/src/units/nimain/nitexturingproperty.rs		i3	0:32:0:	0
@@ -3189,12 +3190,12 @@ address	cc	params	ret	unit	callees	consts	buffers	computed_reads
 00e7c680	cdecl	ptr	u32	crates/engine-gamebryo/src/units/nixenonrenderer/nid3dshader.rs			0:32:0:	0
 00e7ccf0	cdecl	u32	u32	crates/engine-gamebryo/src/units/nixenonrenderer/run_00e7cc50.rs		i3,i2,i4,i8		0
 00e7cd30	cdecl		u32	crates/engine-gamebryo/src/units/nixenonrenderer/run_00e7cc50.rs				0
-00e7cd40	cdecl		u32	crates/engine-gamebryo/src/units/nixenonrenderer/nid3dgpuprogramcache.rs				0
+00e7cd40	cdecl	ptr	u32	crates/engine-gamebryo/src/units/nixenonrenderer/nid3dgpuprogramcache.rs			0:32:0:	0
 00e7d220	cdecl	ptr	u32	crates/engine-gamebryo/src/units/nixenonrenderer/run_00e7cd50.rs			0:32:0:	0
 00e7d550	cdecl	ptr	u32	crates/engine-gamebryo/src/units/nixenonrenderer/run_00e7cd50.rs			0:32:0:	0
 00e7d680	cdecl	ptr	u32	crates/engine-gamebryo/src/units/nixenonrenderer/run_00e7cd50.rs			0:32:0:	0
 00e7d9c0	cdecl	ptr	u32	crates/engine-gamebryo/src/units/nixenonrenderer/run_00e7cd50.rs			0:32:0:	0
-00e7f7c0	cdecl		u32	crates/engine-gamebryo/src/units/nixenonrenderer/run_00e7ef80.rs				0
+00e7f7c0	cdecl	ptr	u32	crates/engine-gamebryo/src/units/nixenonrenderer/run_00e7ef80.rs			0:32:0:	0
 00e7f7f0	thiscall	ptr,u32,u32	bool	crates/engine-gamebryo/src/units/nixenonrenderer/nid3dpass.rs			0:48:0:20.4;28.4	0
 00e80580	cdecl	u32	u32	crates/engine-fallout/src/units/unplaced/run_00e80570.rs				0
 00e818c0	cdecl	ptr	u32	crates/engine-gamebryo/src/units/nixenonrenderer/nid3dshaderinterface.rs			0:32:0:	0

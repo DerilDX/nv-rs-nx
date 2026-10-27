@@ -98,13 +98,14 @@ pub fn fn_00d1f9f0(e: &mut Engine, this: Ptr) -> Ptr {
 /// The records' bytes +4 to +0xf and the scratch layout follow the exe's stack frame, so the
 /// frame is modelled at the same offsets: a record is built where the box minimum was, so its
 /// bytes +4 to +0xf are lanes 1 to 3 of the minimum.
+/// Answers `found` (`EAX` at both `RET`s; callers test the flag through it, 00ca1763).
 pub fn hka_detect_ragdoll_penetration_detect_penetration(
     e: &mut Engine,
     this: Ptr,
     found: Ptr,
     pose: Ptr,
     hits: Ptr,
-) {
+) -> Ptr {
     let me = this.addr();
     let pose = pose.addr();
     let hits = hits.addr();
@@ -287,6 +288,7 @@ pub fn hka_detect_ragdoll_penetration_detect_penetration(
         }
         e.mem.set_u8(found.addr(), 1);
     });
+    found
 }
 
 // Translated from 00d1fe70 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -317,7 +319,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00d1_f9f0, fn_00d1f9f0(Ptr) -> Ptr),
         entry!(
             0x00d1_fb00,
-            hka_detect_ragdoll_penetration_detect_penetration(Ptr, Ptr, Ptr, Ptr)
+            hka_detect_ragdoll_penetration_detect_penetration(Ptr, Ptr, Ptr, Ptr) -> Ptr
         ),
         entry!(0x00d1_fe70, hka_detect_ragdoll_penetration_scalar_deleting_destructor(Ptr, u8) -> Ptr),
     ]
@@ -613,6 +615,23 @@ mod tests {
         assert_eq!(world.states(4), vec![0; 4]);
         assert_eq!(world.e.mem.u8(world.this + 0x24), 1);
         assert_eq!(world.e.mem.u8(world.found), 0);
+    }
+
+    #[test]
+    fn detect_penetration_answers_its_flag_pointer() {
+        let mut s = scenario(&[0, 0, 1, 1], &POSITIONS);
+        s.states = vec![1, 2, 1, 2];
+        let mut world = build(&s);
+        world.e.mem.set_u8(world.this + 0x24, 1);
+        // EAX is `found` at both RETs; the caller tests the flag through it (00ca1763).
+        let answered = world
+            .e
+            .call(
+                0x00d1_fb00,
+                &args![world.this, world.found, world.pose, world.hits],
+            )
+            .u32();
+        assert_eq!(answered, world.found);
     }
 
     #[test]

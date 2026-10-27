@@ -433,9 +433,8 @@ const QUOTE_DELIMITER: u32 = 0x0102_1184;
 const PREFAB_PATH_FORMAT: u32 = 0x0109_4a4c;
 /// Longest text the reader's string buffers hold before it complains.
 const READ_BUFFER_LIMIT: i32 = 0x1000;
-/// Size of the reader's tag-name buffer and of its text buffers.
-const TAG_BUFFER_SIZE: u32 = 0x80;
-const TEXT_BUFFER_SIZE: u32 = 0x1008;
+/// `tile_parse_file`'s frame under `EBP` (the exception record and `_chkstk(0x2108)`).
+const FRAME_BELOW_EBP: u32 = 0x2114;
 /// Size of the buffer `fn_00a018d0` copies the part outside the brackets to.
 const NAME_BUFFER_SIZE: u32 = 0x104;
 
@@ -2414,14 +2413,14 @@ pub fn tile_parse_file(e: &mut Engine, path: Ptr, buffer: Ptr, length: u32) -> P
     } else {
         (buffer.addr(), length)
     };
-    let scratch = e.mem.alloc(TAG_BUFFER_SIZE + 2 * TEXT_BUFFER_SIZE);
-    let (tag, text, converted) = (
-        scratch,
-        scratch + TAG_BUFFER_SIZE,
-        scratch + TAG_BUFFER_SIZE + TEXT_BUFFER_SIZE,
-    );
-    let complete = parse_xml(e, path, (data, size), storage, (tag, text, converted));
-    e.mem.free(scratch);
+    // The exe's frame: the exception record (three pushes) and `_chkstk(0x2108)` under `EBP`,
+    // 0x2114 bytes; the tag buffer at `EBP - 0x94`, the file text at `EBP - 0x10bc` and the
+    // converted text at `EBP - 0x20cc` (00a02142, 00a024c4, 00a02a62).
+    let complete = e.with_stack(FRAME_BELOW_EBP, |e, frame| {
+        let ebp = frame.addr() + FRAME_BELOW_EBP;
+        let (tag, text, converted) = (ebp - 0x94, ebp - 0x10bc, ebp - 0x20cc);
+        parse_xml(e, path, (data, size), storage, (tag, text, converted))
+    });
     if !complete {
         return Ptr::NULL;
     }
@@ -9292,6 +9291,37 @@ mod tests {
             .ptr();
         let pairs = pairs.borrow().clone();
         (pairs, storage)
+    }
+
+    #[test]
+    fn the_reader_buffers_sit_at_the_exe_frame_offsets_under_ebp() {
+        let mut e = tile_engine();
+        install_reader_doubles(&mut e);
+        let texts = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&texts);
+        e.register_double(TEMPLATE_ADD_PAIR, move |_, a| {
+            sink.borrow_mut().push(a[2]);
+            Ret::default()
+        });
+        let text = r#"<image x="5">hi</image>"#;
+        let buffer = cstring(&mut e, text);
+        let path = cstring(&mut e, "menu.xml");
+        let frame = e.mem.alloc(FRAME_BELOW_EBP);
+        e.mem.free(frame);
+        e.call(
+            0x00a0_1e20,
+            &args![
+                Ptr::<()>::new(path),
+                Ptr::<()>::new(buffer),
+                text.len() as u32
+            ],
+        );
+        let ebp = frame + FRAME_BELOW_EBP;
+        let buffers = [ebp - 0x94, ebp - 0x10bc, ebp - 0x20cc];
+        let seen = texts.borrow();
+        assert!(!seen.is_empty());
+        assert!(seen.iter().all(|at| buffers.contains(at)), "{seen:x?}");
+        assert!(seen.contains(&(ebp - 0x94)));
     }
 
     fn pair(command: i32, text: &str, line: i32, flag: u32) -> Pair {

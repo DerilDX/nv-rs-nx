@@ -297,38 +297,40 @@ pub fn fn_00620340(
             fn_006205c0(e, Ptr::new(created), setup);
             let key = e.call(NODE_KEY, &args![made.wrapping_add(4)]).u32();
             let found = e.call(LOOKUP_BY_KEY, &args![key]).u32();
-            // The word `0x24` sits just before the 0x14-byte local member.
-            let block = e.mem.alloc(0x18);
-            let local = block.wrapping_add(4);
-            e.call(MEMBER_SETUP, &args![local]);
-            e.mem.set_u32(block, 0x24);
-            if found != 0 {
-                let value = e.call(LOOKUP_RESULT_VALUE, &args![found]).u32();
-                e.call(MEMBER_ASSIGN, &args![local, value]);
-                let parent = e.call(LOOKUP_RESULT_PARENT, &args![found]).u32();
-                let owner = if parent == 0 {
-                    0
+            // The word `0x24` sits just before the 0x14-byte local member: `EBP-0x54` and `EBP-0x50`
+            // of the exe's frame (`EBP` on a 16-byte boundary, `SUB ESP,0x70`).
+            e.with_stack(0x70 + 0x10, |e, raw| {
+                let block = ((raw.addr() + 0x70 + 0xf) & !0xf) - 0x54;
+                let local = block.wrapping_add(4);
+                e.call(MEMBER_SETUP, &args![local]);
+                e.mem.set_u32(block, 0x24);
+                if found != 0 {
+                    let value = e.call(LOOKUP_RESULT_VALUE, &args![found]).u32();
+                    e.call(MEMBER_ASSIGN, &args![local, value]);
+                    let parent = e.call(LOOKUP_RESULT_PARENT, &args![found]).u32();
+                    let owner = if parent == 0 {
+                        0
+                    } else {
+                        e.call(PARENT_OWNER, &args![parent]).u32()
+                    };
+                    let source = if owner == 0 {
+                        0
+                    } else {
+                        e.vcall(owner, 0xcc, &args![]).u32()
+                    };
+                    let record_word = e.mem.u32(pair_base.wrapping_add(0x4c));
+                    if source != 0 && record_word != u32::MAX {
+                        let value = e.vcall(source, 0xe0, &args![record_word]).u32();
+                        e.call(ENTRY_RECORD, &args![created, value]);
+                    } else if owner != 0 {
+                        let low_bits = fn_006205a0(e, Ptr::new(owner));
+                        e.call(ENTRY_RECORD, &args![created, low_bits]);
+                    }
                 } else {
-                    e.call(PARENT_OWNER, &args![parent]).u32()
-                };
-                let source = if owner == 0 {
-                    0
-                } else {
-                    e.vcall(owner, 0xcc, &args![]).u32()
-                };
-                let record_word = e.mem.u32(pair_base.wrapping_add(0x4c));
-                if source != 0 && record_word != u32::MAX {
-                    let value = e.vcall(source, 0xe0, &args![record_word]).u32();
-                    e.call(ENTRY_RECORD, &args![created, value]);
-                } else if owner != 0 {
-                    let low_bits = fn_006205a0(e, Ptr::new(owner));
-                    e.call(ENTRY_RECORD, &args![created, low_bits]);
+                    e.call(MEMBER_SETUP_AFTER, &args![local]);
                 }
-            } else {
-                e.call(MEMBER_SETUP_AFTER, &args![local]);
-            }
-            e.call(ENTRY_FINISH, &args![created, local]);
-            e.mem.free(block);
+                e.call(ENTRY_FINISH, &args![created, local]);
+            });
         }
     }
     made
@@ -871,5 +873,17 @@ mod pair_tests {
         run(&mut r, 0xa1, 0xa2, false);
         assert_eq!(calls(&r.e, PARENT_OWNER), vec![vec![0x9200]]);
         assert!(calls(&r.e, ENTRY_RECORD).is_empty());
+    }
+
+    #[test]
+    fn at_00620340_keeps_the_local_member_below_an_aligned_ebp() {
+        let mut r = rig();
+        let raw = r.e.mem.alloc(0x70 + 0x10);
+        r.e.mem.free(raw);
+        run(&mut r, 0xa1, 0xa2, false);
+        // The word 0x24 at EBP-0x54, the member at EBP-0x50.
+        let ebp = (raw + 0x70 + 0xf) & !0xf;
+        assert_eq!(calls(&r.e, ENTRY_FINISH), vec![vec![r.created, ebp - 0x50]]);
+        assert_eq!(r.e.mem.u32(ebp - 0x54), 0x24);
     }
 }

@@ -16,13 +16,16 @@ const BASE_DESTRUCTOR: u32 = 0x00d2_4660;
 // Translated from 00e01140 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkpCompressedSampledHeightFieldShape::getTriangleFlipImpl` (Xbox PDB): stores the flip
 /// byte at `this + 0x6C` to `*out`.
+/// Answers `out`: the exe leaves it in `EAX` at every `RET` (the hkBool/hkResult result
+/// returned through a pointer, which callers read through `EAX`).
 pub fn hkp_compressed_sampled_height_field_shape_get_triangle_flip_impl(
     e: &mut Engine,
     this: Ptr,
     out: Ptr,
-) {
+) -> Ptr {
     let flip = e.mem.u8(this.addr() + 0x6c);
     e.mem.set_u8(out.addr(), flip);
+    out
 }
 
 // Translated from 00e01150 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -89,7 +92,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(
             0x00e0_1140,
-            hkp_compressed_sampled_height_field_shape_get_triangle_flip_impl(Ptr, Ptr)
+            hkp_compressed_sampled_height_field_shape_get_triangle_flip_impl(Ptr, Ptr) -> Ptr
         ),
         entry!(
             0x00e0_1150,
@@ -119,6 +122,15 @@ mod tests {
             e.call(0x00e0_1140, &[this, out]);
             assert_eq!(e.mem.u8(out), flip);
         }
+    }
+
+    #[test]
+    fn triangle_flip_answers_its_out_pointer_00e01140() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x80);
+        let out = e.mem.alloc(4);
+        // EAX is `out` at the RET (the hkBool result pointer the callers read through).
+        assert_eq!(e.call(0x00e0_1140, &[this, out]).u32(), out);
     }
 
     /// A shape with a 4 wide height array holding `100 * index`, scale 0.5 and offset 10.

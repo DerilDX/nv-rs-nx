@@ -15,7 +15,9 @@ const REMOVE_AGENT: u32 = 0x00cc_1160;
 /// interface at `+0x14` of that object is called with `(slot, first, second)`, where `slot` is
 /// a stack word the caller owns (it starts as `second`, and the slot function writes its answer
 /// byte there and returns its address); the byte is that answer: 0 when it is 0, else 1.
-pub fn fn_00e46df0(e: &mut Engine, this: Ptr, out: u32, first: u32, second: u32) {
+/// Answers `out`: the exe leaves it in `EAX` at every `RET` (the hkBool result returned
+/// through a pointer), and virtual call sites test the flag through `EAX` (e.g. 00c90f6a).
+pub fn fn_00e46df0(e: &mut Engine, this: Ptr, out: u32, first: u32, second: u32) -> u32 {
     let owner = e.mem.u32(this.addr().wrapping_add(0x20));
     if owner != 0 {
         let answer = e.with_stack(4, |e, slot| {
@@ -27,10 +29,11 @@ pub fn fn_00e46df0(e: &mut Engine, this: Ptr, out: u32, first: u32, second: u32)
         });
         if answer == 0 {
             e.mem.set_u8(out, 0);
-            return;
+            return out;
         }
     }
     e.mem.set_u8(out, 1);
+    out
 }
 
 // Translated from 00e46e30 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -69,7 +72,7 @@ pub fn fn_00e46e80(e: &mut Engine, this: Ptr) -> u32 {
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
-        entry!(0x00e4_6df0, fn_00e46df0(Ptr, u32, u32, u32)),
+        entry!(0x00e4_6df0, fn_00e46df0(Ptr, u32, u32, u32) -> u32),
         entry!(0x00e4_6e30, fn_00e46e30(Ptr, u32)),
         entry!(0x00e4_6e70, fn_00e46e70(Ptr, u32)),
         entry!(0x00e4_6e80, fn_00e46e80(Ptr) -> u32),
@@ -124,6 +127,19 @@ mod tests {
         let mut e = engine();
         let this = e.mem.alloc(0x40);
         assert_eq!(run(&mut e, this), 1);
+    }
+
+    #[test]
+    fn the_filter_answers_its_out_pointer() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x40);
+        let out = e.mem.alloc(8);
+        // EAX is `out` at both RETs; virtual call sites test the flag through it (00c90f6a).
+        assert_eq!(
+            e.call(0x00e4_6df0, &args![this, out, 0x11u32, 0x22u32])
+                .u32(),
+            out
+        );
     }
 
     #[test]

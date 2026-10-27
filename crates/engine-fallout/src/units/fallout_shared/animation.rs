@@ -1233,9 +1233,10 @@ pub fn anim_sequence_single_remove_sequence(
 /// current sequence (`GetSequenceToPlay(-1)`) into it, clears `other`
 /// (`SetSequence(0, 0)`) and deletes it. Returns `this`.
 ///
-/// `SetSequence` of the multiple declares two stack arguments and reads
-/// only the first; the game pushes one, so the second word passed here is
-/// not meaningful.
+/// The exe pushes `1, -1` before `GetSequenceToPlay` (+0x10), which pops one
+/// word (the -1; `RET 4`); the 1 left on the stack is the second word of
+/// `SetSequence` (0048f3a0, `RET 8`, which reads only the first), after the
+/// sequence pushed at 0048f14f.
 pub fn fn_0048f0c0(
     e: &mut Engine,
     this: Ptr<AnimSequenceMultiple>,
@@ -1251,9 +1252,9 @@ pub fn fn_0048f0c0(
     };
     e.set(this, AnimSequenceMultiple::pSeqList, Ptr::new(list));
     let sequence = e
-        .vcall(other.addr(), 0x10, &args![0xffff_ffffu32, 1u32])
+        .vcall(other.addr(), 0x10, &args![0xffff_ffffu32])
         .ptr::<()>();
-    anim_sequence_multiple_set_sequence(e, this, sequence, 0);
+    anim_sequence_multiple_set_sequence(e, this, sequence, 1);
     e.vcall(other.addr(), 4, &args![0u32, 0u32]);
     if !other.is_null() {
         e.vcall(other.addr(), 0, &args![1u32]);
@@ -9385,8 +9386,9 @@ mod tests {
         assert_eq!(e.mem.u32(this.addr()), VTABLE_ANIM_SEQUENCE_MULTIPLE);
         let list = e.get(this, AnimSequenceMultiple::pSeqList);
         assert!(!list.is_null());
-        // GetSequenceToPlay(-1, 1), SetSequence(0, 0), delete(1) on `other`.
-        assert_eq!(arguments_of(&log, 0x00f0_0010), [[other, 0xffff_ffff, 1]]);
+        // GetSequenceToPlay(-1) (+0x10 pops one word; the pushed 1 is SetSequence's),
+        // SetSequence(0, 0), delete(1) on `other`.
+        assert_eq!(arguments_of(&log, 0x00f0_0010), [[other, 0xffff_ffff]]);
         assert_eq!(arguments_of(&log, 0x00f0_0001), [[other, 0, 0]]);
         assert_eq!(arguments_of(&log, 0x00f0_0000), [[other, 1]]);
         assert_eq!(arguments_of(&log, REF_ADD), [[0x7777]]);

@@ -259,52 +259,60 @@ pub fn hkp_save_contact_points_endian_util_swap_endian_type_in_1n_track(
     if e.mem.i32(track + 4) <= 0 {
         return;
     }
-    let scratch = e.mem.alloc(8);
-    let mut item_index: i32 = 0;
-    loop {
-        let item = e.mem.u32(
-            e.mem
-                .u32(track)
-                .wrapping_add((item_index as u32).wrapping_mul(4)),
-        );
-        let end = e.mem.u32(item).wrapping_add(item).wrapping_add(0x10);
-        let mut entry = item.wrapping_add(0x10);
-        if entry < end {
-            let mut next = item_index.wrapping_add(1);
-            loop {
-                e.mem.set_u32(scratch, 0);
-                if block != 0 {
-                    let offset = entry.wrapping_sub(item).wrapping_sub(0x10) as i32;
-                    if e.mem.i32(block + 0x18) != item_index || e.mem.i32(block + 0x1c) < offset {
-                        if next < e.mem.i32(track + 0x10) {
-                            let list = e.mem.u32(track + 0xc);
-                            block = e.mem.u32(
-                                list.wrapping_add((cursor as u32).wrapping_mul(4))
-                                    .wrapping_add(4),
-                            );
-                            cursor += 1;
-                            next += 1;
-                        } else {
-                            block = 0;
+    // The exe's frame (`SUB ESP,0x18`, four pushes) taken with the arguments: the entry size
+    // at +0x1c (00e0626b) and the second out word in the `track` argument's own slot, +0x30
+    // past the return address at +0x28 (00e06262).
+    e.with_stack(0x34, |e, frame| {
+        let frame = frame.addr();
+        e.mem.set_u32(frame + 0x2c, context.addr());
+        e.mem.set_u32(frame + 0x30, track);
+        let (size_at, second_at) = (frame + 0x1c, frame + 0x30);
+        let mut item_index: i32 = 0;
+        loop {
+            let item = e.mem.u32(
+                e.mem
+                    .u32(track)
+                    .wrapping_add((item_index as u32).wrapping_mul(4)),
+            );
+            let end = e.mem.u32(item).wrapping_add(item).wrapping_add(0x10);
+            let mut entry = item.wrapping_add(0x10);
+            if entry < end {
+                let mut next = item_index.wrapping_add(1);
+                loop {
+                    e.mem.set_u32(size_at, 0);
+                    if block != 0 {
+                        let offset = entry.wrapping_sub(item).wrapping_sub(0x10) as i32;
+                        if e.mem.i32(block + 0x18) != item_index || e.mem.i32(block + 0x1c) < offset
+                        {
+                            if next < e.mem.i32(track + 0x10) {
+                                let list = e.mem.u32(track + 0xc);
+                                block = e.mem.u32(
+                                    list.wrapping_add((cursor as u32).wrapping_mul(4))
+                                        .wrapping_add(4),
+                                );
+                                cursor += 1;
+                                next += 1;
+                            } else {
+                                block = 0;
+                            }
                         }
                     }
-                }
-                e.call(
-                    0x00e0_6070,
-                    &args![context, entry, block, 0u32, scratch, scratch + 4],
-                );
-                entry = entry.wrapping_add(e.mem.u32(scratch));
-                if entry >= end {
-                    break;
+                    e.call(
+                        0x00e0_6070,
+                        &args![context, entry, block, 0u32, size_at, second_at],
+                    );
+                    entry = entry.wrapping_add(e.mem.u32(size_at));
+                    if entry >= end {
+                        break;
+                    }
                 }
             }
+            item_index = item_index.wrapping_add(1);
+            if item_index >= e.mem.i32(track + 4) {
+                break;
+            }
         }
-        item_index = item_index.wrapping_add(1);
-        if item_index >= e.mem.i32(track + 4) {
-            break;
-        }
-    }
-    e.mem.free(scratch);
+    });
 }
 
 // Translated from 00e062a0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -321,19 +329,27 @@ pub fn hkp_save_contact_points_endian_util_swap_endian_type_in_collision_entry(
     entry: Ptr,
 ) {
     let entry = entry.addr();
-    let scratch = e.mem.alloc(8);
-    e.call(
-        0x00e0_6070,
-        &args![
-            context,
-            entry.wrapping_add(0x74),
-            entry.wrapping_add(0x114),
-            1u32,
-            scratch,
-            scratch + 4
-        ],
-    );
-    e.mem.free(scratch);
+    // The exe's frame (`PUSH ECX`, two pushes) taken with the arguments: the first out word in
+    // the pushed slot at +0x8 (00e062ac) and the second in the `entry` argument's own slot,
+    // +0x14 past the return address at +0xc (00e062a7).
+    e.with_stack(0x18, |e, frame| {
+        let frame = frame.addr();
+        e.mem.set_u32(frame + 0x10, context.addr());
+        e.mem.set_u32(frame + 0x14, entry);
+        // 00e062b1: the flag byte 1 is built in the first out word.
+        e.mem.set_u8(frame + 8, 1);
+        e.call(
+            0x00e0_6070,
+            &args![
+                context,
+                entry.wrapping_add(0x74),
+                entry.wrapping_add(0x114),
+                1u32,
+                frame + 8,
+                frame + 0x14
+            ],
+        );
+    });
     let stride = u32::from(e.mem.u8(entry + 0x2a));
     assert!(
         stride != 0,
@@ -769,8 +785,12 @@ mod tests {
         let log = Rc::clone(&seen);
         let sizes = sizes.to_vec();
         let mut call = 0;
+        // The out words: +0x1c and the `track` argument's slot (+0x30) of the exe's frame.
+        let frame = e.mem.alloc(0x34);
+        e.mem.free(frame);
         e.register_double(0x00e0_6070, move |e, a| {
             assert_eq!(a[3] & 0xff, 0);
+            assert_eq!(a[4..6], [frame + 0x1c, frame + 0x30]);
             log.borrow_mut().push((a[1], a[2], a[0]));
             e.mem.set_u32(a[4], sizes[call.min(sizes.len() - 1)]);
             call += 1;
@@ -874,10 +894,14 @@ mod tests {
         // 0x5f / 0x20 = 2 whole records.
         let (entry, records) = collision_entry(&mut e, 0x20, 0x5f, 1);
         let before = bytes(&e, records, 0x80);
+        // The out words: +0x8 and the `entry` argument's slot (+0x14) of the exe's frame.
+        let frame = e.mem.alloc(0x18);
+        e.mem.free(frame);
         e.call(0x00e0_62a0, &args![0x7777u32, entry]);
         let seen = seen.borrow();
         assert_eq!(seen.len(), 1);
         assert_eq!(seen[0][..3], [0x7777, entry + 0x74, entry + 0x114]);
+        assert_eq!(seen[0][4..6], [frame + 8, frame + 0x14]);
         assert_eq!(seen[0][3] & 0xff, 1);
         assert_eq!(e.mem.u32(entry + 0x12c), 0x103);
         let mut groups = Vec::new();

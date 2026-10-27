@@ -31,6 +31,22 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+/// Runs `f` on an exe-shaped frame: a function that aligns `ESP` (`AND ESP,0xfffffff0`) and
+/// then reserves `below` bytes (its `SUB ESP` and pushes) has its frame `below` bytes under a
+/// 16-byte boundary; `f` gets the frame's lowest address.
+fn with_aligned_frame<R>(e: &mut Engine, below: u32, f: impl FnOnce(&mut Engine, u32) -> R) -> R {
+    e.with_stack(below + 0x10, |e, raw| {
+        let boundary = (raw.addr() + below + 0xf) & !0xf;
+        f(e, boundary - below)
+    })
+}
+
+/// The frame base [`with_aligned_frame`] picks for a block at `raw` (tests).
+#[cfg(test)]
+fn aligned_frame_at(raw: u32, below: u32) -> u32 {
+    ((raw + below + 0xf) & !0xf) - below
+}
+
 /// The CRT square root (`00ec6040`, argument in ST0, result in ST0).
 const SQUARE_ROOT: u32 = 0x00ec_6040;
 /// `float` constants: the epsilon `2^-23` and the half-space tolerance `-0.001`.
@@ -837,11 +853,14 @@ fn search(e: &mut Engine, input: u32, output: u32, solver: u32) {
 /// the limit (`input + 0x44`), adds the hit plane to the solver's simplex and reduces it
 /// (`00d23f50`). With no further plane it stores the whole budget in `output + 0x20`.
 pub fn fn_00d24360(e: &mut Engine, input: Ptr, output: Ptr) {
-    let solver = e.mem.alloc(0x70);
-    e.mem.set_u32(solver + 0x38, input.addr());
-    e.mem.set_u32(solver + 0x3c, output.addr());
-    search(e, input.addr(), output.addr(), solver);
-    e.mem.free(solver);
+    // The exe aligns ESP, then `SUB ESP,0x64` and three pushes: a 0x70-byte frame, the solver
+    // state at +0x30 (its input and output words at +0x68 and +0x6c, 00d24394..00d2439c).
+    with_aligned_frame(e, 0x70, |e, frame| {
+        let solver = frame + 0x30;
+        e.mem.set_u32(solver + 0x38, input.addr());
+        e.mem.set_u32(solver + 0x3c, output.addr());
+        search(e, input.addr(), output.addr(), solver);
+    });
 }
 
 /// The floats and doubles the three functions read: `1.0` as a float (`01012068`) and as a double
@@ -1446,6 +1465,18 @@ mod tests {
         e.mem.set_f32(input + 0x44, 10.0);
         let output = e.mem.alloc(0x40);
         (input, output)
+    }
+
+    #[test]
+    fn the_search_state_sits_at_0x30_of_the_aligned_frame() {
+        let mut e = engine();
+        let (input, output) = search_fixture(&mut e, 1.0);
+        let raw = e.mem.alloc(0x80);
+        e.mem.free(raw);
+        e.call(0x00d2_4360, &args![input, output]);
+        let frame = aligned_frame_at(raw, 0x70);
+        assert_eq!(e.mem.u32(frame + 0x68), input);
+        assert_eq!(e.mem.u32(frame + 0x6c), output);
     }
 
     #[test]

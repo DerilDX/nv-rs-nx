@@ -8,6 +8,22 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+/// Runs `f` on an exe-shaped frame: a function that aligns `ESP` (`AND ESP,0xfffffff0`) and
+/// then reserves `below` bytes (its `SUB ESP` and pushes) has its frame `below` bytes under a
+/// 16-byte boundary; `f` gets the frame's lowest address.
+fn with_aligned_frame<R>(e: &mut Engine, below: u32, f: impl FnOnce(&mut Engine, u32) -> R) -> R {
+    e.with_stack(below + 0x10, |e, raw| {
+        let boundary = (raw.addr() + below + 0xf) & !0xf;
+        f(e, boundary - below)
+    })
+}
+
+/// The frame base [`with_aligned_frame`] picks for a block at `raw` (tests).
+#[cfg(test)]
+fn aligned_frame_at(raw: u32, below: u32) -> u32 {
+    ((raw + below + 0xf) & !0xf) - below
+}
+
 /// Vtable of `bhkWindListener`.
 const VTABLE_WIND_LISTENER: u32 = 0x010c_4b2c;
 /// The destructor body (`005545f0`, thiscall on `this`).
@@ -62,6 +78,9 @@ const ROTATION_SET_AXIS_ANGLE: u32 = 0x00cb_2e30;
 const VECTOR_SET_ROTATED_DIR: u32 = 0x00c7_f700;
 const ENTITY_ACTIVATE: u32 = 0x00c9_c1d0;
 
+/// `Update`'s frame under the 16-byte boundary: `SUB ESP,0x84` and three pushes.
+const UPDATE_FRAME_BELOW: u32 = 0x90;
+
 // Translated from 00c74570 (decompiled, FalloutNV.exe 1.4.0.525)
 // Translation incomplete: 00c74570 - the /GS stack cookie check (00ec408c) at the exit is not translated
 /// `bhkWindListener::Update` (Xbox PDB), thiscall with one float stack word, the time step.
@@ -91,58 +110,62 @@ pub fn bhk_wind_listener_update(e: &mut Engine, this: Ptr, dt: f32) {
     let truncated = e.call(FTOL, &args![quotient]).i32();
     let scale = x87_store32(f64::from(1i32.wrapping_sub(truncated)));
     let quarter: f64 = e.global(WIND_QUARTER);
-    let frame = e.mem.alloc(0x80);
-    let (axis, vector, rotation, rotated) = (frame, frame + 0x10, frame + 0x20, frame + 0x50);
-    let mut node = this + 0xc;
-    while node != 0 && e.mem.u32(node) != 0 {
-        let entry = e.mem.u32(node);
-        let body = e.mem.u32(entry + 8);
-        let noise = e.vcall(this, 0x28, &args![x87_quiet_bits(strength)]).f64();
-        // `strength * 0.25 + noise` (`FADDP`), stored as a float.
-        let mut limited = x87_store32(x87_add(noise, x87_mul(x87_load32(strength), quarter)));
-        // `FLDZ` / `FCOM`: only an ordered "below zero" clamps.
-        if 0.0 > x87_m32(limited) {
-            limited = 0.0f32.to_bits();
+    // The exe's frame (aligned: `SUB ESP,0x84` and three pushes under the boundary) holds the
+    // axis at +0x20, the rotated direction at +0x30, the direction at +0x40 and the rotation at
+    // +0x50 (00c746c1..00c7472e).
+    with_aligned_frame(e, UPDATE_FRAME_BELOW, |e, frame| {
+        let (axis, rotated, vector, rotation) =
+            (frame + 0x20, frame + 0x30, frame + 0x40, frame + 0x50);
+        let mut node = this + 0xc;
+        while node != 0 && e.mem.u32(node) != 0 {
+            let entry = e.mem.u32(node);
+            let body = e.mem.u32(entry + 8);
+            let noise = e.vcall(this, 0x28, &args![x87_quiet_bits(strength)]).f64();
+            // `strength * 0.25 + noise` (`FADDP`), stored as a float.
+            let mut limited = x87_store32(x87_add(noise, x87_mul(x87_load32(strength), quarter)));
+            // `FLDZ` / `FCOM`: only an ordered "below zero" clamps.
+            if 0.0 > x87_m32(limited) {
+                limited = 0.0f32.to_bits();
+            }
+            let upper = x87_load32(e.mem.u32(WIND_STRENGTH_LIMIT));
+            if upper < x87_load32(limited) {
+                limited = x87_store32(upper);
+            }
+            let limited = x87_store32(x87_mul(x87_load32(limited), x87_m32(scale)));
+            let sample = x87_quiet_bits(e.mem.u32(WIND_SECOND_SAMPLE));
+            let noise = e.vcall(this, 0x28, &args![sample]).f64();
+            let noise = x87_store32(noise);
+            let mut angle = x87_store32(x87_add(x87_load32(e.mem.u32(WIND_PHASE)), x87_m32(noise)));
+            let period = x87_load32(e.mem.u32(WIND_ANGLE_PERIOD));
+            let current = x87_load32(angle);
+            if period < current {
+                angle = x87_store32(x87_sub(current, period));
+            } else if 0.0 > current {
+                angle = x87_store32(x87_add(current, period));
+            }
+            let angle = x87_store32(x87_load32(angle));
+            for (lane, value) in [0.0f32, f32::from_bits(limited), 0.0, 0.0]
+                .into_iter()
+                .enumerate()
+            {
+                e.mem.set_f32(vector + 4 * lane as u32, value);
+            }
+            for (lane, value) in [0.0f32, 0.0, 1.0, 0.0].into_iter().enumerate() {
+                e.mem.set_f32(axis + 4 * lane as u32, value);
+            }
+            e.call(ROTATION_SET_AXIS_ANGLE, &args![rotation, axis, angle]);
+            e.call(VECTOR_SET_ROTATED_DIR, &args![rotated, rotation, vector]);
+            if body != 0 {
+                e.call(ENTITY_ACTIVATE, &args![body]);
+                e.vcall(
+                    body + 0xe0,
+                    0x5c,
+                    &args![x87_quiet_bits(dt.to_bits()), rotated],
+                );
+            }
+            node = e.mem.u32(node + 4);
         }
-        let upper = x87_load32(e.mem.u32(WIND_STRENGTH_LIMIT));
-        if upper < x87_load32(limited) {
-            limited = x87_store32(upper);
-        }
-        let limited = x87_store32(x87_mul(x87_load32(limited), x87_m32(scale)));
-        let sample = x87_quiet_bits(e.mem.u32(WIND_SECOND_SAMPLE));
-        let noise = e.vcall(this, 0x28, &args![sample]).f64();
-        let noise = x87_store32(noise);
-        let mut angle = x87_store32(x87_add(x87_load32(e.mem.u32(WIND_PHASE)), x87_m32(noise)));
-        let period = x87_load32(e.mem.u32(WIND_ANGLE_PERIOD));
-        let current = x87_load32(angle);
-        if period < current {
-            angle = x87_store32(x87_sub(current, period));
-        } else if 0.0 > current {
-            angle = x87_store32(x87_add(current, period));
-        }
-        let angle = x87_store32(x87_load32(angle));
-        for (lane, value) in [0.0f32, f32::from_bits(limited), 0.0, 0.0]
-            .into_iter()
-            .enumerate()
-        {
-            e.mem.set_f32(vector + 4 * lane as u32, value);
-        }
-        for (lane, value) in [0.0f32, 0.0, 1.0, 0.0].into_iter().enumerate() {
-            e.mem.set_f32(axis + 4 * lane as u32, value);
-        }
-        e.call(ROTATION_SET_AXIS_ANGLE, &args![rotation, axis, angle]);
-        e.call(VECTOR_SET_ROTATED_DIR, &args![rotated, rotation, vector]);
-        if body != 0 {
-            e.call(ENTITY_ACTIVATE, &args![body]);
-            e.vcall(
-                body + 0xe0,
-                0x5c,
-                &args![x87_quiet_bits(dt.to_bits()), rotated],
-            );
-        }
-        node = e.mem.u32(node + 4);
-    }
-    e.mem.free(frame);
+    });
 }
 
 /// This unit's translated functions, by exe address.
@@ -337,6 +360,24 @@ mod update_tests {
         assert_eq!(motion.0[0], s.body + 0xe0);
         assert_eq!(f32::from_bits(motion.0[1]), 1.0);
         assert_eq!(motion.1, vec![0.0, -3.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn the_wind_vectors_sit_at_the_exe_frame_offsets() {
+        let mut s = scene(2.0, 1.5);
+        let body = s.body;
+        add_node(&mut s, body);
+        // The frame block is the one just freed: the axis at +0x20, the rotated direction at
+        // +0x30, the direction at +0x40 and the rotation at +0x50.
+        let raw = s.e.mem.alloc(UPDATE_FRAME_BELOW + 0x10);
+        s.e.mem.free(raw);
+        let frame = aligned_frame_at(raw, UPDATE_FRAME_BELOW);
+        s.e.call(0x00c7_4570, &args![s.listener, 1.0f32]);
+        let axis_angle = &calls(&s.seen, ROTATION_SET_AXIS_ANGLE)[0];
+        assert_eq!(axis_angle.0[..2], [frame + 0x50, frame + 0x20]);
+        let rotated = &calls(&s.seen, VECTOR_SET_ROTATED_DIR)[0];
+        assert_eq!(rotated.0, vec![frame + 0x30, frame + 0x50, frame + 0x40]);
+        assert_eq!(calls(&s.seen, MOTION_SLOT_5C)[0].0[2], frame + 0x30);
     }
 
     #[test]

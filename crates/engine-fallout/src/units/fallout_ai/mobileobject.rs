@@ -1055,7 +1055,9 @@ pub fn fn_00930700(e: &mut Engine, this: Ptr<MobileObject>, cell: Ptr) {
     {
         let loaded = e.mem.u32(this.addr() + 0x64);
         if loaded != 0 {
-            let location = e.vcall(this.addr(), 0x1f4, &args![0u32]).u32();
+            // 009307a3: the pushed 0 is the third word of `0045cbc0` (`RET 8` after the
+            // location pushed at 009307b5); the reference's +0x1f4 takes none (plain `RET`).
+            let location = e.vcall(this.addr(), 0x1f4, &args![]).u32();
             let world = e.global::<u32>(0x011d_ea10);
             let height = e.call(0x0045_cbc0, &args![world, location, 0u32]).f32();
             e.mem.set_f32(loaded + 8, quiet_f32(height));
@@ -4290,6 +4292,48 @@ mod tests {
     }
 
     #[test]
+    fn cell_change_asks_the_location_without_a_stack_word() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        e.map(0x0102_4000, 0x1000);
+        e.map(0x011d_e000, 0x1000);
+        e.mem.set_f64(0x0102_41b0, 0.0);
+        e.mem.set_u32(0x011d_ea10, 0x2800);
+        let process = 0x1800u32;
+        e.set(this, MobileObject::pCurrentProcess, Ptr::new(process));
+        virtual_slot(&mut e, process, 0x7000, 0x28c, 0x8000);
+        stub(&mut e, 0x8000, 0x1900);
+        virtual_slot(&mut e, this.addr(), 0x9000, 0x1f4, 0xa000);
+        stub(&mut e, 0xa000, 0x1a00);
+        e.mem.set_u32(this.addr() + 0x64, 0x1b00);
+        for (address, result) in [
+            (0x008d_6f30, 0),
+            (0x0057_5bb0, 0),
+            (0x0057_4900, 0),
+            (0x0057_b0a0, 0),
+            (0x0057_b1d0, 0),
+            (0x0087_f390, 1),
+            (0x005c_0880, 5),
+            (0x0045_cbc0, 0),
+        ] {
+            stub(&mut e, address, result);
+        }
+        e.call_log = Some(vec![]);
+        e.call(0x0093_0700, &args![this, 0x1c00u32]);
+        let log = e.call_log.take().unwrap();
+        let calls = |address: u32| -> Vec<Vec<u32>> {
+            log.iter()
+                .filter(|(a, _)| *a == address)
+                .map(|(_, w)| w.clone())
+                .collect()
+        };
+        // 009307a3..009307bc: the 0 pushed before the location getter (+0x1f4, plain RET)
+        // is the last word of 0045cbc0, after the location.
+        assert_eq!(calls(0xa000), vec![vec![this.addr()]]);
+        assert_eq!(calls(0x0045_cbc0), vec![vec![0x2800, 0x1a00, 0]]);
+    }
+
+    #[test]
     fn constructor_initializes_mobile_members() {
         let mut e = Engine::new();
         let this = mapped(&mut e);
@@ -5573,7 +5617,7 @@ mod tests {
         let log = e.call_log.unwrap();
         assert!(log
             .iter()
-            .any(|call| call.0 == 0x7100 && call.1 == [0x1000, 0]));
+            .any(|call| call.0 == 0x7100 && call.1 == [0x1000]));
         assert!(log
             .iter()
             .any(|call| call.0 == 0x0045_cbc0 && call.1 == [0x8000, 0xa000, 0]));

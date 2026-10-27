@@ -255,8 +255,6 @@ const NODE_IS_END: u32 = 0x0082_56d0;
 const NODE_ITEM_SLOT: u32 = 0x0068_15c0;
 /// The player reference pointer.
 const PLAYER: u32 = 0x011d_ea3c;
-/// Sets the audio-handle and unused words (`BSSoundHandle` is 0xC bytes).
-const SOUND_HANDLE_SIZE: u32 = 0xc;
 
 // Data.
 const NPOS: u32 = 0x0101_73f0;
@@ -321,10 +319,6 @@ const TRAIT_0FAA: u32 = 0xfaa;
 const TRAIT_X: u32 = 0xfa1;
 const TRAIT_Y: u32 = 0xfa2;
 const TRAIT_FADE: u32 = 0x1772;
-
-/// A `std::basic_string<char>` temporary: allocator word, 16-byte buffer
-/// union, size at +0x14, capacity at +0x18 (rounded up).
-const STD_STRING_SIZE: u32 = 0x20;
 
 layout! {
     /// `MessageMenu` (Xbox PDB), 0x94 bytes: a `Menu` with its tiles at
@@ -430,10 +424,6 @@ fn set_string(e: &mut Engine, tile: u32, id: u32, text: u32, flag: bool) {
 
 fn c_str(e: &mut Engine, string: Ptr<BSStringT>) -> u32 {
     e.call(STRING_C_STR, &args![string]).u32()
-}
-
-fn new_std_string(e: &mut Engine) -> u32 {
-    e.mem.alloc(STD_STRING_SIZE)
 }
 
 /// A new entry: `operator new(0x50)` and the constructor.
@@ -708,111 +698,114 @@ pub fn fn_007a8e60(
     background_opacity: f32,
     width_override: f32,
 ) -> bool {
-    let entry = new_entry(e);
-    let buttons = e.mem.alloc(8);
-    e.call(STRING_FROM_C_STRING, &args![buttons, first_button_text]);
-    e.set(entry, MessageMenuEntry::fpResultCallback, result_callback);
-    e.set(
-        entry,
-        MessageMenuEntry::cFirstButtonResult,
-        first_button_result,
-    );
-    e.set(entry, MessageMenuEntry::iWarningContext, warning_context);
-    e.call(STRING_ASSIGN, &args![entry, icon_filename]);
-    e.call(
-        STRING_ASSIGN,
-        &args![entry.at(MessageMenuEntry::strHotkeys), EMPTY_STRING],
-    );
-    e.call(
-        STRING_ASSIGN,
-        &args![entry.at(MessageMenuEntry::strMessageText), message_text],
-    );
-    e.call(
-        STRING_ASSIGN,
-        &args![entry.at(MessageMenuEntry::strAudioOverride), audio_override],
-    );
-    e.set(entry, MessageMenuEntry::bIsModal, is_modal as u8);
-    e.set(entry, MessageMenuEntry::iXPosOverride, x_position);
-    e.set(entry, MessageMenuEntry::iYPosOverride, y_position);
-    let milliseconds = (seconds_visible as f64 * e.global::<f64>(THOUSAND_DOUBLE)) as f32;
-    e.set(entry, MessageMenuEntry::fMillisecondsVisible, milliseconds);
-    if background_opacity as f64 > e.global::<f64>(ZERO_DOUBLE) {
-        let scaled = (background_opacity as f64 * e.global::<f64>(TWO_FIFTY_FIVE_DOUBLE)) as f32;
-        e.set(entry, MessageMenuEntry::fBackgroundTextureOpacity, scaled);
-    }
-    let width = fistp_truncate(width_override) as u32;
-    e.set(entry, MessageMenuEntry::uiWidthOverride, width);
-
-    let title_length = if title != 0 {
-        e.call(C_STRING_LENGTH, &args![title]).i32()
-    } else {
-        0
-    };
-    if title_length > 0 {
-        let copy = e
-            .call(OPERATOR_NEW, &args![(title_length + 1) as u32])
-            .u32();
-        e.set(entry, MessageMenuEntry::strTitle, Ptr::new(copy));
-        let destination = e.get(entry, MessageMenuEntry::strTitle);
-        e.call(
-            COPY_C_STRING,
-            &args![destination, (title_length + 1) as u32, title],
+    // The exe's frame (`SUB ESP,0x84` under the exception record, then `ESI` and the record
+    // link): the buttons string at `EBP-0x18` (+0x80), the button text at `EBP-0x3c` (+0x5c),
+    // the hotkey at `EBP-0x6c` (+0x2c) and the queued entry at `EBP-0x10` (+0x88).
+    e.with_stack(0x98, |e, frame| {
+        let entry = new_entry(e);
+        let buttons = frame.addr() + 0x80;
+        e.call(STRING_FROM_C_STRING, &args![buttons, first_button_text]);
+        e.set(entry, MessageMenuEntry::fpResultCallback, result_callback);
+        e.set(
+            entry,
+            MessageMenuEntry::cFirstButtonResult,
+            first_button_result,
         );
-    } else {
-        e.set(entry, MessageMenuEntry::strTitle, Ptr::NULL);
-    }
-
-    while e.call(STRING_LENGTH, &args![buttons]).u32() > 0 {
-        let text = c_str(e, Ptr::new(buttons));
-        let work = new_std_string(e);
-        e.call(STD_STRING_FROM_C_STRING, &args![work, text]);
-        parse_button_text(e, entry, work);
+        e.set(entry, MessageMenuEntry::iWarningContext, warning_context);
+        e.call(STRING_ASSIGN, &args![entry, icon_filename]);
         e.call(
-            STRING_APPEND,
-            &args![entry.at(MessageMenuEntry::strButtonsText), SEMICOLON_STRING],
+            STRING_ASSIGN,
+            &args![entry.at(MessageMenuEntry::strHotkeys), EMPTY_STRING],
         );
-        let cursor = e.mem.u32(button_cursor);
-        e.mem.set_u32(button_cursor, cursor.wrapping_add(4));
-        let current = e.mem.u32(button_cursor);
-        let next = e.mem.u32(current.wrapping_sub(4));
-        e.call(STRING_ASSIGN, &args![buttons, next]);
-        e.call(STD_STRING_DESTROY, &args![work]);
-        e.mem.free(work);
-    }
+        e.call(
+            STRING_ASSIGN,
+            &args![entry.at(MessageMenuEntry::strMessageText), message_text],
+        );
+        e.call(
+            STRING_ASSIGN,
+            &args![entry.at(MessageMenuEntry::strAudioOverride), audio_override],
+        );
+        e.set(entry, MessageMenuEntry::bIsModal, is_modal as u8);
+        e.set(entry, MessageMenuEntry::iXPosOverride, x_position);
+        e.set(entry, MessageMenuEntry::iYPosOverride, y_position);
+        let milliseconds = (seconds_visible as f64 * e.global::<f64>(THOUSAND_DOUBLE)) as f32;
+        e.set(entry, MessageMenuEntry::fMillisecondsVisible, milliseconds);
+        if background_opacity as f64 > e.global::<f64>(ZERO_DOUBLE) {
+            let scaled =
+                (background_opacity as f64 * e.global::<f64>(TWO_FIFTY_FIVE_DOUBLE)) as f32;
+            e.set(entry, MessageMenuEntry::fBackgroundTextureOpacity, scaled);
+        }
+        let width = fistp_truncate(width_override) as u32;
+        e.set(entry, MessageMenuEntry::uiWidthOverride, width);
 
-    queue_entry(e, entry);
+        let title_length = if title != 0 {
+            e.call(C_STRING_LENGTH, &args![title]).i32()
+        } else {
+            0
+        };
+        if title_length > 0 {
+            let copy = e
+                .call(OPERATOR_NEW, &args![(title_length + 1) as u32])
+                .u32();
+            e.set(entry, MessageMenuEntry::strTitle, Ptr::new(copy));
+            let destination = e.get(entry, MessageMenuEntry::strTitle);
+            e.call(
+                COPY_C_STRING,
+                &args![destination, (title_length + 1) as u32, title],
+            );
+        } else {
+            e.set(entry, MessageMenuEntry::strTitle, Ptr::NULL);
+        }
 
-    if menu_object(e) == 0 && e.global::<u8>(DISABLE_MESSAGE_MENU) == 0 {
-        if !e.call(IN_DIALOG, &args![]).bool() || is_modal {
-            let setting = e.call(SETTING_INT_POINTER, &args![SETTING_011C3EA4]).u32();
-            if e.mem.i32(setting) > 1 {
-                let not_modal = fn_007a9280(e, entry) == 0;
-                e.call(
-                    QUEUE_MENU_CREATE,
-                    &args![7u32, 0u32, 0u32, 0u32, 1u32, not_modal as u32],
-                );
+        while e.call(STRING_LENGTH, &args![buttons]).u32() > 0 {
+            let text = c_str(e, Ptr::new(buttons));
+            let work = frame.addr() + 0x5c;
+            e.call(STD_STRING_FROM_C_STRING, &args![work, text]);
+            parse_button_text(e, entry, work, frame.addr() + 0x2c);
+            e.call(
+                STRING_APPEND,
+                &args![entry.at(MessageMenuEntry::strButtonsText), SEMICOLON_STRING],
+            );
+            let cursor = e.mem.u32(button_cursor);
+            e.mem.set_u32(button_cursor, cursor.wrapping_add(4));
+            let current = e.mem.u32(button_cursor);
+            let next = e.mem.u32(current.wrapping_sub(4));
+            e.call(STRING_ASSIGN, &args![buttons, next]);
+            e.call(STD_STRING_DESTROY, &args![work]);
+        }
+
+        queue_entry(e, entry, frame.addr() + 0x88);
+
+        if menu_object(e) == 0 && e.global::<u8>(DISABLE_MESSAGE_MENU) == 0 {
+            if !e.call(IN_DIALOG, &args![]).bool() || is_modal {
+                let setting = e.call(SETTING_INT_POINTER, &args![SETTING_011C3EA4]).u32();
+                if e.mem.i32(setting) > 1 {
+                    let not_modal = fn_007a9280(e, entry) == 0;
+                    e.call(
+                        QUEUE_MENU_CREATE,
+                        &args![7u32, 0u32, 0u32, 0u32, 1u32, not_modal as u32],
+                    );
+                } else {
+                    message_menu_create(e);
+                }
             } else {
-                message_menu_create(e);
+                e.set_global(DEFERRED_CREATION, 1u8);
             }
         } else {
             e.set_global(DEFERRED_CREATION, 1u8);
         }
-    } else {
-        e.set_global(DEFERRED_CREATION, 1u8);
-    }
-    e.call(STRING_DESTROY, &args![buttons]);
-    e.mem.free(buttons);
-    true
+        e.call(STRING_DESTROY, &args![buttons]);
+        true
+    })
 }
 
 /// The `&` hotkey handling shared by the two button text parsers: the
 /// character after `&` goes to the hotkey string and the `&` is erased;
 /// the text (unless it is a single space) is appended to the buttons text;
-/// the caller appends the `;`.
-fn parse_button_text(e: &mut Engine, entry: Ptr<MessageMenuEntry>, work: u32) {
+/// the caller appends the `;`. `key` is the caller's local for the hotkey.
+fn parse_button_text(e: &mut Engine, entry: Ptr<MessageMenuEntry>, work: u32, key: u32) {
     let amp = fn_007aafe0(e, work, 0x26, 0);
     if amp != e.global::<u32>(NPOS) {
-        let key = new_std_string(e);
         let sub = fn_007ab000(e, work, key, amp.wrapping_add(1), 1);
         let key_text = e.call(STD_STRING_C_STR, &args![sub]).u32();
         e.call(
@@ -820,7 +813,6 @@ fn parse_button_text(e: &mut Engine, entry: Ptr<MessageMenuEntry>, work: u32) {
             &args![entry.at(MessageMenuEntry::strHotkeys), key_text],
         );
         e.call(STD_STRING_DESTROY, &args![key]);
-        e.mem.free(key);
         fn_007aaf80(e, work, amp, 1, EMPTY_STRING);
     }
     let current = e.call(STD_STRING_C_STR, &args![work]).u32();
@@ -837,9 +829,8 @@ fn parse_button_text(e: &mut Engine, entry: Ptr<MessageMenuEntry>, work: u32) {
 }
 
 /// Puts the entry into the queue: in front of the first non-modal entry
-/// when it is modal, else at the end (`007a8e60`).
-fn queue_entry(e: &mut Engine, entry: Ptr<MessageMenuEntry>) {
-    let slot = e.mem.alloc(4);
+/// when it is modal, else at the end (`007a8e60`). `slot` is the caller's local for the entry.
+fn queue_entry(e: &mut Engine, entry: Ptr<MessageMenuEntry>, slot: u32) {
     e.mem.set_u32(slot, entry.addr());
     if e.call(ARRAY_SIZE, &args![ENTRY_LIST]).u32() != 0 {
         let mut index = 0u32;
@@ -861,7 +852,6 @@ fn queue_entry(e: &mut Engine, entry: Ptr<MessageMenuEntry>) {
     } else {
         e.call(ARRAY_ADD, &args![ENTRY_LIST, slot]);
     }
-    e.mem.free(slot);
 }
 
 // Translated from 007a9280 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -900,21 +890,49 @@ pub fn message_menu_load_next_message(e: &mut Engine, this: Ptr<MessageMenu>) {
         return;
     }
     let this = this.addr();
-    let mut title_width = 0.0f32;
-    let mut height_sum = 0.0f32;
-    let id = e.call(TEXT_TO_TRAIT, &args![HORIZONTAL_BUFFER_NAME]).u32();
-    let menu_tile = e.call(WORD_AT_FOUR, &args![this]).u32();
-    let margin = get_float(e, menu_tile, id);
-    let margin_twice = margin as f64 * 2.0;
-    let width_override = e.get(cur, MessageMenuEntry::uiWidthOverride);
-    let override_float = width_override as f32;
-    let audio = cur.at(MessageMenuEntry::strAudioOverride);
+    // The exe's frame (`SUB ESP,0x1d8` under the exception record, then the record link): the
+    // sound handles at `EBP-0xc0` (+0x128, the custom check), `EBP-0xcc` (+0x11c, the custom
+    // sound) and `EBP-0xd8` (+0x110, the default one), the measured sizes at `EBP-0xe4`
+    // (+0x104, the title), `EBP-0x10c` (+0xdc, a button) and `EBP-0x38` (+0x1b0, the text), the
+    // button list at `EBP-0x6c` (+0x17c), the piece at `EBP-0x88` (+0x160) and its copy at
+    // `EBP-0x100` (+0xe8).
+    e.with_stack(0x1e8, |e, frame| {
+        let local = |offset: u32| frame.addr() + offset;
+        let mut title_width = 0.0f32;
+        let mut height_sum = 0.0f32;
+        let id = e.call(TEXT_TO_TRAIT, &args![HORIZONTAL_BUFFER_NAME]).u32();
+        let menu_tile = e.call(WORD_AT_FOUR, &args![this]).u32();
+        let margin = get_float(e, menu_tile, id);
+        let margin_twice = margin as f64 * 2.0;
+        let width_override = e.get(cur, MessageMenuEntry::uiWidthOverride);
+        let override_float = width_override as f32;
+        let audio = cur.at(MessageMenuEntry::strAudioOverride);
 
-    // The sound.
-    let mut custom_valid = false;
-    if e.call(STRING_LENGTH, &args![audio]).u32() > 0 {
-        let handle = e.mem.alloc(SOUND_HANDLE_SIZE);
-        let name = c_str(e, audio);
+        // The sound.
+        let mut custom_valid = false;
+        if e.call(STRING_LENGTH, &args![audio]).u32() > 0 {
+            let handle = local(0x128);
+            let name = c_str(e, audio);
+            let system = e.call(SOUND_SYSTEM, &args![]).u32();
+            let made = e
+                .call(
+                    GET_SOUND_HANDLE_BY_NAME,
+                    &args![system, handle, name, 0x121u32],
+                )
+                .u32();
+            custom_valid = e.call(SOUND_HANDLE_DIFFERS, &args![made, u32::MAX]).bool();
+            e.call(SOUND_HANDLE_DESTROY, &args![handle]);
+        }
+        let handle = if custom_valid {
+            local(0x11c)
+        } else {
+            local(0x110)
+        };
+        let name = if custom_valid {
+            c_str(e, audio)
+        } else {
+            POPUP_SOUND_NAME
+        };
         let system = e.call(SOUND_SYSTEM, &args![]).u32();
         let made = e
             .call(
@@ -922,290 +940,269 @@ pub fn message_menu_load_next_message(e: &mut Engine, this: Ptr<MessageMenu>) {
                 &args![system, handle, name, 0x121u32],
             )
             .u32();
-        custom_valid = e.call(SOUND_HANDLE_DIFFERS, &args![made, u32::MAX]).bool();
+        e.call(SOUND_HANDLE_PLAY, &args![made, 0u32]);
         e.call(SOUND_HANDLE_DESTROY, &args![handle]);
-        e.mem.free(handle);
-    }
-    let handle = e.mem.alloc(SOUND_HANDLE_SIZE);
-    let name = if custom_valid {
-        c_str(e, audio)
-    } else {
-        POPUP_SOUND_NAME
-    };
-    let system = e.call(SOUND_SYSTEM, &args![]).u32();
-    let made = e
-        .call(
-            GET_SOUND_HANDLE_BY_NAME,
-            &args![system, handle, name, 0x121u32],
-        )
-        .u32();
-    e.call(SOUND_HANDLE_PLAY, &args![made, 0u32]);
-    e.call(SOUND_HANDLE_DESTROY, &args![handle]);
-    e.mem.free(handle);
 
-    // The message text.
-    let text = c_str(e, cur.at(MessageMenuEntry::strMessageText));
-    let me = menu_object(e);
-    let message_tile = e.mem.u32(me + 0x34);
-    set_string(e, message_tile, TRAIT_STRING, text, true);
+        // The message text.
+        let text = c_str(e, cur.at(MessageMenuEntry::strMessageText));
+        let me = menu_object(e);
+        let message_tile = e.mem.u32(me + 0x34);
+        set_string(e, message_tile, TRAIT_STRING, text, true);
 
-    // The title.
-    let out = e.mem.alloc(12);
-    let title = e.get(cur, MessageMenuEntry::strTitle);
-    if !title.is_null() {
-        let title_tile = tile_of(e, menu_object(e), 1);
-        set_string(e, title_tile, TRAIT_STRING, title.addr(), true);
-        let title_tile = tile_of(e, menu_object(e), 1);
-        set_int(e, title_tile, TRAIT_VISIBLE, 1);
-        let measured = if width_override > 0 {
-            override_float
+        // The title.
+        let out = local(0x104);
+        let title = e.get(cur, MessageMenuEntry::strTitle);
+        if !title.is_null() {
+            let title_tile = tile_of(e, menu_object(e), 1);
+            set_string(e, title_tile, TRAIT_STRING, title.addr(), true);
+            let title_tile = tile_of(e, menu_object(e), 1);
+            set_int(e, title_tile, TRAIT_VISIBLE, 1);
+            let measured = if width_override > 0 {
+                override_float
+            } else {
+                let title_tile = tile_of(e, menu_object(e), 1);
+                get_float(e, title_tile, TRAIT_WIDTH)
+            };
+            let maximum = if measured as f64 == 0.0 {
+                e.global::<f32>(FLOAT_MAX)
+            } else {
+                measured
+            };
+            let font = e.call(FONT_MANAGER, &args![]).u32();
+            e.call(
+                CALCULATE_STRING_DIMENSIONS,
+                &args![font, out, title.addr(), 6u32, maximum, 0u32],
+            );
+            title_width = e.mem.f32(out);
+            let extra = if width_override > 0 {
+                0.0
+            } else {
+                e.global::<f32>(HUNDRED_FLOAT)
+            };
+            title_width = (title_width as f64 + extra as f64) as f32;
         } else {
             let title_tile = tile_of(e, menu_object(e), 1);
-            get_float(e, title_tile, TRAIT_WIDTH)
-        };
-        let maximum = if measured as f64 == 0.0 {
-            e.global::<f32>(FLOAT_MAX)
-        } else {
-            measured
-        };
-        let font = e.call(FONT_MANAGER, &args![]).u32();
-        e.call(
-            CALCULATE_STRING_DIMENSIONS,
-            &args![font, out, title.addr(), 6u32, maximum, 0u32],
-        );
-        title_width = e.mem.f32(out);
-        let extra = if width_override > 0 {
-            0.0
-        } else {
-            e.global::<f32>(HUNDRED_FLOAT)
-        };
-        title_width = (title_width as f64 + extra as f64) as f32;
-    } else {
-        let title_tile = tile_of(e, menu_object(e), 1);
-        set_int(e, title_tile, TRAIT_VISIBLE, 0);
-    }
+            set_int(e, title_tile, TRAIT_VISIBLE, 0);
+        }
 
-    // The buttons.
-    let mut widest = 0i32;
-    let mut button_heights = 0.0f32;
-    let buttons_text = c_str(e, cur.at(MessageMenuEntry::strButtonsText));
-    if buttons_text != 0 {
-        let list = e.mem.alloc(STD_STRING_SIZE);
-        e.call(STD_STRING_FROM_C_STRING, &args![list, buttons_text]);
-        let mut position = 0u32;
-        let mut index = 0u32;
-        loop {
-            let size = e.call(WORD_AT_0X14, &args![list]).u32();
-            if position >= size.wrapping_sub(1) {
-                break;
-            }
-            let semicolon = e
-                .call(
-                    STD_STRING_FIND_C_STRING,
-                    &args![list, SEMICOLON_STRING, position],
-                )
-                .u32();
-            let piece = new_std_string(e);
-            fn_007ab000(e, list, piece, position, semicolon.wrapping_sub(position));
-            if e.call(WORD_AT_0X14, &args![piece]).u32() > 0 {
+        // The buttons.
+        let mut widest = 0i32;
+        let mut button_heights = 0.0f32;
+        let buttons_text = c_str(e, cur.at(MessageMenuEntry::strButtonsText));
+        if buttons_text != 0 {
+            let list = local(0x17c);
+            e.call(STD_STRING_FROM_C_STRING, &args![list, buttons_text]);
+            let mut position = 0u32;
+            let mut index = 0u32;
+            loop {
+                let size = e.call(WORD_AT_0X14, &args![list]).u32();
+                if position >= size.wrapping_sub(1) {
+                    break;
+                }
                 let semicolon = e
                     .call(
                         STD_STRING_FIND_C_STRING,
                         &args![list, SEMICOLON_STRING, position],
                     )
                     .u32();
-                let copy = new_std_string(e);
-                fn_007ab000(e, list, copy, position, semicolon.wrapping_sub(position));
-                let item_text = e.call(STD_STRING_C_STR, &args![copy]).u32();
-                let value = (e.get(cur, MessageMenuEntry::cFirstButtonResult) as i8 as i32)
-                    .wrapping_add(index as i32);
-                let me = menu_object(e);
-                let line_tile = e
+                let piece = local(0x160);
+                fn_007ab000(e, list, piece, position, semicolon.wrapping_sub(position));
+                if e.call(WORD_AT_0X14, &args![piece]).u32() > 0 {
+                    let semicolon = e
+                        .call(
+                            STD_STRING_FIND_C_STRING,
+                            &args![list, SEMICOLON_STRING, position],
+                        )
+                        .u32();
+                    let copy = local(0xe8);
+                    fn_007ab000(e, list, copy, position, semicolon.wrapping_sub(position));
+                    let item_text = e.call(STD_STRING_C_STR, &args![copy]).u32();
+                    let value = (e.get(cur, MessageMenuEntry::cFirstButtonResult) as i8 as i32)
+                        .wrapping_add(index as i32);
+                    let me = menu_object(e);
+                    let line_tile = e
+                        .call(
+                            LIST_BOX_ADD_ITEM,
+                            &args![me + 0x40, value, item_text, 0u32, 0u32],
+                        )
+                        .u32();
+                    e.call(STD_STRING_DESTROY, &args![copy]);
+                    let text_tile = e
+                        .call(GET_CHILD_BY_NAME, &args![line_tile, LIST_ITEM_TEXT_NAME])
+                        .u32();
+                    set_int(e, line_tile, TRAIT_0FAA, 7);
+                    if text_tile != 0 {
+                        let measured = if width_override > 0 {
+                            override_float
+                        } else {
+                            get_float(e, text_tile, TRAIT_WIDTH)
+                        };
+                        let measured = if measured as f64 == 0.0 {
+                            e.global::<f32>(FLOAT_MAX)
+                        } else {
+                            measured
+                        };
+                        let string = e
+                            .call(GET_STRING_TRAIT, &args![text_tile, TRAIT_STRING])
+                            .u32();
+                        let font = e.call(FONT_MANAGER, &args![]).u32();
+                        e.call(
+                            CALCULATE_STRING_DIMENSIONS,
+                            &args![font, local(0xdc), string, 2u32, measured, 0u32],
+                        );
+                        let width = e.mem.f32(local(0xdc));
+                        let truncated = e.call(FTOL, &args![width as f64]).i32();
+                        widest = e.call(INT_MAX_OF, &args![widest, truncated]).i32();
+                    }
+                    let height = get_float(e, line_tile, TRAIT_HEIGHT);
+                    button_heights = (height as f64 + button_heights as f64) as f32;
+                }
+                position = e
                     .call(
-                        LIST_BOX_ADD_ITEM,
-                        &args![me + 0x40, value, item_text, 0u32, 0u32],
+                        STD_STRING_FIND_C_STRING,
+                        &args![list, SEMICOLON_STRING, position],
                     )
                     .u32();
-                e.call(STD_STRING_DESTROY, &args![copy]);
-                e.mem.free(copy);
-                let text_tile = e
-                    .call(GET_CHILD_BY_NAME, &args![line_tile, LIST_ITEM_TEXT_NAME])
-                    .u32();
-                set_int(e, line_tile, TRAIT_0FAA, 7);
-                if text_tile != 0 {
-                    let measured = if width_override > 0 {
-                        override_float
-                    } else {
-                        get_float(e, text_tile, TRAIT_WIDTH)
-                    };
-                    let measured = if measured as f64 == 0.0 {
-                        e.global::<f32>(FLOAT_MAX)
-                    } else {
-                        measured
-                    };
-                    let string = e
-                        .call(GET_STRING_TRAIT, &args![text_tile, TRAIT_STRING])
-                        .u32();
-                    let font = e.call(FONT_MANAGER, &args![]).u32();
-                    e.call(
-                        CALCULATE_STRING_DIMENSIONS,
-                        &args![font, out, string, 2u32, measured, 0u32],
-                    );
-                    let width = e.mem.f32(out);
-                    let truncated = e.call(FTOL, &args![width as f64]).i32();
-                    widest = e.call(INT_MAX_OF, &args![widest, truncated]).i32();
+                let size = e.call(WORD_AT_0X14, &args![list]).u32();
+                if position < size.wrapping_sub(1) {
+                    position += 1;
                 }
-                let height = get_float(e, line_tile, TRAIT_HEIGHT);
-                button_heights = (height as f64 + button_heights as f64) as f32;
+                e.call(STD_STRING_DESTROY, &args![piece]);
+                index += 1;
             }
-            position = e
-                .call(
-                    STD_STRING_FIND_C_STRING,
-                    &args![list, SEMICOLON_STRING, position],
-                )
-                .u32();
-            let size = e.call(WORD_AT_0X14, &args![list]).u32();
-            if position < size.wrapping_sub(1) {
-                position += 1;
-            }
-            e.call(STD_STRING_DESTROY, &args![piece]);
-            e.mem.free(piece);
-            index += 1;
+            e.call(STD_STRING_DESTROY, &args![list]);
         }
-        e.call(STD_STRING_DESTROY, &args![list]);
-        e.mem.free(list);
-    }
 
-    // The icon.
-    if e.call(STRING_LENGTH, &args![cur]).u32() > 0 {
-        let icon = c_str(e, cur.at(MessageMenuEntry::strIconFilename));
-        let icon_tile = tile_of(e, menu_object(e), 2);
-        set_string(e, icon_tile, TRAIT_ICON_STRING, icon, true);
-        let icon_tile = tile_of(e, menu_object(e), 2);
-        set_int(e, icon_tile, TRAIT_VISIBLE, 1);
-        let plus = (height_sum as f64 + e.global::<f64>(ONE_TWENTY_DOUBLE)) as f32;
-        height_sum = if width_override > 0 {
-            e.call(FLOAT_MIN_OF, &args![plus, override_float]).f32()
+        // The icon.
+        if e.call(STRING_LENGTH, &args![cur]).u32() > 0 {
+            let icon = c_str(e, cur.at(MessageMenuEntry::strIconFilename));
+            let icon_tile = tile_of(e, menu_object(e), 2);
+            set_string(e, icon_tile, TRAIT_ICON_STRING, icon, true);
+            let icon_tile = tile_of(e, menu_object(e), 2);
+            set_int(e, icon_tile, TRAIT_VISIBLE, 1);
+            let plus = (height_sum as f64 + e.global::<f64>(ONE_TWENTY_DOUBLE)) as f32;
+            height_sum = if width_override > 0 {
+                e.call(FLOAT_MIN_OF, &args![plus, override_float]).f32()
+            } else {
+                plus
+            };
         } else {
-            plus
+            let icon_tile = tile_of(e, menu_object(e), 2);
+            set_int(e, icon_tile, TRAIT_VISIBLE, 0);
+        }
+
+        // The width of the button list.
+        let wide = (widest as f64 + e.global::<f64>(EIGHTY_DOUBLE)) as f32;
+        let list_width = if width_override > 0 {
+            e.call(FLOAT_MIN_OF, &args![wide, override_float]).f32()
+        } else {
+            wide
         };
-    } else {
+        let button_tile = tile_of(e, menu_object(e), 4);
+        set_float(e, button_tile, TRAIT_HEIGHT, button_heights, false);
+        let button_tile = tile_of(e, menu_object(e), 4);
+        set_float(e, button_tile, TRAIT_0FB1, list_width, false);
+        let me = menu_object(e);
+        e.call(LIST_BOX_SYNCHRONIZE, &args![me + 0x40]);
+        let sum = (margin_twice + list_width as f64) as f32;
+        let list_width = if width_override > 0 {
+            e.call(FLOAT_MIN_OF, &args![sum, override_float]).f32()
+        } else {
+            sum
+        };
+
+        // The room for the message text.
+        let room = if width_override > 0 {
+            let screen = e.call(SCREEN_WIDTH_FLOAT, &args![]).f64();
+            let divisor = e.call(SCREEN_WIDTH_INT, &args![]).f64();
+            ((width_override as f64 / divisor) * screen) as f32
+        } else {
+            let id = e.call(TEXT_TO_TRAIT, &args![MAX_MENU_WIDTH_NAME]).u32();
+            let menu_tile = e.call(WORD_AT_FOUR, &args![this]).u32();
+            get_float(e, menu_tile, id)
+        };
+        let mut room = (room as f64 - margin_twice) as f32;
         let icon_tile = tile_of(e, menu_object(e), 2);
-        set_int(e, icon_tile, TRAIT_VISIBLE, 0);
-    }
-
-    // The width of the button list.
-    let wide = (widest as f64 + e.global::<f64>(EIGHTY_DOUBLE)) as f32;
-    let list_width = if width_override > 0 {
-        e.call(FLOAT_MIN_OF, &args![wide, override_float]).f32()
-    } else {
-        wide
-    };
-    let button_tile = tile_of(e, menu_object(e), 4);
-    set_float(e, button_tile, TRAIT_HEIGHT, button_heights, false);
-    let button_tile = tile_of(e, menu_object(e), 4);
-    set_float(e, button_tile, TRAIT_0FB1, list_width, false);
-    let me = menu_object(e);
-    e.call(LIST_BOX_SYNCHRONIZE, &args![me + 0x40]);
-    let sum = (margin_twice + list_width as f64) as f32;
-    let list_width = if width_override > 0 {
-        e.call(FLOAT_MIN_OF, &args![sum, override_float]).f32()
-    } else {
-        sum
-    };
-
-    // The room for the message text.
-    let room = if width_override > 0 {
-        let screen = e.call(SCREEN_WIDTH_FLOAT, &args![]).f64();
-        let divisor = e.call(SCREEN_WIDTH_INT, &args![]).f64();
-        ((width_override as f64 / divisor) * screen) as f32
-    } else {
-        let id = e.call(TEXT_TO_TRAIT, &args![MAX_MENU_WIDTH_NAME]).u32();
-        let menu_tile = e.call(WORD_AT_FOUR, &args![this]).u32();
-        get_float(e, menu_tile, id)
-    };
-    let mut room = (room as f64 - margin_twice) as f32;
-    let icon_tile = tile_of(e, menu_object(e), 2);
-    if e.call(IS_TRUE_TRAIT, &args![icon_tile, TRAIT_VISIBLE])
-        .bool()
-    {
-        room = (room as f64 - e.global::<f64>(ONE_TWENTY_DOUBLE)) as f32;
-    }
-    let message_tile = tile_of(e, menu_object(e), 3);
-    set_float(e, message_tile, TRAIT_WIDTH, room, true);
-    let message_tile = tile_of(e, menu_object(e), 3);
-    let room_now = get_float(e, message_tile, TRAIT_WIDTH);
-    let text = c_str(e, cur.at(MessageMenuEntry::strMessageText));
-    let font = e.call(FONT_MANAGER, &args![]).u32();
-    e.call(
-        CALCULATE_STRING_DIMENSIONS,
-        &args![font, out, text, 2u32, room_now, 0u32],
-    );
-    let measured_width = e.mem.f32(out);
-    let lines = e.mem.f32(out + 8);
-    height_sum = ((margin_twice + measured_width as f64) + height_sum as f64) as f32;
-    let style = if lines as f64 > e.global::<f64>(ONE_DOUBLE) {
-        1
-    } else {
-        2
-    };
-    let title_tile = tile_of(e, menu_object(e), 1);
-    set_int(e, title_tile, TRAIT_0FB7, style);
-    let message_tile = tile_of(e, menu_object(e), 3);
-    set_int(e, message_tile, TRAIT_0FB7, style);
-    e.mem.free(out);
-
-    // The menu's width.
-    let menu_width = if e.get(cur, MessageMenuEntry::uiWidthOverride) == 0 {
-        let wider = e.call(FLOAT_MAX_OF, &args![title_width, height_sum]).f32();
-        let menu_width = e.call(FLOAT_MAX_OF, &args![wider, list_width]).f32();
-        let id = e.call(TEXT_TO_TRAIT, &args![MAX_MENU_WIDTH_NAME]).u32();
-        let menu_tile = e.call(WORD_AT_FOUR, &args![this]).u32();
-        let maximum = get_float(e, menu_tile, id);
-        let menu_width = e.call(FLOAT_MIN_OF, &args![menu_width, maximum]).f32();
-        let id = e.call(TEXT_TO_TRAIT, &args![MIN_MENU_WIDTH_NAME]).u32();
-        let menu_tile = e.call(WORD_AT_FOUR, &args![this]).u32();
-        let minimum = get_float(e, menu_tile, id);
-        e.call(FLOAT_MAX_OF, &args![menu_width, minimum]).f32()
-    } else {
-        let screen = e.call(SCREEN_WIDTH_FLOAT, &args![]).f64();
-        let divisor = e.call(SCREEN_WIDTH_INT, &args![]).f64();
-        let width = e.get(cur, MessageMenuEntry::uiWidthOverride) as f64;
-        let menu_width = ((width / divisor) * screen) as f32;
-        let screen = e.call(SCREEN_WIDTH_FLOAT, &args![]).f64();
-        let border = e.call(MARGIN_WIDTH, &args![]).f64();
-        let limit = (screen - border * 2.0) as f32;
-        e.call(FLOAT_MIN_OF, &args![menu_width, limit]).f32()
-    };
-    let outer = tile_of(e, menu_object(e), 0);
-    set_float(e, outer, TRAIT_0FB1, menu_width, true);
-    e.set_global(
-        WARNING_STATE_FLAG_0119F348,
-        (e.get(cur, MessageMenuEntry::iWarningContext) == 0x17) as u8,
-    );
-    let menu_tile = e.call(WORD_AT_FOUR, &args![this]).u32();
-    set_int(e, menu_tile, TRAIT_FADE, 0);
-    let menu_tile = e.call(WORD_AT_FOUR, &args![this]).u32();
-    set_int(e, menu_tile, TRAIT_VISIBLE, 1);
-
-    if fn_007a9280(e, cur) == 0 {
-        place_message(e, this, cur);
-    } else {
-        let outer = tile_of(e, menu_object(e), 0);
-        set_float(e, outer, TRAIT_ALPHA, 1.0, true);
-        let class = e.vcall(this, 0x34, &args![]).u32();
-        let singleton = e.call(INTERFACE_SINGLETON, &args![]).u32();
-        if !e
-            .call(ENTER_STACK_CONTAINS, &args![singleton, class])
+        if e.call(IS_TRUE_TRAIT, &args![icon_tile, TRAIT_VISIBLE])
             .bool()
         {
-            let class = e.vcall(this, 0x34, &args![]).u32();
-            e.call(ADD_TO_ENTER_STACK, &args![class, 0u32]);
+            room = (room as f64 - e.global::<f64>(ONE_TWENTY_DOUBLE)) as f32;
         }
-    }
-    let background = tile_of(e, menu_object(e), 5);
-    let opacity = fld_fstp(e.get(cur, MessageMenuEntry::fBackgroundTextureOpacity));
-    set_float(e, background, TRAIT_ALPHA, opacity, true);
+        let message_tile = tile_of(e, menu_object(e), 3);
+        set_float(e, message_tile, TRAIT_WIDTH, room, true);
+        let message_tile = tile_of(e, menu_object(e), 3);
+        let room_now = get_float(e, message_tile, TRAIT_WIDTH);
+        let text = c_str(e, cur.at(MessageMenuEntry::strMessageText));
+        let font = e.call(FONT_MANAGER, &args![]).u32();
+        e.call(
+            CALCULATE_STRING_DIMENSIONS,
+            &args![font, local(0x1b0), text, 2u32, room_now, 0u32],
+        );
+        let measured_width = e.mem.f32(local(0x1b0));
+        let lines = e.mem.f32(local(0x1b0) + 8);
+        height_sum = ((margin_twice + measured_width as f64) + height_sum as f64) as f32;
+        let style = if lines as f64 > e.global::<f64>(ONE_DOUBLE) {
+            1
+        } else {
+            2
+        };
+        let title_tile = tile_of(e, menu_object(e), 1);
+        set_int(e, title_tile, TRAIT_0FB7, style);
+        let message_tile = tile_of(e, menu_object(e), 3);
+        set_int(e, message_tile, TRAIT_0FB7, style);
+
+        // The menu's width.
+        let menu_width = if e.get(cur, MessageMenuEntry::uiWidthOverride) == 0 {
+            let wider = e.call(FLOAT_MAX_OF, &args![title_width, height_sum]).f32();
+            let menu_width = e.call(FLOAT_MAX_OF, &args![wider, list_width]).f32();
+            let id = e.call(TEXT_TO_TRAIT, &args![MAX_MENU_WIDTH_NAME]).u32();
+            let menu_tile = e.call(WORD_AT_FOUR, &args![this]).u32();
+            let maximum = get_float(e, menu_tile, id);
+            let menu_width = e.call(FLOAT_MIN_OF, &args![menu_width, maximum]).f32();
+            let id = e.call(TEXT_TO_TRAIT, &args![MIN_MENU_WIDTH_NAME]).u32();
+            let menu_tile = e.call(WORD_AT_FOUR, &args![this]).u32();
+            let minimum = get_float(e, menu_tile, id);
+            e.call(FLOAT_MAX_OF, &args![menu_width, minimum]).f32()
+        } else {
+            let screen = e.call(SCREEN_WIDTH_FLOAT, &args![]).f64();
+            let divisor = e.call(SCREEN_WIDTH_INT, &args![]).f64();
+            let width = e.get(cur, MessageMenuEntry::uiWidthOverride) as f64;
+            let menu_width = ((width / divisor) * screen) as f32;
+            let screen = e.call(SCREEN_WIDTH_FLOAT, &args![]).f64();
+            let border = e.call(MARGIN_WIDTH, &args![]).f64();
+            let limit = (screen - border * 2.0) as f32;
+            e.call(FLOAT_MIN_OF, &args![menu_width, limit]).f32()
+        };
+        let outer = tile_of(e, menu_object(e), 0);
+        set_float(e, outer, TRAIT_0FB1, menu_width, true);
+        e.set_global(
+            WARNING_STATE_FLAG_0119F348,
+            (e.get(cur, MessageMenuEntry::iWarningContext) == 0x17) as u8,
+        );
+        let menu_tile = e.call(WORD_AT_FOUR, &args![this]).u32();
+        set_int(e, menu_tile, TRAIT_FADE, 0);
+        let menu_tile = e.call(WORD_AT_FOUR, &args![this]).u32();
+        set_int(e, menu_tile, TRAIT_VISIBLE, 1);
+
+        if fn_007a9280(e, cur) == 0 {
+            place_message(e, this, cur);
+        } else {
+            let outer = tile_of(e, menu_object(e), 0);
+            set_float(e, outer, TRAIT_ALPHA, 1.0, true);
+            let class = e.vcall(this, 0x34, &args![]).u32();
+            let singleton = e.call(INTERFACE_SINGLETON, &args![]).u32();
+            if !e
+                .call(ENTER_STACK_CONTAINS, &args![singleton, class])
+                .bool()
+            {
+                let class = e.vcall(this, 0x34, &args![]).u32();
+                e.call(ADD_TO_ENTER_STACK, &args![class, 0u32]);
+            }
+        }
+        let background = tile_of(e, menu_object(e), 5);
+        let opacity = fld_fstp(e.get(cur, MessageMenuEntry::fBackgroundTextureOpacity));
+        set_float(e, background, TRAIT_ALPHA, opacity, true);
+    });
 }
 
 /// The non-modal placement of `LoadNextMessage`: hides the menu's alpha,
@@ -1323,24 +1320,27 @@ pub fn message_menu_do_key(e: &mut Engine, this: Ptr<MessageMenu>, key: u32) -> 
     if e.call(STRING_LENGTH, &args![hotkeys]).u32() > 0 {
         let hotkeys = fn_007a92a0(e).at(MessageMenuEntry::strHotkeys);
         let text = c_str(e, hotkeys);
-        let keys = new_std_string(e);
-        e.call(STD_STRING_FROM_C_STRING, &args![keys, text]);
-        let mut index = 0u32;
-        while index < e.call(WORD_AT_0X14, &args![keys]).u32() {
-            let at = fn_007aafb0(e, keys, index);
-            let character = e.mem.i8(at) as i32 as u32;
-            let upper = e.call(TO_UPPER, &args![character]).u32();
-            let upper_key = e.call(TO_UPPER, &args![key]).u32();
-            if upper == upper_key {
-                let item = e.vcall(list, 0x14, &args![index, 0u32]).u32();
-                e.vcall(this.addr(), 0xc, &args![7u32, item]);
-                handled = true;
-                break;
+        // The exe's frame (`SUB ESP,0x2c` under the exception record, then `ESI` and the
+        // record link): the hotkeys at `EBP-0x30` (+0x10).
+        e.with_stack(0x40, |e, frame| {
+            let keys = frame.addr() + 0x10;
+            e.call(STD_STRING_FROM_C_STRING, &args![keys, text]);
+            let mut index = 0u32;
+            while index < e.call(WORD_AT_0X14, &args![keys]).u32() {
+                let at = fn_007aafb0(e, keys, index);
+                let character = e.mem.i8(at) as i32 as u32;
+                let upper = e.call(TO_UPPER, &args![character]).u32();
+                let upper_key = e.call(TO_UPPER, &args![key]).u32();
+                if upper == upper_key {
+                    let item = e.vcall(list, 0x14, &args![index, 0u32]).u32();
+                    e.vcall(this.addr(), 0xc, &args![7u32, item]);
+                    handled = true;
+                    break;
+                }
+                index += 1;
             }
-            index += 1;
-        }
-        e.call(STD_STRING_DESTROY, &args![keys]);
-        e.mem.free(keys);
+            e.call(STD_STRING_DESTROY, &args![keys]);
+        });
     }
     handled
 }
@@ -1538,129 +1538,132 @@ pub fn message_menu_disable_message_menu(e: &mut Engine, disable: u8) {
 /// stack frame; here it is a block freed on return, the same lifetime.
 // Translation incomplete: 007aa720 - the C++ exception-unwinding frame (FS:[0]) and the stack cookie check (00ec408c) are not translated
 pub fn fn_007aa720(e: &mut Engine, choices: u32, object: u32) -> bool {
-    let entry = new_entry(e);
-    e.set(entry, MessageMenuEntry::fpResultCallback, 0x007a_ae70);
-    e.set(entry, MessageMenuEntry::cFirstButtonResult, 0);
-    e.set(entry, MessageMenuEntry::iWarningContext, 0);
-    e.call(STRING_ASSIGN, &args![entry, 0u32]);
-    e.call(
-        STRING_ASSIGN,
-        &args![entry.at(MessageMenuEntry::strHotkeys), EMPTY_STRING],
-    );
-    let title = e
-        .call(SETTING_VALUE, &args![SETTING_ACTIVATE_TITLE_011D2280])
-        .u32();
-    e.call(
-        STRING_ASSIGN,
-        &args![entry.at(MessageMenuEntry::strMessageText), title],
-    );
-    let buffer = e.mem.alloc(0x104);
-    let slot = e.mem.alloc(4);
-    let mut node = choices;
-    while node != 0 && !e.call(NODE_IS_END, &args![node]).bool() {
-        let item = item_of(e, node);
-        let text = e.call(WORD_AT_FOUR, &args![item]).u32();
-        e.call(COPY_C_STRING, &args![buffer, 0x104u32, text]);
-        let item = item_of(e, node);
-        if e.vcall(item, 4, &args![]).u32() == 4 {
+    // The exe's frame (`SUB ESP,0x1dc` under the exception record, then the record link): the
+    // text buffer at `EBP-0x124` (+0xc8), the queued words at `EBP-0x138` (+0xb4, a choice),
+    // `EBP-0x12c` (+0xc0, the reference's choice) and `EBP-0x10` (+0x1dc, the entry), the
+    // choice texts at `EBP-0x154` (+0x98) and `EBP-0x178` (+0x74) with their hotkeys at
+    // `EBP-0x1a4` (+0x48) and `EBP-0x1c0` (+0x2c).
+    e.with_stack(0x1ec, |e, frame| {
+        let local = |offset: u32| frame.addr() + offset;
+        let entry = new_entry(e);
+        e.set(entry, MessageMenuEntry::fpResultCallback, 0x007a_ae70);
+        e.set(entry, MessageMenuEntry::cFirstButtonResult, 0);
+        e.set(entry, MessageMenuEntry::iWarningContext, 0);
+        e.call(STRING_ASSIGN, &args![entry, 0u32]);
+        e.call(
+            STRING_ASSIGN,
+            &args![entry.at(MessageMenuEntry::strHotkeys), EMPTY_STRING],
+        );
+        let title = e
+            .call(SETTING_VALUE, &args![SETTING_ACTIVATE_TITLE_011D2280])
+            .u32();
+        e.call(
+            STRING_ASSIGN,
+            &args![entry.at(MessageMenuEntry::strMessageText), title],
+        );
+        let buffer = local(0xc8);
+        let mut node = choices;
+        while node != 0 && !e.call(NODE_IS_END, &args![node]).bool() {
             let item = item_of(e, node);
-            let mut usable = e.call(WORD_AT_FOUR, &args![item]).u32() != 0;
-            if usable {
+            let text = e.call(WORD_AT_FOUR, &args![item]).u32();
+            e.call(COPY_C_STRING, &args![buffer, 0x104u32, text]);
+            let item = item_of(e, node);
+            if e.vcall(item, 4, &args![]).u32() == 4 {
                 let item = item_of(e, node);
-                usable = e.call(SCRIPT_OF_ITEM, &args![item]).u32() != 0;
-            }
-            if usable {
-                let perk = e.call(OPERATOR_NEW, &args![0xcu32]).u32();
-                let item = item_of(e, node);
-                let text = e.call(WORD_AT_FOUR, &args![item]).u32();
-                e.mem.set_u32(perk, text);
-                let item = item_of(e, node);
-                let script = e.call(SCRIPT_OF_ITEM, &args![item]).u32();
-                e.mem.set_u32(perk + 4, script);
-                e.mem.set_u32(perk + 8, object);
-                e.mem.set_u32(slot, perk);
-                e.call(ARRAY_ADD, &args![PERK_ACTIVATIONS, slot]);
-                if e.call(C_STRING_LENGTH, &args![buffer]).u32() > 0 {
-                    let work = new_std_string(e);
-                    e.call(STD_STRING_FROM_C_STRING, &args![work, buffer]);
-                    parse_activation_text(e, entry, work);
-                    e.call(STD_STRING_DESTROY, &args![work]);
-                    e.mem.free(work);
+                let mut usable = e.call(WORD_AT_FOUR, &args![item]).u32() != 0;
+                if usable {
+                    let item = item_of(e, node);
+                    usable = e.call(SCRIPT_OF_ITEM, &args![item]).u32() != 0;
+                }
+                if usable {
+                    let perk = e.call(OPERATOR_NEW, &args![0xcu32]).u32();
+                    let item = item_of(e, node);
+                    let text = e.call(WORD_AT_FOUR, &args![item]).u32();
+                    e.mem.set_u32(perk, text);
+                    let item = item_of(e, node);
+                    let script = e.call(SCRIPT_OF_ITEM, &args![item]).u32();
+                    e.mem.set_u32(perk + 4, script);
+                    e.mem.set_u32(perk + 8, object);
+                    e.mem.set_u32(local(0xb4), perk);
+                    e.call(ARRAY_ADD, &args![PERK_ACTIVATIONS, local(0xb4)]);
+                    if e.call(C_STRING_LENGTH, &args![buffer]).u32() > 0 {
+                        let work = local(0x98);
+                        e.call(STD_STRING_FROM_C_STRING, &args![work, buffer]);
+                        parse_activation_text(e, entry, work, local(0x48));
+                        e.call(STD_STRING_DESTROY, &args![work]);
+                    }
                 }
             }
+            node = e.call(WORD_AT_FOUR, &args![node]).u32();
         }
-        node = e.call(WORD_AT_FOUR, &args![node]).u32();
-    }
 
-    // The reference's own choice.
-    let target_type = e.call(REFR_GET_TARGET_TYPE, &args![object]).i32();
-    let base = e.call(REFR_BASE_FORM, &args![object]).u32();
-    let form_type = e.call(FORM_TYPE, &args![base]).u32();
-    let lock = e.call(REFR_GET_LOCK, &args![object]).u32();
-    let base_form = e.call(REFR_BASE_FORM, &args![object]).u32();
-    let player: u32 = e.global(PLAYER);
-    if target_type == 1 && e.call(REFR_CHECK_0057_9690, &args![object]).bool() {
-        let setting = if form_type == 0x2a {
-            SETTING_011D3708
-        } else {
-            SETTING_011D4F48
-        };
-        copy_setting(e, buffer, setting);
-    } else if target_type == 2 && (form_type == 0x2a || form_type == 0x2b) {
-        copy_setting(e, buffer, SETTING_011D38DC);
-    } else if target_type == 8 && form_type == 0x1c {
-        let state = e.call(OPEN_CLOSE_STATE, &args![object]).i32();
-        let open_or_closed = state == 1 || e.call(OPEN_CLOSE_STATE, &args![object]).i32() == 2;
-        let locked = lock != 0
-            && e.call(LOCK_CHECK, &args![lock]).bool()
-            && !e
-                .call(REFR_IS_AN_OWNER, &args![object, player, 1u32])
-                .bool()
-            && (base_form == 0
-                || !e
-                    .call(DOOR_CAN_IGNORE_LOCK, &args![object, player, 0u32, 1u32])
-                    .bool());
-        if locked {
-            copy_setting(e, buffer, SETTING_011D45A0);
-        } else if open_or_closed {
-            copy_setting(e, buffer, SETTING_011D22B0);
-        } else {
+        // The reference's own choice.
+        let target_type = e.call(REFR_GET_TARGET_TYPE, &args![object]).i32();
+        let base = e.call(REFR_BASE_FORM, &args![object]).u32();
+        let form_type = e.call(FORM_TYPE, &args![base]).u32();
+        let lock = e.call(REFR_GET_LOCK, &args![object]).u32();
+        let base_form = e.call(REFR_BASE_FORM, &args![object]).u32();
+        let player: u32 = e.global(PLAYER);
+        if target_type == 1 && e.call(REFR_CHECK_0057_9690, &args![object]).bool() {
+            let setting = if form_type == 0x2a {
+                SETTING_011D3708
+            } else {
+                SETTING_011D4F48
+            };
+            copy_setting(e, buffer, setting);
+        } else if target_type == 2 && (form_type == 0x2a || form_type == 0x2b) {
+            copy_setting(e, buffer, SETTING_011D38DC);
+        } else if target_type == 8 && form_type == 0x1c {
+            let state = e.call(OPEN_CLOSE_STATE, &args![object]).i32();
+            let open_or_closed = state == 1 || e.call(OPEN_CLOSE_STATE, &args![object]).i32() == 2;
+            let locked = lock != 0
+                && e.call(LOCK_CHECK, &args![lock]).bool()
+                && !e
+                    .call(REFR_IS_AN_OWNER, &args![object, player, 1u32])
+                    .bool()
+                && (base_form == 0
+                    || !e
+                        .call(DOOR_CAN_IGNORE_LOCK, &args![object, player, 0u32, 1u32])
+                        .bool());
+            if locked {
+                copy_setting(e, buffer, SETTING_011D45A0);
+            } else if open_or_closed {
+                copy_setting(e, buffer, SETTING_011D22B0);
+            } else {
+                copy_table_setting(e, buffer, target_type);
+            }
+        } else if target_type != 0 && target_type < 0x14 {
             copy_table_setting(e, buffer, target_type);
+        } else if target_type == 0 {
+            copy_setting(e, buffer, SETTING_011D29F4);
         }
-    } else if target_type != 0 && target_type < 0x14 {
-        copy_table_setting(e, buffer, target_type);
-    } else if target_type == 0 {
-        copy_setting(e, buffer, SETTING_011D29F4);
-    }
-    if e.call(C_STRING_LENGTH, &args![buffer]).u32() > 0 {
-        let work = new_std_string(e);
-        e.call(STD_STRING_FROM_C_STRING, &args![work, buffer]);
-        parse_activation_text(e, entry, work);
-        e.call(STD_STRING_DESTROY, &args![work]);
-        e.mem.free(work);
-    }
-    let perk = e.call(OPERATOR_NEW, &args![0xcu32]).u32();
-    e.mem.set_u32(perk, buffer);
-    e.mem.set_u32(perk + 4, 0);
-    e.mem.set_u32(perk + 8, object);
-    e.mem.set_u32(slot, perk);
-    e.call(ARRAY_ADD, &args![PERK_ACTIVATIONS, slot]);
-    e.mem.set_u32(slot, entry.addr());
-    e.call(ARRAY_ADD, &args![ENTRY_LIST, slot]);
-    if menu_object(e) == 0 && e.global::<u8>(DISABLE_MESSAGE_MENU) == 0 {
-        let setting = e.call(SETTING_INT_POINTER, &args![SETTING_011C3EA4]).u32();
-        if e.mem.i32(setting) > 1 {
-            e.call(
-                QUEUE_MENU_CREATE,
-                &args![7u32, 0u32, 0u32, 0u32, 1u32, 0u32],
-            );
-        } else {
-            message_menu_create(e);
+        if e.call(C_STRING_LENGTH, &args![buffer]).u32() > 0 {
+            let work = local(0x74);
+            e.call(STD_STRING_FROM_C_STRING, &args![work, buffer]);
+            parse_activation_text(e, entry, work, local(0x2c));
+            e.call(STD_STRING_DESTROY, &args![work]);
         }
-    }
-    e.mem.free(slot);
-    e.mem.free(buffer);
-    true
+        let perk = e.call(OPERATOR_NEW, &args![0xcu32]).u32();
+        e.mem.set_u32(perk, buffer);
+        e.mem.set_u32(perk + 4, 0);
+        e.mem.set_u32(perk + 8, object);
+        e.mem.set_u32(local(0xc0), perk);
+        e.call(ARRAY_ADD, &args![PERK_ACTIVATIONS, local(0xc0)]);
+        e.mem.set_u32(local(0x1dc), entry.addr());
+        e.call(ARRAY_ADD, &args![ENTRY_LIST, local(0x1dc)]);
+        if menu_object(e) == 0 && e.global::<u8>(DISABLE_MESSAGE_MENU) == 0 {
+            let setting = e.call(SETTING_INT_POINTER, &args![SETTING_011C3EA4]).u32();
+            if e.mem.i32(setting) > 1 {
+                e.call(
+                    QUEUE_MENU_CREATE,
+                    &args![7u32, 0u32, 0u32, 0u32, 1u32, 0u32],
+                );
+            } else {
+                message_menu_create(e);
+            }
+        }
+        true
+    })
 }
 
 /// The item of a list node: the word at the address `006815c0` returns.
@@ -1684,11 +1687,11 @@ fn copy_table_setting(e: &mut Engine, buffer: u32, target_type: i32) {
 }
 
 /// The `&` handling of `fn_007aa720`: like [`parse_button_text`], but the
-/// `;` follows the text only when the text is appended.
-fn parse_activation_text(e: &mut Engine, entry: Ptr<MessageMenuEntry>, work: u32) {
+/// `;` follows the text only when the text is appended. `key` is the caller's local for the
+/// hotkey.
+fn parse_activation_text(e: &mut Engine, entry: Ptr<MessageMenuEntry>, work: u32, key: u32) {
     let amp = fn_007aafe0(e, work, 0x26, 0);
     if amp != e.global::<u32>(NPOS) {
-        let key = new_std_string(e);
         let sub = fn_007ab000(e, work, key, amp.wrapping_add(1), 1);
         let key_text = e.call(STD_STRING_C_STR, &args![sub]).u32();
         e.call(
@@ -1696,7 +1699,6 @@ fn parse_activation_text(e: &mut Engine, entry: Ptr<MessageMenuEntry>, work: u32
             &args![entry.at(MessageMenuEntry::strHotkeys), key_text],
         );
         e.call(STD_STRING_DESTROY, &args![key]);
-        e.mem.free(key);
         fn_007aaf80(e, work, amp, 1, EMPTY_STRING);
     }
     let current = e.call(STD_STRING_C_STR, &args![work]).u32();
@@ -1799,23 +1801,25 @@ pub fn fn_007aafb0(e: &mut Engine, this: u32, index: u32) -> u32 {
 /// `std::string::find(char, pos)` (by its body): finds one character from
 /// `pos` through the string's `find(const char *, pos, 1)`.
 pub fn fn_007aafe0(e: &mut Engine, this: u32, character: u32, pos: u32) -> u32 {
-    let slot = e.mem.alloc(4);
-    e.mem.set_u32(slot, character);
-    let found = e
-        .call(STD_STRING_FIND_CHARS, &args![this, slot, pos, 1u32])
-        .u32();
-    e.mem.free(slot);
-    found
+    // The exe passes its own argument slot (`EBP+8`): one `PUSH ECX` word under `EBP`, so the
+    // slot is +0xc of a frame that reaches it.
+    e.with_stack(0x10, |e, frame| {
+        let slot = frame.addr() + 0xc;
+        e.mem.set_u32(slot, character);
+        e.call(STD_STRING_FIND_CHARS, &args![this, slot, pos, 1u32])
+            .u32()
+    })
 }
 
 // Translated from 007ab000 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `std::string::substr(pos, n)` (by its body): constructs the substring in
 /// `out` (through the empty allocator copy) and returns `out`.
 pub fn fn_007ab000(e: &mut Engine, this: u32, out: u32, pos: u32, count: u32) -> u32 {
-    let allocator = e.mem.alloc(4);
-    let copy = fn_007ab230(e, this, allocator);
-    fn_007ab050(e, out, this, pos, count, copy);
-    e.mem.free(allocator);
+    // The exe's frame (`SUB ESP,0xc` under `EBP`): the allocator byte at `EBP-0x1` (+0xb).
+    e.with_stack(0xc, |e, frame| {
+        let copy = fn_007ab230(e, this, frame.addr() + 0xb);
+        fn_007ab050(e, out, this, pos, count, copy);
+    });
     out
 }
 
@@ -1832,11 +1836,14 @@ pub fn fn_007ab050(
 ) -> u32 {
     // The `PUSH ECX` slot the allocator copy is made in holds the incoming
     // `this`, and `0044a7b0` receives that word.
-    let slot = e.mem.alloc(4);
-    e.mem.set_u32(slot, this);
-    e.call(ALLOCATOR_COPY, &args![slot, allocator]);
-    let kept = e.mem.u32(slot);
-    e.mem.free(slot);
+    // The slot is the word pushed under the exe's frame (`SUB ESP,0x8` under `EBP`): +0 of a
+    // frame that reaches it.
+    let kept = e.with_stack(0xc, |e, frame| {
+        let slot = frame.addr();
+        e.mem.set_u32(slot, this);
+        e.call(ALLOCATOR_COPY, &args![slot, allocator]);
+        e.mem.u32(slot)
+    });
     e.call(STD_STRING_INIT, &args![this, kept]);
     e.call(STD_STRING_RESET, &args![this, 0u32, 0u32]);
     e.call(STD_STRING_ASSIGN_SUBSTR, &args![this, source, pos, count]);
@@ -3490,5 +3497,96 @@ mod tests {
         e.call(0x007a_b640, &args![object, 0u32]);
         assert_eq!(calls(&e, 0x007a_b670), vec![vec![object]]);
         assert_eq!(calls(&e, OPERATOR_DELETE).len(), 1);
+    }
+
+    // ---- the exe's stack frames ----
+
+    /// The block the next `with_stack(size)` takes (the last freed block of that size), with
+    /// the call log switched on.
+    fn next_frame(e: &mut Engine, size: u32) -> u32 {
+        let frame = e.mem.alloc(size);
+        e.mem.free(frame);
+        e.call_log = Some(vec![]);
+        frame
+    }
+
+    #[test]
+    fn add_message_keeps_its_locals_at_the_exe_offsets() {
+        let (mut e, _, _) = message_world();
+        let buttons = Message {
+            first_button: "&OK",
+            buttons: vec!["Cancel"],
+            modal: false,
+        };
+        // 007a8e60 (0x98 bytes): the buttons at +0x80, the button text at +0x5c, the hotkey at
+        // +0x2c, the queued entry at +0x88.
+        let frame = next_frame(&mut e, 0x98);
+        assert!(add_message(&mut e, &buttons));
+        assert_eq!(calls(&e, STRING_FROM_C_STRING)[0][0], frame + 0x80);
+        let texts: Vec<u32> = calls(&e, STD_STRING_FROM_C_STRING)
+            .iter()
+            .map(|w| w[0])
+            .collect();
+        assert_eq!(texts, vec![frame + 0x5c; 2]);
+        assert_eq!(calls(&e, STD_STRING_INIT)[0][0], frame + 0x2c);
+        assert_eq!(calls(&e, ARRAY_ADD), vec![vec![ENTRY_LIST, frame + 0x88]]);
+    }
+
+    #[test]
+    fn load_next_message_keeps_its_locals_at_the_exe_offsets() {
+        // 007a92e0 (0x1e8 bytes): the default sound handle at +0x110, the text size at +0x1b0.
+        let (mut e, m, _) = load_world(false);
+        let frame = next_frame(&mut e, 0x1e8);
+        e.call(0x007a_92e0, &args![m]);
+        assert_eq!(calls(&e, GET_SOUND_HANDLE_BY_NAME)[0][1], frame + 0x110);
+        let sizes = calls(&e, CALCULATE_STRING_DIMENSIONS);
+        assert_eq!(sizes[sizes.len() - 1][1], frame + 0x1b0);
+    }
+
+    #[test]
+    fn activation_choices_keep_their_buffer_in_the_frame() {
+        // 007aa720 (0x1ec bytes): the text buffer at +0xc8, which the last choice keeps.
+        let mut w = activation_world(0, false);
+        let node = w.e.mem.alloc(8);
+        let frame = next_frame(&mut w.e, 0x1ec);
+        assert!(w.e.call(0x007a_a720, &args![node, 0x9000u32]).bool());
+        assert!(calls(&w.e, COPY_C_STRING)
+            .iter()
+            .all(|c| c[0] == frame + 0xc8));
+        let perks = list_items(&w.lists, &w.e, PERK_ACTIVATIONS);
+        assert_eq!(w.e.mem.u32(perks[1]), frame + 0xc8);
+        let adds: Vec<u32> = calls(&w.e, ARRAY_ADD).iter().map(|c| c[1]).collect();
+        assert_eq!(adds, vec![frame + 0xb4, frame + 0xc0, frame + 0x1dc]);
+    }
+
+    #[test]
+    fn the_string_helpers_keep_their_words_at_the_exe_offsets() {
+        let mut e = engine();
+        strings(&mut e);
+        let s = std_string(&mut e, "a&b&");
+        // 007aafe0: its own argument slot, +0xc of a 0x10-byte frame.
+        let frame = next_frame(&mut e, 0x10);
+        e.call(0x007a_afe0, &args![s, 0x26u32, 0u32]);
+        assert_eq!(calls(&e, STD_STRING_FIND_CHARS)[0][1], frame + 0xc);
+        // 007ab050: the pushed word under its 8-byte frame, +0 of 0xc.
+        let out = e.mem.alloc(0x20);
+        let frame = next_frame(&mut e, 0xc);
+        e.call(0x007a_b050, &args![out, s, 1u32, 1u32, 0x1111u32]);
+        assert_eq!(calls(&e, ALLOCATOR_COPY)[0], vec![frame, 0x1111]);
+        // 007ab000: the allocator byte at +0xb of its 0xc-byte frame, handed to `007ab230`.
+        let frame = next_frame(&mut e, 0xc);
+        e.call(0x007a_b000, &args![s, out, 1u32, 1u32]);
+        assert_eq!(calls(&e, ALLOCATOR_COPY)[0][0], frame + 0xb);
+        // 007aa110: the hotkeys at +0x10 of its 0x40-byte frame.
+        vtables(&mut e);
+        let lists = arrays(&mut e);
+        let m = menu(&mut e);
+        let object = entry(&mut e);
+        set_text(&mut e, object.addr(), 0x20, "ab");
+        set_list(&lists, &mut e, ENTRY_LIST, &[object.addr()]);
+        stub(&mut e, LIST_BOX_COUNT, 3);
+        let frame = next_frame(&mut e, 0x40);
+        e.call(0x007a_a110, &args![m, 0x5au32]);
+        assert_eq!(calls(&e, STD_STRING_FROM_C_STRING)[0][0], frame + 0x10);
     }
 }

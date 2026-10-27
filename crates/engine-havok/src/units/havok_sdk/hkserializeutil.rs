@@ -238,13 +238,14 @@ pub fn fn_00d48560(e: &mut Engine, stream: u32, listener: u32, object: u32) -> u
     if stream == 0 {
         return 1;
     }
-    let writer = e.mem.alloc(8);
-    e.mem.set_u16(writer + 6, 1);
-    e.mem.set_u32(writer, TAGFILE_WRITER_VTABLE);
-    let save = e.mem.u32(TAGFILE_WRITER_SAVE_SLOT);
-    let result = e.call(save, &args![writer, object, stream, listener]).u32();
-    e.mem.free(writer);
-    result
+    // The exe's frame (`SUB ESP,0x8`): the writer is all of it (00d48578).
+    e.with_stack(8, |e, writer| {
+        let writer = writer.addr();
+        e.mem.set_u16(writer + 6, 1);
+        e.mem.set_u32(writer, TAGFILE_WRITER_VTABLE);
+        let save = e.mem.u32(TAGFILE_WRITER_SAVE_SLOT);
+        e.call(save, &args![writer, object, stream, listener]).u32()
+    })
 }
 
 // Translated from 00d485a0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -262,25 +263,31 @@ pub fn hk_serialize_util_save_tagfile(
     _unused_3: u32,
     forwarded_listener: u32,
 ) -> u32 {
-    let world = e.mem.alloc(0x28);
-    let listener = e.mem.alloc(0x10);
-    let handle = e.mem.alloc(4);
-    e.call(WORLD_CONSTRUCTOR, &args![world]);
-    e.call(WORLD_SET_CONTENTS, &args![world, object, class]);
-    e.mem.set_u32(handle, forwarded_listener);
-    e.mem.set_u16(listener + 6, 1);
-    e.mem.set_u32(listener, LISTENER_VTABLE);
-    e.mem.set_u32(listener + 8, forwarded_listener);
-    e.mem.set_u32(listener + 0xc, world);
-    let contents = e.call(WORLD_GET_CONTENTS, &args![world, handle]).u32();
-    let result = fn_00d48560(e, stream, listener, contents);
-    e.call(DATA_OBJECT_DESTRUCTOR, &args![handle]);
-    e.mem.set_u32(listener, BASE_OBJECT_VTABLE);
-    e.call(WORLD_DESTRUCTOR, &args![world]);
-    e.mem.free(handle);
-    e.mem.free(listener);
-    e.mem.free(world);
-    result
+    // The exe's frame (`SUB ESP,0x38`, one push): 0x3c bytes, the listener at +0x4 (00d485d7)
+    // and the world at +0x14 (00d485a4). The handle is the last argument's own slot, +0x50 past
+    // the return address at +0x3c (`LEA EDX,[ESP+0x50]`, 00d485ce).
+    e.with_stack(0x54, |e, frame| {
+        let frame = frame.addr();
+        let listener = frame + 4;
+        let world = frame + 0x14;
+        let handle = frame + 0x50;
+        for (slot, word) in [object, class, stream, _unused_3].into_iter().enumerate() {
+            e.mem.set_u32(frame + 0x40 + slot as u32 * 4, word);
+        }
+        e.call(WORLD_CONSTRUCTOR, &args![world]);
+        e.call(WORLD_SET_CONTENTS, &args![world, object, class]);
+        e.mem.set_u32(handle, forwarded_listener);
+        e.mem.set_u16(listener + 6, 1);
+        e.mem.set_u32(listener, LISTENER_VTABLE);
+        e.mem.set_u32(listener + 8, forwarded_listener);
+        e.mem.set_u32(listener + 0xc, world);
+        let contents = e.call(WORLD_GET_CONTENTS, &args![world, handle]).u32();
+        let result = fn_00d48560(e, stream, listener, contents);
+        e.call(DATA_OBJECT_DESTRUCTOR, &args![handle]);
+        e.mem.set_u32(listener, BASE_OBJECT_VTABLE);
+        e.call(WORLD_DESTRUCTOR, &args![world]);
+        result
+    })
 }
 
 // Translated from 00d48680 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -293,10 +300,11 @@ pub fn hk_serialize_util_save_tagfile(
 /// stream is read in blocks of `0x20000` bytes (reserving room for each) until a read returns
 /// no more than 0.
 pub fn load_stream_into_buffer(e: &mut Engine, stream: u32, buffer: u32) {
-    let flag = e.mem.alloc(4);
-    let flag_at = e.vcall(stream, 0x24, &args![flag]).u32();
-    let seekable = e.mem.u8(flag_at) != 0;
-    e.mem.free(flag);
+    // The exe's frame (`PUSH ECX`, `PUSH EDI`): 8 bytes, the flag byte at +0x7 (00d48687).
+    let seekable = e.with_stack(8, |e, frame| {
+        let flag_at = e.vcall(stream, 0x24, &args![frame.addr() + 7]).u32();
+        e.mem.u8(flag_at) != 0
+    });
     if seekable {
         e.vcall(stream, 0x28, &args![0u32, 2u32]);
         let size = e.vcall(stream, 0x2c, &args![]).i32();
@@ -378,26 +386,29 @@ pub fn load_packfile(
         }
         let version = e.call(CURRENT_VERSION, &args![]).u32();
         if hk_string_ptr_operator_ov3(e, Ptr::new(header + 4), version) {
-            let buffer = e.mem.alloc(12);
-            e.mem.set_u32(buffer, 0);
-            e.mem.set_u32(buffer + 4, 0);
-            e.mem.set_u32(buffer + 8, 0x8000_0000);
-            load_stream_into_buffer(e, stream, buffer);
-            let data = e.mem.u32(buffer);
-            let size = e.mem.u32(buffer + 4);
-            let resource = e
-                .call(NATIVE_PACKFILE_LOAD, &args![data, size, type_info_registry])
-                .u32();
-            let router = e.call(MEMORY_ROUTER, &args![]).u32();
-            let flags = e.mem.u32(buffer + 8);
-            let allocator = e.mem.u32(router + 0xc);
-            e.mem.set_u32(buffer + 4, 0);
-            if (flags as i32) >= 0 {
+            // The exe's frame (`SUB ESP,0xc`, three pushes): 0x18 bytes, the buffer array at
+            // +0xc (00d487a4).
+            return e.with_stack(0x18, |e, frame| {
+                let buffer = frame.addr() + 0xc;
+                e.mem.set_u32(buffer, 0);
+                e.mem.set_u32(buffer + 4, 0);
+                e.mem.set_u32(buffer + 8, 0x8000_0000);
+                load_stream_into_buffer(e, stream, buffer);
                 let data = e.mem.u32(buffer);
-                release_storage(e, allocator, data, flags & 0x3fff_ffff);
-            }
-            e.mem.free(buffer);
-            return resource;
+                let size = e.mem.u32(buffer + 4);
+                let resource = e
+                    .call(NATIVE_PACKFILE_LOAD, &args![data, size, type_info_registry])
+                    .u32();
+                let router = e.call(MEMORY_ROUTER, &args![]).u32();
+                let flags = e.mem.u32(buffer + 8);
+                let allocator = e.mem.u32(router + 0xc);
+                e.mem.set_u32(buffer + 4, 0);
+                if (flags as i32) >= 0 {
+                    let data = e.mem.u32(buffer);
+                    release_storage(e, allocator, data, flags & 0x3fff_ffff);
+                }
+                resource
+            });
         }
     }
     let singleton = e.mem.u32(DEPRECATED_LOADER_SINGLETON);
@@ -425,7 +436,33 @@ pub fn load_new_packfile_on_heap(
     error_details: u32,
     type_info_registry: u32,
 ) -> u32 {
-    let local_registry = e.mem.alloc(0x1c);
+    // The exe's frame (`SUB ESP,0x48`, four pushes): 0x58 bytes, the data-object handle at +0x10
+    // (00d488e1), the local registry at +0x14 (00d48865) and the world at +0x30 (00d4889d).
+    e.with_stack(0x58, |e, frame| {
+        let frame = frame.addr();
+        load_new_packfile_in_frame(
+            e,
+            frame,
+            class_registry,
+            stream,
+            header,
+            error_details,
+            type_info_registry,
+        )
+    })
+}
+
+/// [`load_new_packfile_on_heap`] in its frame.
+fn load_new_packfile_in_frame(
+    e: &mut Engine,
+    frame: u32,
+    class_registry: u32,
+    stream: u32,
+    header: u32,
+    error_details: u32,
+    type_info_registry: u32,
+) -> u32 {
+    let local_registry = frame + 0x14;
     e.mem.set_u16(local_registry + 6, 1);
     e.mem.set_u32(local_registry, TYPE_INFO_REGISTRY_VTABLE);
     e.call(STRING_MAP_CONSTRUCTOR, &args![local_registry + 8, 0u32]);
@@ -435,14 +472,14 @@ pub fn load_new_packfile_on_heap(
         &args![local_registry, type_info_registry],
     );
     let resource = load_packfile(e, error_details, header, stream, local_registry);
-    let world = e.mem.alloc(0x28);
+    let world = frame + 0x30;
     e.call(WORLD_CONSTRUCTOR, &args![world]);
     e.call(WORLD_SET_CLASS_REGISTRY, &args![world, class_registry]);
     let registry_vtable = e.mem.u32(class_registry);
     let contents_type = e.vcall(resource, 0x1c, &args![]).u32();
     let lookup = e.mem.u32(registry_vtable + 0x10);
     let class = e.call(lookup, &args![class_registry, contents_type]).u32();
-    let result = if class == 0 {
+    if class == 0 {
         e.call(WORLD_DESTRUCTOR, &args![world]);
         e.call(REMOVE_REFERENCE, &args![resource]);
         e.call(STRING_MAP_DESTRUCTOR, &args![local_registry + 8]);
@@ -454,7 +491,7 @@ pub fn load_new_packfile_on_heap(
         let wrapped = e
             .call(WORLD_WRAP_OBJECT, &args![world, object, class])
             .u32();
-        let handle = e.mem.alloc(4);
+        let handle = frame + 0x10;
         e.call(DATA_OBJECT_CONSTRUCTOR, &args![handle, wrapped]);
         let converted = e
             .call(
@@ -466,12 +503,8 @@ pub fn load_new_packfile_on_heap(
         e.call(WORLD_DESTRUCTOR, &args![world]);
         e.call(REMOVE_REFERENCE, &args![resource]);
         e.call(STRING_MAP_DESTRUCTOR, &args![local_registry + 8]);
-        e.mem.free(handle);
         converted
-    };
-    e.mem.free(world);
-    e.mem.free(local_registry);
-    result
+    }
 }
 
 // Translated from 00d48950 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -491,7 +524,29 @@ pub fn check_tagfile_world(
     class_registry: u32,
 ) -> u32 {
     e.call(RECOMPUTE_PATCH_DEPENDENCIES, &args![patch_manager]);
-    let array = e.mem.alloc(12);
+    // The exe's frame (`SUB ESP,0xc`, four pushes): 0x1c bytes, the class array at +0x10
+    // (00d4896b).
+    e.with_stack(0x1c, |e, frame| {
+        check_tagfile_world_in_frame(
+            e,
+            frame.addr() + 0x10,
+            world,
+            error_details,
+            patch_manager,
+            class_registry,
+        )
+    })
+}
+
+/// [`check_tagfile_world`] with its class array at `array`.
+fn check_tagfile_world_in_frame(
+    e: &mut Engine,
+    array: u32,
+    world: u32,
+    error_details: u32,
+    patch_manager: u32,
+    class_registry: u32,
+) -> u32 {
     e.mem.set_u32(array, 0);
     e.mem.set_u32(array + 4, 0);
     e.mem.set_u32(array + 8, 0x8000_0000);
@@ -538,7 +593,6 @@ pub fn check_tagfile_world(
                         let data = e.mem.u32(array);
                         release_storage(e, allocator, data, (flags & 0x3fff_ffff) * 4);
                     }
-                    e.mem.free(array);
                     return 0;
                 }
             }
@@ -557,7 +611,6 @@ pub fn check_tagfile_world(
         let data = e.mem.u32(array);
         release_storage(e, allocator, data, (flags & 0x3fff_ffff) * 4);
     }
-    e.mem.free(array);
     1
 }
 
@@ -575,13 +628,15 @@ pub fn load_binary_tagfile_into_world(
     class_registry: u32,
     stream: u32,
 ) -> u32 {
-    let handle = e.mem.alloc(4);
-    let reader = e.mem.alloc(8);
-    e.call(TAGFILE_READER_CONSTRUCTOR, &args![reader]);
-    e.call(TAGFILE_READER_LOAD, &args![reader, handle, stream, world]);
-    e.call(DATA_OBJECT_DESTRUCTOR, &args![handle]);
-    e.mem.free(reader);
-    e.mem.free(handle);
+    // The exe's frame (`SUB ESP,0xc`): the handle at +0 (00d48aa2) and the reader at +0x4
+    // (00d48a93).
+    e.with_stack(0xc, |e, frame| {
+        let handle = frame.addr();
+        let reader = handle + 4;
+        e.call(TAGFILE_READER_CONSTRUCTOR, &args![reader]);
+        e.call(TAGFILE_READER_LOAD, &args![reader, handle, stream, world]);
+        e.call(DATA_OBJECT_DESTRUCTOR, &args![handle]);
+    });
     if error_details != 0 {
         let patch_manager = e.mem.u32(PATCH_MANAGER_SINGLETON);
         if check_tagfile_world(e, world, error_details, patch_manager, class_registry) == 0 {
@@ -694,9 +749,11 @@ fn detect_format_in_frame(e: &mut Engine, stream: u32, result: u32, frame: u32) 
 /// Anything else leaves format 0. The read buffer is followed in the frame by 0x40 bytes
 /// filled with `0xff` (then the two packfile magic words and a zero byte), which end the text.
 pub fn hk_serialize_util_detect_format(e: &mut Engine, stream: u32, result: u32) {
-    let frame = e.mem.alloc(0x154);
-    detect_format_in_frame(e, stream, result, frame);
-    e.mem.free(frame);
+    // The exe's frame (`SUB ESP,0x154`, four pushes) is 0x164 bytes; the locals start at +0x10
+    // (the saved result address, 00d48b1b; the read buffer at +0x18, 00d48b29).
+    e.with_stack(0x164, |e, frame| {
+        detect_format_in_frame(e, stream, result, frame.addr() + 0x10)
+    });
 }
 
 /// What `load` does once the stream is known to be good, with its locals: `info` (the 12-byte
@@ -765,36 +822,36 @@ pub fn hk_serialize_util_load(
         report_error(e, error_details, 1, MESSAGE_STREAM_NULL);
         return 0;
     }
-    let slot = e.mem.alloc(4);
-    e.mem.set_u32(slot, stream);
-    let ok_at = e.vcall(stream, 0xc, &args![slot]).u32();
-    let ok = e.mem.u8(ok_at) != 0;
-    e.mem.free(slot);
-    if !ok {
-        report_error(e, error_details, 1, MESSAGE_STREAM_NOT_OK);
-        return 0;
-    }
-    let mut class_registry = class_registry;
-    if class_registry == 0 {
-        let singleton = e.mem.u32(REGISTRIES_SINGLETON);
-        class_registry = e.vcall(singleton, 0x10, &args![]).u32();
-    }
-    let info = e.mem.alloc(0xc);
-    let world = e.mem.alloc(0xc);
-    let handle = e.mem.alloc(4);
-    let result = load_in_frame(
-        e,
-        stream,
-        error_details,
-        class_registry,
-        info,
-        world,
-        handle,
-    );
-    e.mem.free(handle);
-    e.mem.free(world);
-    e.mem.free(info);
-    result
+    // The exe's frame (`SUB ESP,0x18`, three pushes) taken with the arguments: the format
+    // record at +0xc (00d48db4) and the dictionary world at +0x18 (00d48dde); the return address
+    // at +0x24. The stream's own argument slot (+0x28) is both the word the "is ok" test gets
+    // (00d48d63) and the contents handle (00d48dfe).
+    e.with_stack(0x34, |e, frame| {
+        let frame = frame.addr();
+        let slot = frame + 0x28;
+        e.mem.set_u32(slot, stream);
+        e.mem.set_u32(frame + 0x2c, error_details);
+        e.mem.set_u32(frame + 0x30, class_registry);
+        let ok_at = e.vcall(stream, 0xc, &args![slot]).u32();
+        if e.mem.u8(ok_at) == 0 {
+            report_error(e, error_details, 1, MESSAGE_STREAM_NOT_OK);
+            return 0;
+        }
+        let mut class_registry = class_registry;
+        if class_registry == 0 {
+            let singleton = e.mem.u32(REGISTRIES_SINGLETON);
+            class_registry = e.vcall(singleton, 0x10, &args![]).u32();
+        }
+        load_in_frame(
+            e,
+            stream,
+            error_details,
+            class_registry,
+            frame + 0xc,
+            frame + 0x18,
+            slot,
+        )
+    })
 }
 
 // Translated from 00d48f00 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -812,12 +869,28 @@ pub fn hk_serialize_util_load_ov2(
     error_details: u32,
     class_registry: u32,
 ) -> u32 {
-    let local = e.mem.alloc(0x40);
+    // The exe's frame (`SUB ESP,0x4c`, one push): 0x50 bytes, the stream object at +0x4
+    // (00d48f83) and the 0x40-byte magic block at +0x10 (00d48f06), its magic words at +0x10 and
+    // +0x14 and the zero byte at +0x38 (00d48f24..00d48f30).
+    e.with_stack(0x50, |e, frame| {
+        load_buffer_in_frame(e, frame.addr(), buffer, size, error_details, class_registry)
+    })
+}
+
+/// [`hk_serialize_util_load_ov2`] in its frame.
+fn load_buffer_in_frame(
+    e: &mut Engine,
+    frame: u32,
+    buffer: u32,
+    size: u32,
+    error_details: u32,
+    class_registry: u32,
+) -> u32 {
+    let local = frame + 0x10;
     e.call(MEMORY_SET, &args![local, 0xffff_ffffu32, 0x40u32]);
-    e.mem.set_u32(local + 8, PACKFILE_MAGIC_FIRST);
-    e.mem.set_u32(local + 0xc, PACKFILE_MAGIC_SECOND);
-    e.mem.set_u8(local + 0x30, 0);
-    e.mem.free(local);
+    e.mem.set_u32(local, PACKFILE_MAGIC_FIRST);
+    e.mem.set_u32(local + 4, PACKFILE_MAGIC_SECOND);
+    e.mem.set_u8(local + 0x28, 0);
     if e.mem.u32(buffer) == PACKFILE_MAGIC_FIRST
         && e.mem.u32(buffer + 4) == PACKFILE_MAGIC_SECOND
         && e.call(
@@ -834,14 +907,13 @@ pub fn hk_serialize_util_load_ov2(
                 .u32();
         }
     }
-    let istream = e.mem.alloc(0xc);
+    let istream = frame + 4;
     let made = e
         .call(ISTREAM_CONSTRUCTOR, &args![istream, buffer, size])
         .u32();
     let reader = e.mem.u32(made + 8);
     let result = hk_serialize_util_load(e, reader, error_details, class_registry);
     e.call(ISTREAM_DESTRUCTOR, &args![istream]);
-    e.mem.free(istream);
     result
 }
 
@@ -858,18 +930,20 @@ fn load_on_heap_in_frame(
     info: u32,
     world: u32,
     handle: u32,
+    stream_slot: u32,
 ) -> u32 {
     e.call(STRING_PTR_CONSTRUCTOR, &args![info + 4]);
     hk_serialize_util_detect_format(e, stream, info);
     let format = e.mem.u32(info);
     match format {
         FORMAT_PACKFILE => {
-            let flag = e.mem.alloc(4);
-            e.mem.set_u32(flag, stream);
-            let equal_at =
-                hk_structure_layout_layout_rules_operator(e, info + 8, flag, PLATFORM_LAYOUT_RULES);
+            let equal_at = hk_structure_layout_layout_rules_operator(
+                e,
+                info + 8,
+                stream_slot,
+                PLATFORM_LAYOUT_RULES,
+            );
             let equal = e.mem.u8(equal_at) != 0;
-            e.mem.free(flag);
             if equal && hk_string_ptr_operator_ov3(e, Ptr::new(info + 4), CURRENT_CONTENTS_VERSION)
             {
                 let result = load_new_packfile_on_heap(
@@ -941,42 +1015,44 @@ pub fn hk_serialize_util_load_on_heap(
         report_error(e, error_details, 1, MESSAGE_STREAM_NULL);
         return 0;
     }
-    let slot = e.mem.alloc(4);
-    e.mem.set_u32(slot, stream);
-    let ok_at = e.vcall(stream, 0xc, &args![slot]).u32();
-    let ok = e.mem.u8(ok_at) != 0;
-    e.mem.free(slot);
-    if !ok {
-        report_error(e, error_details, 1, MESSAGE_STREAM_NOT_OK);
-        return 0;
-    }
-    let mut class_registry = class_registry;
-    if class_registry == 0 {
-        let singleton = e.mem.u32(REGISTRIES_SINGLETON);
-        class_registry = e.vcall(singleton, 0x10, &args![]).u32();
-    }
-    let mut type_info_registry = type_info_registry;
-    if type_info_registry == 0 {
-        let singleton = e.mem.u32(REGISTRIES_SINGLETON);
-        type_info_registry = e.vcall(singleton, 0xc, &args![]).u32();
-    }
-    let info = e.mem.alloc(0xc);
-    let world = e.mem.alloc(0xc);
-    let handle = e.mem.alloc(4);
-    let result = load_on_heap_in_frame(
-        e,
-        stream,
-        error_details,
-        class_registry,
-        type_info_registry,
-        info,
-        world,
-        handle,
-    );
-    e.mem.free(handle);
-    e.mem.free(world);
-    e.mem.free(info);
-    result
+    // The exe's frame (`SUB ESP,0x1c`, four pushes) taken with the arguments: the contents
+    // handle at +0x10 (00d490d4), the format record at +0x14 (00d4905c) and the dictionary world
+    // at +0x20 (00d490b3); the return address at +0x2c. The stream's own argument slot (+0x30) is
+    // the word the "is ok" test gets (00d48ff3) and the layout-rules comparison's (00d4912f).
+    e.with_stack(0x40, |e, frame| {
+        let frame = frame.addr();
+        let slot = frame + 0x30;
+        e.mem.set_u32(slot, stream);
+        e.mem.set_u32(frame + 0x34, error_details);
+        e.mem.set_u32(frame + 0x38, class_registry);
+        e.mem.set_u32(frame + 0x3c, type_info_registry);
+        let ok_at = e.vcall(stream, 0xc, &args![slot]).u32();
+        if e.mem.u8(ok_at) == 0 {
+            report_error(e, error_details, 1, MESSAGE_STREAM_NOT_OK);
+            return 0;
+        }
+        let mut class_registry = class_registry;
+        if class_registry == 0 {
+            let singleton = e.mem.u32(REGISTRIES_SINGLETON);
+            class_registry = e.vcall(singleton, 0x10, &args![]).u32();
+        }
+        let mut type_info_registry = type_info_registry;
+        if type_info_registry == 0 {
+            let singleton = e.mem.u32(REGISTRIES_SINGLETON);
+            type_info_registry = e.vcall(singleton, 0xc, &args![]).u32();
+        }
+        load_on_heap_in_frame(
+            e,
+            stream,
+            error_details,
+            class_registry,
+            type_info_registry,
+            frame + 0x14,
+            frame + 0x20,
+            frame + 0x10,
+            slot,
+        )
+    })
 }
 
 // Translated from 00d49240 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -990,23 +1066,31 @@ pub fn hk_serialize_util_is_loadable(e: &mut Engine, stream: u32) -> u32 {
     if stream == 0 {
         return 0;
     }
-    let slot = e.mem.alloc(4);
+    // The exe's frame (`SUB ESP,0xc`, one push) taken with the argument: the format record at
+    // +0x4 (00d49283), the return address at +0x10 and the stream's own slot at +0x14, which
+    // the "is ok" test (00d49255) and the tagfile format (00d49267) both use.
+    e.with_stack(0x18, |e, frame| {
+        is_loadable_in_frame(e, stream, frame.addr())
+    })
+}
+
+/// [`hk_serialize_util_is_loadable`] in its frame.
+fn is_loadable_in_frame(e: &mut Engine, stream: u32, frame: u32) -> u32 {
+    let slot = frame + 0x14;
     e.mem.set_u32(slot, stream);
     let ok_at = e.vcall(stream, 0xc, &args![slot]).u32();
     let ok = e.mem.u8(ok_at) != 0;
     if !ok {
-        e.mem.free(slot);
         return 0;
     }
     let format_at = e
         .call(TAGFILE_READER_DETECT_FORMAT, &args![slot, stream])
         .u32();
     let tagfile_format = e.mem.i32(format_at);
-    e.mem.free(slot);
     if tagfile_format > 1 {
         return 1;
     }
-    let info = e.mem.alloc(0xc);
+    let info = frame + 4;
     e.call(STRING_PTR_CONSTRUCTOR, &args![info + 4]);
     hk_serialize_util_detect_format(e, stream, info);
     let format = e.mem.u32(info);
@@ -1034,7 +1118,6 @@ pub fn hk_serialize_util_is_loadable(e: &mut Engine, stream: u32) -> u32 {
         loadable = e.vcall(singleton, 0x10, &args![info]).u32() != 0;
     }
     e.call(STRING_PTR_DESTRUCTOR, &args![info + 4]);
-    e.mem.free(info);
     u32::from(loadable)
 }
 
@@ -1043,13 +1126,16 @@ pub fn hk_serialize_util_is_loadable(e: &mut Engine, stream: u32) -> u32 {
 /// format of `stream` into a local record and stores just its format word at `out`. Returns
 /// `out`.
 pub fn hk_serialize_util_detect_format_ov2(e: &mut Engine, out: u32, stream: u32) -> u32 {
-    let info = e.mem.alloc(0xc);
-    e.call(STRING_PTR_CONSTRUCTOR, &args![info + 4]);
-    hk_serialize_util_detect_format(e, stream, info);
-    let format = e.mem.u32(info);
-    e.mem.set_u32(out, format);
-    e.call(STRING_PTR_DESTRUCTOR, &args![info + 4]);
-    e.mem.free(info);
+    // The exe's frame (`SUB ESP,0xc`, one push): 0x10 bytes, the format record at +0x4
+    // (00d49321).
+    e.with_stack(0x10, |e, frame| {
+        let info = frame.addr() + 4;
+        e.call(STRING_PTR_CONSTRUCTOR, &args![info + 4]);
+        hk_serialize_util_detect_format(e, stream, info);
+        let format = e.mem.u32(info);
+        e.mem.set_u32(out, format);
+        e.call(STRING_PTR_DESTRUCTOR, &args![info + 4]);
+    });
     out
 }
 
@@ -1128,7 +1214,35 @@ pub fn forwarding_packfile_listerer_add_data_object_callback(
         .get(this, ForwardingPackfileListerer::forwarded_listener)
         .addr();
     if forwarded != 0 && e.call(DATA_OBJECT_IS_NULL, &args![input]).u32() == 0 {
-        let class_slot = e.mem.alloc(4);
+        // The exe's frame (`SUB ESP,0x10`, four pushes) taken with the arguments: the pair at
+        // +0x10 (00d4948c / 00d49478), the return address at +0x20; the class goes into the
+        // `input` argument's own slot, +0x28 (00d49446; `input` itself is kept in `EBX`).
+        let replaced = e.with_stack(0x2c, |e, frame| {
+            let frame = frame.addr();
+            e.mem.set_u32(frame + 0x24, out);
+            e.mem.set_u32(frame + 0x28, input);
+            forward_data_object_in_frame(e, this, out, input, forwarded, frame)
+        });
+        if replaced {
+            return out;
+        }
+    }
+    e.call(DATA_OBJECT_COPY_CONSTRUCTOR, &args![out, input]);
+    out
+}
+
+/// The forwarding part of [`forwarding_packfile_listerer_add_data_object_callback`] in its
+/// frame; true when the listener replaced the object (then `out` holds the new one).
+fn forward_data_object_in_frame(
+    e: &mut Engine,
+    this: Ptr<ForwardingPackfileListerer>,
+    out: u32,
+    input: u32,
+    forwarded: u32,
+    frame: u32,
+) -> bool {
+    {
+        let class_slot = frame + 0x28;
         e.call(DATA_OBJECT_GET_CLASS, &args![input, class_slot]);
         let singleton = e.mem.u32(REGISTRIES_SINGLETON);
         let registry = e.vcall(singleton, 0x10, &args![]).u32();
@@ -1138,7 +1252,7 @@ pub fn forwarding_packfile_listerer_add_data_object_callback(
         let mut class = e.call(lookup, &args![registry, name]).u32();
         // `pair`: the object and class cells handed to the listener (+0, +4) and the pair
         // `getHandle` fills (+8, +0xc).
-        let pair = e.mem.alloc(0x10);
+        let pair = frame + 0x10;
         e.call(DATA_OBJECT_GET_HANDLE, &args![input, pair + 8]);
         let handle_class = e.mem.u32(pair + 0xc);
         let handle_object = e.mem.u32(pair + 8);
@@ -1151,18 +1265,14 @@ pub fn forwarding_packfile_listerer_add_data_object_callback(
         let object_cell = e.mem.u32(pair);
         let class_cell = e.mem.u32(pair + 4);
         let changed = object_cell != e.mem.u32(pair + 8) || class_cell != class;
-        e.mem.free(pair);
         if changed {
             forwarding_packfile_listerer_wrap_object(e, this, out, object_cell, class_cell);
             e.call(DATA_CLASS_DESTRUCTOR, &args![class_slot]);
-            e.mem.free(class_slot);
-            return out;
+            return true;
         }
         e.call(DATA_CLASS_DESTRUCTOR, &args![class_slot]);
-        e.mem.free(class_slot);
     }
-    e.call(DATA_OBJECT_COPY_CONSTRUCTOR, &args![out, input]);
-    out
+    false
 }
 
 /// This unit's translated functions, by exe address.
@@ -1849,9 +1959,15 @@ mod tests {
         let record = header(&mut e, 2, Some("Havok-7.1.0-r1"), [1, 2, 3, 4]);
         let source = stream(&mut e, &[9; 64], true, true);
         e.call_log = Some(vec![]);
+        // The buffer array sits at +0xc of the 0x18-byte frame; the seekable read flag at +0x7
+        // of the stream reader's 8-byte frame.
+        let frame = next_frame(&mut e, 0x18);
         let got = e
             .call(0x00d4_8760, &args![0xe000u32, record, source, 0x7001u32])
             .u32();
+        assert_eq!(calls_to(&mut e, ARRAY_RESERVE)[0][1], frame + 0xc);
+        let flag_frame = next_frame(&mut e, 8);
+        assert_eq!(calls_to(&mut e, STREAM_SLOTS + 0x24)[0][1], flag_frame + 7);
         let loads = calls_to(&mut e, NATIVE_PACKFILE_LOAD);
         assert_eq!(loads.len(), 1);
         let data = loads[0][0];
@@ -1935,6 +2051,7 @@ mod tests {
             Ret::default()
         });
         e.call_log = Some(vec![]);
+        let frame = next_frame(&mut e, 0x58);
         let got = e
             .call(
                 0x00d4_8840,
@@ -1947,6 +2064,9 @@ mod tests {
         let merges = find(TYPE_INFO_REGISTRY_MERGE);
         assert_eq!(merges[0].1[1], 0x7001);
         let local_registry = merges[0].1[0];
+        // The exe frame: the registry at +0x14, the world at +0x30.
+        assert_eq!(local_registry, frame + 0x14);
+        assert_eq!(find(WORLD_CONSTRUCTOR)[0].1[0], frame + 0x30);
         assert_eq!(find(NATIVE_PACKFILE_LOAD)[0].1[2], local_registry);
         let map = log
             .iter()
@@ -2057,10 +2177,13 @@ mod tests {
         });
         let err = e.mem.alloc(8);
         e.call_log = Some(vec![]);
+        let frame = next_frame(&mut e, 0x1c);
         let got = e
             .call(0x00d4_8950, &args![world, err, 0x7002u32, registry])
             .u32();
         assert_eq!(got, 1);
+        // The class array sits at +0x10 of the exe frame.
+        assert_eq!(calls_to(&mut e, WORLD_SLOTS + 0x20)[0][1], frame + 0x10);
         assert_eq!(
             calls_to(&mut e, RECOMPUTE_PATCH_DEPENDENCIES),
             vec![vec![0x7002]]
@@ -2135,12 +2258,15 @@ mod tests {
         let err = e.mem.alloc(8);
         e.call_log = Some(vec![]);
         // With an error structure the world is checked (no classes: fine), then patched.
+        let frame = next_frame(&mut e, 0xc);
         let got = e
             .call(0x00d4_8a90, &args![world, err, registry, source])
             .u32();
         assert_eq!(got, world + registry);
         let load = calls_to(&mut e, TAGFILE_READER_LOAD);
         assert_eq!(load.len(), 1);
+        // The handle at +0 of the exe frame, the reader at +0x4.
+        assert_eq!(load[0][..2], [frame + 4, frame]);
         assert_eq!(load[0][2..], [source, world]);
         assert_eq!(calls_to(&mut e, RECOMPUTE_PATCH_DEPENDENCIES).len(), 1);
         assert_eq!(
@@ -2500,6 +2626,97 @@ mod tests {
         assert_eq!(string_of(&e, e.mem.u32(err + 4)), b"Stream is not ok");
     }
 
+    /// The next block of `size` bytes (the one a frame of that size takes).
+    fn next_frame(e: &mut Engine, size: u32) -> u32 {
+        let block = e.mem.alloc(size);
+        e.mem.free(block);
+        block
+    }
+
+    #[test]
+    fn the_locals_sit_at_the_exe_frame_offsets() {
+        let mut e = engine();
+        install_singletons(&mut e);
+        install_router(&mut e);
+        let current = text(&mut e, "Havok-7.1.0-r1");
+        e.register_double(CURRENT_VERSION, move |_, _| answer(current));
+        e.mem.set_u32(TAGFILE_WRITER_SAVE_SLOT, SAVE_DOUBLE);
+        e.register(SAVE_DOUBLE, |_, _| answer(0));
+        e.register(WORLD_GET_CONTENTS, |_, a| answer(a[1]));
+        e.call_log = Some(vec![]);
+        // 00d48560: the writer is its whole 8-byte frame.
+        let frame = next_frame(&mut e, 8);
+        e.call(0x00d4_8560, &args![0x10u32, 0x20u32, 0x30u32]);
+        assert_eq!(calls_to(&mut e, SAVE_DOUBLE)[0][0], frame);
+        // 00d485a0: the world at +0x14, the handle in the last argument's slot (+0x50).
+        e.call_log = Some(vec![]);
+        let frame = next_frame(&mut e, 0x54);
+        e.call(
+            0x00d4_85a0,
+            &args![0x1111u32, 0x2222u32, 0x3333u32, 0x4444u32, 0x5555u32],
+        );
+        assert_eq!(
+            calls_to(&mut e, WORLD_CONSTRUCTOR),
+            vec![vec![frame + 0x14]]
+        );
+        assert_eq!(
+            calls_to(&mut e, WORLD_GET_CONTENTS),
+            vec![vec![frame + 0x14, frame + 0x50]]
+        );
+        // 00d48af0: the read buffer at +0x18 of 0x164 bytes.
+        e.call_log = Some(vec![]);
+        let source = stream(&mut e, &[0u8; 8], true, true);
+        let result = e.mem.alloc(12);
+        let frame = next_frame(&mut e, 0x164);
+        e.call(0x00d4_8af0, &args![source, result]);
+        assert_eq!(calls_to(&mut e, CRT_MEMSET)[0][0], frame + 0x18);
+        // 00d49310: the format record at +0x4.
+        e.call_log = Some(vec![]);
+        let frame = next_frame(&mut e, 0x10);
+        e.call(0x00d4_9310, &args![result, source]);
+        assert_eq!(calls_to(&mut e, STRING_PTR_CONSTRUCTOR)[0][0], frame + 8);
+        // 00d48d30 / 00d48fc0: an old packfile goes to the deprecated loader with the format
+        // record at +0xc / +0x14.
+        let bytes = packfile_bytes("Havok-5.0.0-r1");
+        let source = stream(&mut e, &bytes, true, true);
+        e.call_log = Some(vec![]);
+        let frame = next_frame(&mut e, 0x34);
+        e.call(0x00d4_8d30, &args![source, 0u32, 0u32]);
+        assert_eq!(calls_to(&mut e, DEPRECATED_SLOTS + 0x14)[0][2], frame + 0xc);
+        let source = stream(&mut e, &bytes, true, true);
+        e.call_log = Some(vec![]);
+        let frame = next_frame(&mut e, 0x40);
+        e.call(0x00d4_8fc0, &args![source, 0u32, 0u32, 0u32]);
+        assert_eq!(
+            calls_to(&mut e, DEPRECATED_SLOTS + 0x18)[0][2],
+            frame + 0x14
+        );
+        // 00d48f00: the stream object at +0x4 of 0x50 bytes.
+        let buffer = e.mem.alloc(0x80);
+        e.mem.write(buffer, b"not a packfile");
+        e.register(ISTREAM_CONSTRUCTOR, |e, a| {
+            e.mem.set_u32(a[0] + 8, 0);
+            answer(a[0])
+        });
+        e.call_log = Some(vec![]);
+        let frame = next_frame(&mut e, 0x50);
+        e.call(0x00d4_8f00, &args![buffer, 0x80u32, 0u32, 0u32]);
+        assert_eq!(calls_to(&mut e, ISTREAM_CONSTRUCTOR)[0][0], frame + 4);
+        // 00d49240: the tagfile format goes into the stream's own slot (+0x14).
+        e.register(TAGFILE_READER_DETECT_FORMAT, |e, a| {
+            e.mem.set_u32(a[0], 2);
+            answer(a[0])
+        });
+        let source = stream(&mut e, &[0u8; 8], true, true);
+        e.call_log = Some(vec![]);
+        let frame = next_frame(&mut e, 0x18);
+        e.call(0x00d4_9240, &args![source]);
+        assert_eq!(
+            calls_to(&mut e, TAGFILE_READER_DETECT_FORMAT)[0][0],
+            frame + 0x14
+        );
+    }
+
     #[test]
     fn is_loadable_checks_each_format() {
         let mut e = engine();
@@ -2655,11 +2872,15 @@ mod tests {
         });
         let (out, input) = (e.mem.alloc(4), e.mem.alloc(4));
         e.call_log = Some(vec![]);
+        let frame = next_frame(&mut e, 0x2c);
         assert_eq!(e.call(0x00d4_9420, &args![listener, out, input]).u32(), out);
         assert_eq!(
             calls_to(&mut e, DATA_OBJECT_COPY_CONSTRUCTOR),
             vec![vec![out, input]]
         );
+        // The class into `input`'s own argument slot (+0x28), the handle pair at +0x18.
+        assert_eq!(calls_to(&mut e, DATA_OBJECT_GET_CLASS)[0][1], frame + 0x28);
+        assert_eq!(calls_to(&mut e, DATA_OBJECT_GET_HANDLE)[0][1], frame + 0x18);
         assert_eq!(calls_to(&mut e, DATA_CLASS_DESTRUCTOR).len(), 1);
         assert!(calls_to(&mut e, WORLD_WRAP_OBJECT).is_empty());
     }

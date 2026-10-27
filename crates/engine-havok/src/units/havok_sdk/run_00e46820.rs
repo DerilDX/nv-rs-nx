@@ -14,11 +14,13 @@ const BASE_CONSTRUCTOR: u32 = 0x00cb_fba0;
 /// entries) and writes whether it was there to `out` (a byte). The first match is replaced by the
 /// last entry (the count drops by one; nothing is copied when it was the last). A null `item`
 /// gives 0 without a search.
-pub fn fn_00e46820(e: &mut Engine, this: Ptr, out: u32, item: u32) {
+/// Answers `out`: the exe leaves it in `EAX` at every `RET` (the hkBool result returned
+/// through a pointer), and virtual call sites test the flag through `EAX` (e.g. 00d1b726).
+pub fn fn_00e46820(e: &mut Engine, this: Ptr, out: u32, item: u32) -> u32 {
     let this = this.addr();
     if item == 0 {
         e.mem.set_u8(out, 0);
-        return;
+        return out;
     }
     let count = e.mem.i32(this.wrapping_add(0x38));
     let array = e.mem.u32(this.wrapping_add(0x34));
@@ -36,9 +38,10 @@ pub fn fn_00e46820(e: &mut Engine, this: Ptr, out: u32, item: u32) {
                 .set_u32(data.wrapping_add(index.wrapping_mul(4)), moved);
         }
         e.mem.set_u8(out, 1);
-        return;
+        return out;
     }
     e.mem.set_u8(out, 0);
+    out
 }
 
 // Translated from 00e46880 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -83,7 +86,7 @@ pub fn fn_00e468b0(e: &mut Engine, this: Ptr) -> u32 {
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
-        entry!(0x00e4_6820, fn_00e46820(Ptr, u32, u32)),
+        entry!(0x00e4_6820, fn_00e46820(Ptr, u32, u32) -> u32),
         entry!(0x00e4_6880, fn_00e46880(Ptr, u32)),
         entry!(0x00e4_68b0, fn_00e468b0(Ptr) -> u32),
     ]
@@ -130,6 +133,15 @@ mod tests {
         assert_eq!(items(&e, this), vec![0x11, 0x44, 0x33]);
         assert_eq!(remove(&mut e, this, 0x33), 1);
         assert_eq!(items(&e, this), vec![0x11, 0x44]);
+    }
+
+    #[test]
+    fn remove_answers_its_out_pointer() {
+        let mut e = Engine::new();
+        let this = owner(&mut e, &[0x11, 0x22]);
+        let out = e.mem.alloc(8);
+        // EAX is `out` at every RET (the hkBool result pointer the callers read through).
+        assert_eq!(e.call(0x00e4_6820, &args![this, out, 0x22u32]).u32(), out);
     }
 
     #[test]

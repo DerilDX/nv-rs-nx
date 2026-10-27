@@ -21,6 +21,22 @@
 use crate::prelude::*;
 use crate::units::havok_sdk::hkgeometryprocessing::{add4, load_vec4, store_vec4, sub4, Vec4};
 
+/// Runs `f` on an exe-shaped frame: a function that aligns `ESP` (`AND ESP,0xfffffff0`) and
+/// then reserves `below` bytes (its `SUB ESP` and pushes) has its frame `below` bytes under a
+/// 16-byte boundary; `f` gets the frame's lowest address.
+fn with_aligned_frame<R>(e: &mut Engine, below: u32, f: impl FnOnce(&mut Engine, u32) -> R) -> R {
+    e.with_stack(below + 0x10, |e, raw| {
+        let boundary = (raw.addr() + below + 0xf) & !0xf;
+        f(e, boundary - below)
+    })
+}
+
+/// The frame base [`with_aligned_frame`] picks for a block at `raw` (tests).
+#[cfg(test)]
+fn aligned_frame_at(raw: u32, below: u32) -> u32 {
+    ((raw + below + 0xf) & !0xf) - below
+}
+
 /// `hkpTriangleUtil::isDegenerate` (Xbox PDB, `00ceb8d0`, cdecl: a pointer to a result byte, the
 /// three vertices, the tolerance as a `float`'s bits); answers the pointer to the result byte.
 const IS_DEGENERATE: u32 = 0x00ce_b8d0;
@@ -82,10 +98,10 @@ fn tolerance_bits(e: &Engine) -> u32 {
 }
 
 /// `isDegenerate(flag, v0, v1, v2, tolerance)` on the triangle shape at `triangle` (vertices at
-/// `+0x20`, `+0x30`, `+0x40`); answers the byte it points at in its answer.
-fn triangle_is_degenerate(e: &mut Engine, triangle: u32) -> bool {
+/// `+0x20`, `+0x30`, `+0x40`); answers the byte it points at in its answer. `flag` is the answer
+/// byte in the caller's frame.
+fn triangle_is_degenerate(e: &mut Engine, triangle: u32, flag: u32) -> bool {
     let tolerance = tolerance_bits(e);
-    let flag = e.mem.alloc(8);
     let at = e
         .call(
             IS_DEGENERATE,
@@ -98,9 +114,7 @@ fn triangle_is_degenerate(e: &mut Engine, triangle: u32) -> bool {
             ],
         )
         .u32();
-    let degenerate = e.mem.u8(at) != 0;
-    e.mem.free(flag);
-    degenerate
+    e.mem.u8(at) != 0
 }
 
 // Translated from 00dccbc0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -113,10 +127,14 @@ pub fn fn_00dccbc0(e: &mut Engine, this: u32) -> u32 {
     if e.mem.u32(this + 0x28) == 0 {
         return 0xffff_ffff;
     }
-    let buffer = e.mem.alloc(0x200);
-    let triangle = e.vcall(this, SLOT_GET_TRIANGLE, &args![0u32, buffer]).u32();
-    let degenerate = triangle_is_degenerate(e, triangle);
-    e.mem.free(buffer);
+    // The exe aligns ESP, then `SUB ESP,0x20c` and one push: a 0x210-byte frame, the triangle
+    // buffer at +0x10 (00dccbe2), the answer byte at +0xf (00dccc03).
+    let degenerate = with_aligned_frame(e, 0x210, |e, frame| {
+        let triangle = e
+            .vcall(this, SLOT_GET_TRIANGLE, &args![0u32, frame + 0x10])
+            .u32();
+        triangle_is_degenerate(e, triangle, frame + 0xf)
+    });
     if !degenerate {
         return 0;
     }
@@ -131,34 +149,36 @@ pub fn fn_00dccbc0(e: &mut Engine, this: u32) -> u32 {
 /// (virtual function `+0x14`) and tests it with `isDegenerate`; answers the first key whose
 /// triangle is not degenerate. The key's split is `[+0x20]` bits for the subpart.
 pub fn fn_00dccc30(e: &mut Engine, this: u32, key: u32) -> u32 {
-    let buffer = e.mem.alloc(0x200);
-    let bits = e.mem.u32(this + 0x20);
-    let mut subpart = subpart_of(key, bits);
-    let mut triangle = triangle_in_subpart(key, bits);
-    let mut offset = subpart.wrapping_mul(SUBPART_SIZE);
-    let found = loop {
-        let subparts = e.mem.u32(this + 0x24);
-        triangle = triangle.wrapping_add(1);
-        let count = e.mem.i32(offset.wrapping_add(subparts).wrapping_add(0x1c));
-        if triangle as i32 >= count {
-            subpart = subpart.wrapping_add(1);
-            offset = offset.wrapping_add(SUBPART_SIZE);
-            if subpart >= e.mem.u32(this + 0x28) {
-                break 0xffff_ffff;
-            }
-            triangle = 0;
-        }
+    // The exe aligns ESP, then `SUB ESP,0x214` and three pushes: a 0x220-byte frame, the triangle
+    // buffer at +0x20 (00dccca3), the answer byte at +0x1b (00dcccca).
+    with_aligned_frame(e, 0x220, |e, frame| {
+        let buffer = frame + 0x20;
         let bits = e.mem.u32(this + 0x20);
-        let candidate = (subpart << (0x20u32.wrapping_sub(bits) & 31)) | triangle;
-        let shape = e
-            .vcall(this, SLOT_GET_TRIANGLE, &args![candidate, buffer])
-            .u32();
-        if !triangle_is_degenerate(e, shape) {
-            break candidate;
+        let mut subpart = subpart_of(key, bits);
+        let mut triangle = triangle_in_subpart(key, bits);
+        let mut offset = subpart.wrapping_mul(SUBPART_SIZE);
+        loop {
+            let subparts = e.mem.u32(this + 0x24);
+            triangle = triangle.wrapping_add(1);
+            let count = e.mem.i32(offset.wrapping_add(subparts).wrapping_add(0x1c));
+            if triangle as i32 >= count {
+                subpart = subpart.wrapping_add(1);
+                offset = offset.wrapping_add(SUBPART_SIZE);
+                if subpart >= e.mem.u32(this + 0x28) {
+                    break 0xffff_ffff;
+                }
+                triangle = 0;
+            }
+            let bits = e.mem.u32(this + 0x20);
+            let candidate = (subpart << (0x20u32.wrapping_sub(bits) & 31)) | triangle;
+            let shape = e
+                .vcall(this, SLOT_GET_TRIANGLE, &args![candidate, buffer])
+                .u32();
+            if !triangle_is_degenerate(e, shape, frame + 0x1b) {
+                break candidate;
+            }
         }
-    };
-    e.mem.free(buffer);
-    found
+    })
 }
 
 // Translated from 00dccd00 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -220,21 +240,23 @@ pub fn fn_00dccd50(e: &mut Engine, vertex: u32, scale: u32, bounds: u32, transfo
         *slot = x87_store32(x87_mul(x87_load32(a), x87_m32(b)));
     }
     lanes[3] = zero;
-    let local = e.mem.alloc(0x10);
-    let result = e.mem.alloc(0x10);
-    for (i, bits) in lanes.into_iter().enumerate() {
-        e.mem.set_u32(local + 4 * i as u32, bits);
-    }
-    e.call(SET_TRANSFORMED_POS, &args![result, transform, local]);
-    let transformed = load_vec4(e, result);
-    let minimum = load_vec4(e, bounds);
-    let merged: Vec4 = [0, 1, 2, 3].map(|i| min_lane(minimum[i], transformed[i]));
-    store_vec4(e, bounds, merged);
-    let maximum = load_vec4(e, bounds + 0x10);
-    let merged: Vec4 = [0, 1, 2, 3].map(|i| max_lane(maximum[i], transformed[i]));
-    store_vec4(e, bounds + 0x10, merged);
-    e.mem.free(local);
-    e.mem.free(result);
+    // The exe aligns ESP, then `SUB ESP,0x30`: a 0x30-byte frame, the scaled vertex at +0x10, the
+    // transformed one at +0x20 (00dccd88..00dccd9b).
+    with_aligned_frame(e, 0x30, |e, frame| {
+        let local = frame + 0x10;
+        let result = frame + 0x20;
+        for (i, bits) in lanes.into_iter().enumerate() {
+            e.mem.set_u32(local + 4 * i as u32, bits);
+        }
+        e.call(SET_TRANSFORMED_POS, &args![result, transform, local]);
+        let transformed = load_vec4(e, result);
+        let minimum = load_vec4(e, bounds);
+        let merged: Vec4 = [0, 1, 2, 3].map(|i| min_lane(minimum[i], transformed[i]));
+        store_vec4(e, bounds, merged);
+        let maximum = load_vec4(e, bounds + 0x10);
+        let merged: Vec4 = [0, 1, 2, 3].map(|i| max_lane(maximum[i], transformed[i]));
+        store_vec4(e, bounds + 0x10, merged);
+    });
 }
 
 /// Reads the three vertex indices of triangle `triangle` of the subpart record at `subpart`
@@ -832,6 +854,50 @@ mod tests {
         assert_eq!(load_vec4(&e, result + 0x20), [8.0, 12.0, 16.0, 0.0]);
         assert_eq!(load_vec4(&e, result + 0x30), [4.0, 6.0, 8.0, 0.0]);
         assert_eq!(load_vec4(&e, result + 0x40), [2.0, 3.0, 4.0, 0.0]);
+    }
+
+    #[test]
+    fn the_triangle_checks_use_the_buffer_and_answer_byte_of_their_aligned_frames() {
+        let mut e = engine();
+        let (this, _) = mesh_with_triangles(&mut e, |_| false);
+        let flags = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&flags);
+        e.register_double(IS_DEGENERATE, move |e, a| {
+            sink.borrow_mut().push(a[0]);
+            e.mem.set_u8(a[0], 0);
+            a[0].into_ret()
+        });
+        e.mem.set_u32(this + 0x28, 1);
+        let raw = e.mem.alloc(0x220);
+        e.mem.free(raw);
+        e.call(0x00dc_cbc0, &args![this]);
+        let frame = aligned_frame_at(raw, 0x210);
+        assert_eq!(flags.borrow()[0], frame + 0xf);
+        two_subparts(&mut e, this);
+        let raw = e.mem.alloc(0x230);
+        e.mem.free(raw);
+        e.call(0x00dc_cc30, &args![this, 0u32]);
+        let frame = aligned_frame_at(raw, 0x220);
+        assert_eq!(flags.borrow()[1], frame + 0x1b);
+    }
+
+    #[test]
+    fn the_vertex_and_its_transform_sit_at_0x10_and_0x20_of_the_aligned_frame() {
+        let mut e = engine();
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&seen);
+        e.register_double(SET_TRANSFORMED_POS, move |_, a| {
+            sink.borrow_mut().push((a[0], a[2]));
+            Ret::default()
+        });
+        let vertex = vec3(&mut e, [1.0, 2.0, 3.0]);
+        let scale = vec3(&mut e, [2.0, 2.0, 2.0]);
+        let bounds = e.mem.alloc(0x20);
+        let raw = e.mem.alloc(0x40);
+        e.mem.free(raw);
+        e.call(0x00dc_cd50, &args![vertex, scale, bounds, 0x1111u32]);
+        let frame = aligned_frame_at(raw, 0x30);
+        assert_eq!(*seen.borrow(), vec![(frame + 0x20, frame + 0x10)]);
     }
 }
 

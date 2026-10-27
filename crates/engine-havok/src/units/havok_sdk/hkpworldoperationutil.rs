@@ -254,6 +254,12 @@ fn collision_filter_interface(e: &Engine, world: u32) -> u32 {
 /// Creates the `hkLocalArray` (data, size, capacity-and-flags, saved stack top; 8-byte
 /// elements) at `array`, sized by the world's broad-phase query buffer size, taking its
 /// storage from the memory router's stack.
+/// Runs `f` with a `size`-byte frame that starts on a 16-byte boundary (the exe's
+/// `AND ESP,0xfffffff0` frames); `f` gets the frame's address.
+fn with_aligned_stack<R>(e: &mut Engine, size: u32, f: impl FnOnce(&mut Engine, u32) -> R) -> R {
+    e.with_stack(size + 0x10, |e, raw| f(e, (raw.addr() + 0xf) & !0xf))
+}
+
 fn scratch_array_create(e: &mut Engine, array: u32, world: u32) {
     let capacity = e.mem.u32(world + WORLD_BROAD_PHASE_QUERY_SIZE);
     e.mem.set_u32(array, 0);
@@ -2285,145 +2291,148 @@ pub fn hkp_world_operation_util_replace_motion_object(
     let motion = entity_addr + ENTITY_MOTION;
     let new_is_dynamic = new_is_dynamic as u8 != 0;
     let old_is_dynamic = old_is_dynamic as u8 != 0;
-    // The exe's stack frame: the 0x120-byte motion copy, followed by the inertia matrix.
-    let copy = e.mem.alloc(0x160);
-    let mut copied = false;
-    if !new_is_dynamic {
-        // The exe stores the copy's vtable pointer and a zero at +0x118 first.
-        e.mem.set_u32(copy, MOTION_COPY_VTABLE);
-        e.mem.set_u32(copy + 0x118, 0);
-        let bytes = e.mem.bytes(motion, MOTION_BYTES);
-        e.mem.write(copy, &bytes);
-        copied = true;
-        let new_motion;
-        if new_type == MOTION_FIXED {
-            new_motion = if motion != 0 {
-                e.call(
-                    FIXED_MOTION_CONSTRUCTOR,
-                    &args![motion, entity_addr + 0x120, entity_addr + 0x160],
-                )
-                .u32()
-            } else {
-                0
-            };
-            e.call(MOTION_STATE_ASSIGN, &args![new_motion + 0x10, copy + 0x10]);
-            let flag = e.mem.u8(copy + 9);
-            e.mem.set_u8(new_motion + 9, flag);
-            let rate = e.mem.f32(copy + 0x6c);
-            if rate != 0.0 {
-                let time = if world_addr != 0 {
-                    e.call(WORLD_GET_CURRENT_TIME, &args![world_addr]).f32()
-                } else {
-                    let start = e.mem.f32(copy + 0x5c);
-                    (1.0f64 / rate as f64 + start as f64) as f32
-                };
-                e.call(
-                    FREEZE_MOTION_STATE,
-                    &args![time.to_bits(), new_motion + 0x10],
-                );
-            }
-        } else {
-            new_motion = if motion != 0 {
-                e.call(
-                    KEYFRAMED_MOTION_CONSTRUCTOR,
-                    &args![motion, entity_addr + 0x120, entity_addr + 0x160],
-                )
-                .u32()
-            } else {
-                0
-            };
-            e.call(MOTION_COPY_STATE_AND_VELOCITIES, &args![copy, new_motion]);
-        }
-        if old_is_dynamic {
-            let router = e.call(MEMORY_ROUTER, &args![]).u32();
-            let allocator = e.mem.u32(router + 0x10);
-            let block = e.vcall(allocator, 4, &args![MOTION_BYTES]).u32();
-            // The exe's stores into the new block that the copy overwrites.
-            e.mem.set_u16(block + 4, MOTION_BYTES as u16);
-            e.mem.set_u32(block + 0x118, 0);
-            e.mem.set_u32(block, MOTION_COPY_VTABLE);
-            let bytes = e.mem.bytes(copy, MOTION_BYTES);
-            e.mem.write(block, &bytes);
-            e.mem.set_u16(block + 4, MOTION_BYTES as u16);
-            e.mem.set_u16(block + 6, 1);
-            e.mem.set_u32(new_motion + 0x118, block);
-            let byte_2a = e.mem.i8(entity_addr + ENTITY_BYTE_2A);
-            e.mem.set_i16(new_motion + 0x11c, byte_2a as i16);
-            let shape = e.mem.u32(entity_addr + ENTITY_COLLIDABLE);
-            e.call(
-                ENTITY_SET_CACHED_SHAPE_DATA,
-                &args![entity_addr, world_addr, shape],
-            );
-        } else {
-            let saved = e.mem.u32(copy + 0x118);
-            e.vcall(new_motion, 0x6c, &args![saved]);
-            let word = e.mem.u16(copy + 0x11c);
-            e.mem.set_u16(new_motion + 0x11c, word);
-        }
-        e.mem.set_u32(entity_addr + 0xa4, 0);
-        e.mem.set_u8(
-            entity_addr + ENTITY_BYTE_2A,
-            (new_type != MOTION_FIXED) as u8,
-        );
-    } else {
-        if !old_is_dynamic {
-            let saved = e.mem.u32(entity_addr + 0x1f8);
-            e.vcall(motion, 0x64, &args![saved]);
-            e.mem.set_u16(saved + 0xa, 0);
-            e.mem.set_u16(saved + 0xc, 0);
-            let byte = e.mem.u8(motion + 0x11c);
-            e.mem.set_u8(entity_addr + ENTITY_BYTE_2A, byte);
-            let bytes = e.mem.bytes(saved, MOTION_BYTES);
-            e.mem.write(motion, &bytes);
-            e.call(MEM_SET, &args![entity_addr + 0x200, 0u32, 0u32]);
-            e.call(REMOVE_REFERENCE, &args![saved]);
-            let shape = e.mem.u32(entity_addr + ENTITY_COLLIDABLE);
-            e.call(
-                ENTITY_SET_CACHED_SHAPE_DATA,
-                &args![entity_addr, world_addr, shape],
-            );
-        }
-        let old_type = e.mem.u8(entity_addr + ENTITY_MOTION_TYPE) as u32;
-        if old_type != new_type && new_type != 1 {
+    // The exe's frame (`AND ESP,0xfffffff0`, `SUB ESP,0x164`, three pushes): 0x170 bytes from a
+    // 16-byte boundary, the 0x120-byte motion copy at +0x20 (its vtable stored at 00cb4312)
+    // followed by the inertia matrix at +0x140 (00cb434c).
+    with_aligned_stack(e, 0x170, |e, frame| {
+        let copy = frame + 0x20;
+        let mut copied = false;
+        if !new_is_dynamic {
+            // The exe stores the copy's vtable pointer and a zero at +0x118 first.
             e.mem.set_u32(copy, MOTION_COPY_VTABLE);
             e.mem.set_u32(copy + 0x118, 0);
             let bytes = e.mem.bytes(motion, MOTION_BYTES);
             e.mem.write(copy, &bytes);
             copied = true;
-            e.vcall(motion, 0x14, &args![copy + 0x120]);
-            let second = e.mem.u8(copy + 0xbd) as u32;
-            let first = e.mem.u8(copy + 0xbc) as u32;
-            let second_value = x87_quiet_bits(e.mem.u32(MOTION_FLOAT_TABLE + second * 4));
-            let first_value = x87_quiet_bits(e.mem.u32(MOTION_FLOAT_TABLE + first * 4));
-            // 00cb43a5: `getMass` takes no stack word (plain RET); the motion, the two
-            // floats and the two addresses pushed before it are the last five words of
-            // the cdecl `00ca8240` (ADD ESP,0x24).
-            let mass = e.call(MOTION_GET_MASS, &args![copy]).f32();
-            e.call(
-                RIGID_BODY_CREATE_DYNAMIC_MOTION,
-                &args![
-                    new_type,
-                    copy + 0x40,
-                    copy + 0x80,
-                    mass.to_bits(),
-                    copy + 0x120,
-                    copy + 0x90,
-                    first_value,
-                    second_value,
-                    motion
-                ],
+            let new_motion;
+            if new_type == MOTION_FIXED {
+                new_motion = if motion != 0 {
+                    e.call(
+                        FIXED_MOTION_CONSTRUCTOR,
+                        &args![motion, entity_addr + 0x120, entity_addr + 0x160],
+                    )
+                    .u32()
+                } else {
+                    0
+                };
+                e.call(MOTION_STATE_ASSIGN, &args![new_motion + 0x10, copy + 0x10]);
+                let flag = e.mem.u8(copy + 9);
+                e.mem.set_u8(new_motion + 9, flag);
+                let rate = e.mem.f32(copy + 0x6c);
+                if rate != 0.0 {
+                    let time = if world_addr != 0 {
+                        e.call(WORLD_GET_CURRENT_TIME, &args![world_addr]).f32()
+                    } else {
+                        let start = e.mem.f32(copy + 0x5c);
+                        (1.0f64 / rate as f64 + start as f64) as f32
+                    };
+                    e.call(
+                        FREEZE_MOTION_STATE,
+                        &args![time.to_bits(), new_motion + 0x10],
+                    );
+                }
+            } else {
+                new_motion = if motion != 0 {
+                    e.call(
+                        KEYFRAMED_MOTION_CONSTRUCTOR,
+                        &args![motion, entity_addr + 0x120, entity_addr + 0x160],
+                    )
+                    .u32()
+                } else {
+                    0
+                };
+                e.call(MOTION_COPY_STATE_AND_VELOCITIES, &args![copy, new_motion]);
+            }
+            if old_is_dynamic {
+                let router = e.call(MEMORY_ROUTER, &args![]).u32();
+                let allocator = e.mem.u32(router + 0x10);
+                let block = e.vcall(allocator, 4, &args![MOTION_BYTES]).u32();
+                // The exe's stores into the new block that the copy overwrites.
+                e.mem.set_u16(block + 4, MOTION_BYTES as u16);
+                e.mem.set_u32(block + 0x118, 0);
+                e.mem.set_u32(block, MOTION_COPY_VTABLE);
+                let bytes = e.mem.bytes(copy, MOTION_BYTES);
+                e.mem.write(block, &bytes);
+                e.mem.set_u16(block + 4, MOTION_BYTES as u16);
+                e.mem.set_u16(block + 6, 1);
+                e.mem.set_u32(new_motion + 0x118, block);
+                let byte_2a = e.mem.i8(entity_addr + ENTITY_BYTE_2A);
+                e.mem.set_i16(new_motion + 0x11c, byte_2a as i16);
+                let shape = e.mem.u32(entity_addr + ENTITY_COLLIDABLE);
+                e.call(
+                    ENTITY_SET_CACHED_SHAPE_DATA,
+                    &args![entity_addr, world_addr, shape],
+                );
+            } else {
+                let saved = e.mem.u32(copy + 0x118);
+                e.vcall(new_motion, 0x6c, &args![saved]);
+                let word = e.mem.u16(copy + 0x11c);
+                e.mem.set_u16(new_motion + 0x11c, word);
+            }
+            e.mem.set_u32(entity_addr + 0xa4, 0);
+            e.mem.set_u8(
+                entity_addr + ENTITY_BYTE_2A,
+                (new_type != MOTION_FIXED) as u8,
             );
-            e.call(MOTION_COPY_STATE_AND_VELOCITIES, &args![copy, motion]);
-            let first_bits = x87_quiet_bits(e.mem.u32(copy + 0xb4));
-            e.mem.set_u32(entity_addr + 0x194, first_bits);
-            let second_bits = x87_quiet_bits(e.mem.u32(copy + 0xb8));
-            e.mem.set_u32(entity_addr + 0x198, second_bits);
+        } else {
+            if !old_is_dynamic {
+                let saved = e.mem.u32(entity_addr + 0x1f8);
+                e.vcall(motion, 0x64, &args![saved]);
+                e.mem.set_u16(saved + 0xa, 0);
+                e.mem.set_u16(saved + 0xc, 0);
+                let byte = e.mem.u8(motion + 0x11c);
+                e.mem.set_u8(entity_addr + ENTITY_BYTE_2A, byte);
+                let bytes = e.mem.bytes(saved, MOTION_BYTES);
+                e.mem.write(motion, &bytes);
+                e.call(MEM_SET, &args![entity_addr + 0x200, 0u32, 0u32]);
+                e.call(REMOVE_REFERENCE, &args![saved]);
+                let shape = e.mem.u32(entity_addr + ENTITY_COLLIDABLE);
+                e.call(
+                    ENTITY_SET_CACHED_SHAPE_DATA,
+                    &args![entity_addr, world_addr, shape],
+                );
+            }
+            let old_type = e.mem.u8(entity_addr + ENTITY_MOTION_TYPE) as u32;
+            if old_type != new_type && new_type != 1 {
+                e.mem.set_u32(copy, MOTION_COPY_VTABLE);
+                e.mem.set_u32(copy + 0x118, 0);
+                let bytes = e.mem.bytes(motion, MOTION_BYTES);
+                e.mem.write(copy, &bytes);
+                copied = true;
+                e.vcall(motion, 0x14, &args![copy + 0x120]);
+                let second = e.mem.u8(copy + 0xbd) as u32;
+                let first = e.mem.u8(copy + 0xbc) as u32;
+                let second_value = x87_quiet_bits(e.mem.u32(MOTION_FLOAT_TABLE + second * 4));
+                let first_value = x87_quiet_bits(e.mem.u32(MOTION_FLOAT_TABLE + first * 4));
+                // 00cb43a5: `getMass` takes no stack word (plain RET); the motion, the two
+                // floats and the two addresses pushed before it are the last five words of
+                // the cdecl `00ca8240` (ADD ESP,0x24).
+                let mass = e.call(MOTION_GET_MASS, &args![copy]).f32();
+                e.call(
+                    RIGID_BODY_CREATE_DYNAMIC_MOTION,
+                    &args![
+                        new_type,
+                        copy + 0x40,
+                        copy + 0x80,
+                        mass.to_bits(),
+                        copy + 0x120,
+                        copy + 0x90,
+                        first_value,
+                        second_value,
+                        motion
+                    ],
+                );
+                e.call(MOTION_COPY_STATE_AND_VELOCITIES, &args![copy, motion]);
+                let first_bits = x87_quiet_bits(e.mem.u32(copy + 0xb4));
+                e.mem.set_u32(entity_addr + 0x194, first_bits);
+                let second_bits = x87_quiet_bits(e.mem.u32(copy + 0xb8));
+                e.mem.set_u32(entity_addr + 0x198, second_bits);
+            }
         }
-    }
-    if copied {
-        e.call(KEYFRAMED_MOTION_DESTRUCTOR, &args![copy]);
-    }
-    e.mem.free(copy);
+        if copied {
+            e.call(KEYFRAMED_MOTION_DESTRUCTOR, &args![copy]);
+        }
+    });
     e.mem
         .set_u32(entity_addr + 0x18, entity_addr + ENTITY_MOTION_STATE);
     if world_addr != 0 {
@@ -2596,12 +2605,14 @@ pub fn fn_00cb5500(e: &mut Engine, world: Ptr, island: Ptr) {
 pub fn hkp_world_operation_util_merge_islands(e: &mut Engine, world: Ptr, first: Ptr, second: Ptr) {
     let world_addr = world.addr();
     if e.mem.u32(world_addr + WORLD_LOCK_COUNT) != 0 {
-        let record = e.mem.alloc(12);
-        e.mem.set_u8(record, 0xc);
-        e.mem.set_u32(record + 4, first.addr());
-        e.mem.set_u32(record + 8, second.addr());
-        e.call(WORLD_ENQUEUE_OPERATION, &args![world_addr, record]);
-        e.mem.free(record);
+        // The exe's frame (`SUB ESP,0xc`, two pushes): 0x14 bytes, the record at +0x8 (00cb559a).
+        e.with_stack(0x14, |e, frame| {
+            let record = frame.addr() + 8;
+            e.mem.set_u8(record, 0xc);
+            e.mem.set_u32(record + 4, first.addr());
+            e.mem.set_u32(record + 8, second.addr());
+            e.call(WORLD_ENQUEUE_OPERATION, &args![world_addr, record]);
+        });
     } else {
         let first_island = e.mem.u32(first.addr() + ENTITY_ISLAND);
         let second_island = e.mem.u32(second.addr() + ENTITY_ISLAND);
@@ -2623,46 +2634,58 @@ pub fn hkp_world_operation_util_merge_islands(e: &mut Engine, world: Ptr, first:
 pub fn hkp_world_operation_util_update_entity_bp(e: &mut Engine, world: Ptr, entity: Ptr) {
     let world_addr = world.addr();
     let entity_addr = entity.addr();
+    // The exe's frame (`AND ESP,0xfffffff0`, `SUB ESP,0x54`, three pushes): 0x60 bytes from a
+    // 16-byte boundary. The queued record at +0x18 (00cb576c); the handle slot at +0x18
+    // (00cb5849), the removed pairs at +0x20 (00cb57e8), the added pairs at +0x30 (00cb57a9) and
+    // the integer box at +0x40 (min x, y, z, spare, max x, y, z; 00cb5855..00cb5897). The entity
+    // goes to the AABB update through its own argument slot (`LEA ECX,[EBP+0xc]`, 00cb582c);
+    // `EBP` is taken on the boundary, so the slot is +0x6c.
+    with_aligned_stack(e, 0x70, |e, frame| {
+        update_entity_bp_in_frame(e, world_addr, entity_addr, frame)
+    });
+}
+
+/// [`hkp_world_operation_util_update_entity_bp`] in its frame.
+fn update_entity_bp_in_frame(e: &mut Engine, world_addr: u32, entity_addr: u32, frame: u32) {
+    e.mem.set_u32(frame + 0x68, world_addr);
+    e.mem.set_u32(frame + 0x6c, entity_addr);
     if e.mem.u32(world_addr + WORLD_LOCK_COUNT) != 0 {
-        let record = e.mem.alloc(12);
+        let record = frame + 0x18;
         e.mem.set_u8(record, 3);
         e.mem.set_u32(record + 4, entity_addr);
         e.call(WORLD_ENQUEUE_OPERATION, &args![world_addr, record]);
-        e.mem.free(record);
         return;
     }
     e.mem.set_u32(world_addr + WORLD_LOCK_COUNT, 1);
     let collidable = entity_addr + ENTITY_COLLIDABLE;
     if e.mem.u32(collidable) != 0 {
-        // Frame: added array 0, removed array 0x10, handle slot 0x20, box 0x30 (min x, y, z,
-        // spare, max x, y, z), entity slot 0x50.
-        let frame = e.mem.alloc(0x60);
-        let added = frame;
-        let removed = frame + 0x10;
+        let added = frame + 0x30;
+        let removed = frame + 0x20;
+        let handle_slot = frame + 0x18;
+        let entity_slot = frame + 0x6c;
+        let aabb = frame + 0x40;
         scratch_array_create(e, added, world_addr);
         scratch_array_create(e, removed, world_addr);
         if e.mem.u32(entity_addr + 0x30) > e.mem.u32(entity_addr + 0x40) {
-            e.mem.set_u32(frame + 0x50, entity_addr);
             let input = e.mem.u32(world_addr + WORLD_COLLISION_INPUT);
-            e.call(ENTITY_BATCH_RECALC_AABB, &args![input, frame + 0x50, 1u32]);
+            e.call(ENTITY_BATCH_RECALC_AABB, &args![input, entity_slot, 1u32]);
         }
         let shift = e.mem.u8(entity_addr + 0x3f) as u32;
         for lane in 0..3u32 {
             let low = e.mem.u32(entity_addr + 0x30 + lane * 4);
             let low_extent = (e.mem.u8(entity_addr + 0x3c + lane) as u32).wrapping_shl(shift);
-            e.mem
-                .set_u32(frame + 0x30 + lane * 4, low.wrapping_sub(low_extent));
+            e.mem.set_u32(aabb + lane * 4, low.wrapping_sub(low_extent));
             let high = e.mem.u32(entity_addr + 0x40 + lane * 4);
             let high_extent = (e.mem.u8(entity_addr + 0x4c + lane) as u32).wrapping_shl(shift);
             e.mem
-                .set_u32(frame + 0x40 + lane * 4, high_extent.wrapping_add(high));
+                .set_u32(aabb + 0x10 + lane * 4, high_extent.wrapping_add(high));
         }
-        e.mem.set_u32(frame + 0x20, collidable + 0x14);
+        e.mem.set_u32(handle_slot, collidable + 0x14);
         let broad_phase = e.mem.u32(world_addr + WORLD_BROAD_PHASE);
         e.vcall(
             broad_phase,
             0x2c,
-            &args![frame + 0x20, frame + 0x30, 1u32, added, removed],
+            &args![handle_slot, aabb, 1u32, added, removed],
         );
         let total = e.mem.i32(removed + 4).wrapping_add(e.mem.i32(added + 4));
         if total > 0 {
@@ -2684,7 +2707,6 @@ pub fn hkp_world_operation_util_update_entity_bp(e: &mut Engine, world: Ptr, ent
         }
         scratch_array_destroy(e, removed);
         scratch_array_destroy(e, added);
-        e.mem.free(frame);
     }
     release_critical_lock(e, world_addr);
 }
@@ -2700,32 +2722,38 @@ pub fn hkp_world_operation_util_add_entity_bp(e: &mut Engine, world: Ptr, entity
     if e.mem.u32(collidable) == 0 {
         return;
     }
-    // Frame: the pair array 0, the entity slot 0x10, the AABB copy 0x20.
-    let frame = e.mem.alloc(0x40);
-    scratch_array_create(e, frame, world_addr);
-    e.mem.set_u32(frame + 0x10, entity_addr);
-    let input = e.mem.u32(world_addr + WORLD_COLLISION_INPUT);
-    e.call(ENTITY_BATCH_RECALC_AABB, &args![input, frame + 0x10, 1u32]);
-    let aabb = e.mem.bytes(entity_addr + 0x30, 32);
-    e.mem.write(frame + 0x20, &aabb);
-    let broad_phase = e.mem.u32(world_addr + WORLD_BROAD_PHASE);
-    e.vcall(
-        broad_phase,
-        0x14,
-        &args![collidable + 0x14, frame + 0x20, frame],
-    );
-    let count = e.mem.i32(frame + 4);
-    if count > 0 {
-        let filter = collision_filter_interface(e, world_addr);
-        let dispatcher = e.mem.u32(world_addr + WORLD_DISPATCHER);
-        let data = e.mem.u32(frame);
-        e.call(
-            DISPATCHER_ADD_PAIRS,
-            &args![dispatcher, data, count as u32, filter],
+    // The exe's frame (`AND ESP,0xfffffff0`, `SUB ESP,0x34`, three pushes): 0x40 bytes from a
+    // 16-byte boundary, the pair array at +0x10 (00cb5a19), the AABB copy at +0x20 (00cb5a6a).
+    // The entity goes to the AABB update through its own argument slot (`LEA EAX,[EBP+0xc]`,
+    // 00cb5a40); `EBP` is taken on the boundary, so the slot is +0x4c.
+    with_aligned_stack(e, 0x50, |e, frame| {
+        let array = frame + 0x10;
+        let entity_slot = frame + 0x4c;
+        e.mem.set_u32(frame + 0x48, world_addr);
+        e.mem.set_u32(entity_slot, entity_addr);
+        scratch_array_create(e, array, world_addr);
+        let input = e.mem.u32(world_addr + WORLD_COLLISION_INPUT);
+        e.call(ENTITY_BATCH_RECALC_AABB, &args![input, entity_slot, 1u32]);
+        let aabb = e.mem.bytes(entity_addr + 0x30, 32);
+        e.mem.write(frame + 0x20, &aabb);
+        let broad_phase = e.mem.u32(world_addr + WORLD_BROAD_PHASE);
+        e.vcall(
+            broad_phase,
+            0x14,
+            &args![collidable + 0x14, frame + 0x20, array],
         );
-    }
-    scratch_array_destroy(e, frame);
-    e.mem.free(frame);
+        let count = e.mem.i32(array + 4);
+        if count > 0 {
+            let filter = collision_filter_interface(e, world_addr);
+            let dispatcher = e.mem.u32(world_addr + WORLD_DISPATCHER);
+            let data = e.mem.u32(array);
+            e.call(
+                DISPATCHER_ADD_PAIRS,
+                &args![dispatcher, data, count as u32, filter],
+            );
+        }
+        scratch_array_destroy(e, array);
+    });
 }
 
 // Translated from 00cb5b10 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2736,32 +2764,28 @@ pub fn hkp_world_operation_util_add_entity_bp(e: &mut Engine, world: Ptr, entity
 pub fn hkp_world_operation_util_add_phantom_bp(e: &mut Engine, world: Ptr, phantom: Ptr) {
     let world_addr = world.addr();
     let phantom_addr = phantom.addr();
-    // Frame: the pair array 0, the AABB buffer 0x10.
-    let frame = e.mem.alloc(0x40);
-    scratch_array_create(e, frame, world_addr);
-    e.vcall(phantom_addr, 0x18, &args![frame + 0x10]);
-    let broad_phase = e.mem.u32(world_addr + WORLD_BROAD_PHASE);
-    e.vcall(
-        broad_phase,
-        0x10,
-        &args![phantom_addr + 0x24, frame + 0x10, frame],
-    );
-    e.call(
-        PHANTOM_SET_BOUNDING_VOLUME_DATA,
-        &args![phantom_addr, frame + 0x10],
-    );
-    let count = e.mem.u32(frame + 4);
-    if count != 0 {
-        let filter = collision_filter_interface(e, world_addr);
-        let dispatcher = e.mem.u32(world_addr + WORLD_DISPATCHER);
-        let data = e.mem.u32(frame);
-        e.call(
-            DISPATCHER_ADD_PAIRS,
-            &args![dispatcher, data, count, filter],
-        );
-    }
-    scratch_array_destroy(e, frame);
-    e.mem.free(frame);
+    // The exe's frame (`AND ESP,0xfffffff0`, `SUB ESP,0x34`, three pushes): 0x40 bytes from a
+    // 16-byte boundary, the pair array at +0x10 (00cb5b27), the AABB buffer at +0x20 (00cb5b66).
+    with_aligned_stack(e, 0x40, |e, frame| {
+        let array = frame + 0x10;
+        let aabb = frame + 0x20;
+        scratch_array_create(e, array, world_addr);
+        e.vcall(phantom_addr, 0x18, &args![aabb]);
+        let broad_phase = e.mem.u32(world_addr + WORLD_BROAD_PHASE);
+        e.vcall(broad_phase, 0x10, &args![phantom_addr + 0x24, aabb, array]);
+        e.call(PHANTOM_SET_BOUNDING_VOLUME_DATA, &args![phantom_addr, aabb]);
+        let count = e.mem.u32(array + 4);
+        if count != 0 {
+            let filter = collision_filter_interface(e, world_addr);
+            let dispatcher = e.mem.u32(world_addr + WORLD_DISPATCHER);
+            let data = e.mem.u32(array);
+            e.call(
+                DISPATCHER_ADD_PAIRS,
+                &args![dispatcher, data, count, filter],
+            );
+        }
+        scratch_array_destroy(e, array);
+    });
 }
 
 // Translated from 00cb5c10 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2775,29 +2799,35 @@ pub fn hkp_world_operation_util_remove_entity_bp(e: &mut Engine, world: Ptr, ent
     if e.mem.u32(collidable) == 0 {
         return;
     }
-    // Frame: the pair array 0, the entity slot 0x10.
-    let frame = e.mem.alloc(0x20);
-    e.mem.set_u32(frame + 0x10, entity_addr);
-    let simulation = e.mem.u32(world_addr + WORLD_SIMULATION);
-    e.vcall(
-        simulation,
-        0x20,
-        &args![frame + 0x10, 1u32, world_addr, 1u32],
-    );
-    scratch_array_create(e, frame, world_addr);
-    let broad_phase = e.mem.u32(world_addr + WORLD_BROAD_PHASE);
-    e.vcall(broad_phase, 0x1c, &args![collidable + 0x14, frame]);
-    let count = e.mem.i32(frame + 4);
-    if count > 0 {
-        let dispatcher = e.mem.u32(world_addr + WORLD_DISPATCHER);
-        let data = e.mem.u32(frame);
-        e.call(
-            DISPATCHER_REMOVE_PAIRS,
-            &args![dispatcher, data, count as u32],
+    // The exe's frame (`SUB ESP,0x10`, four pushes): 0x20 bytes, the pair array at +0x10
+    // (00cb5c46). The entity goes to the simulation through its own argument slot, +0x28 past
+    // the return address at +0x20 (`LEA EDX,[ESP+0x34]` after three pushes, 00cb5c39).
+    e.with_stack(0x2c, |e, frame| {
+        let frame = frame.addr();
+        let array = frame + 0x10;
+        let entity_slot = frame + 0x28;
+        e.mem.set_u32(frame + 0x24, world_addr);
+        e.mem.set_u32(entity_slot, entity_addr);
+        let simulation = e.mem.u32(world_addr + WORLD_SIMULATION);
+        e.vcall(
+            simulation,
+            0x20,
+            &args![entity_slot, 1u32, world_addr, 1u32],
         );
-    }
-    scratch_array_destroy(e, frame);
-    e.mem.free(frame);
+        scratch_array_create(e, array, world_addr);
+        let broad_phase = e.mem.u32(world_addr + WORLD_BROAD_PHASE);
+        e.vcall(broad_phase, 0x1c, &args![collidable + 0x14, array]);
+        let count = e.mem.i32(array + 4);
+        if count > 0 {
+            let dispatcher = e.mem.u32(world_addr + WORLD_DISPATCHER);
+            let data = e.mem.u32(array);
+            e.call(
+                DISPATCHER_REMOVE_PAIRS,
+                &args![dispatcher, data, count as u32],
+            );
+        }
+        scratch_array_destroy(e, array);
+    });
 }
 
 // Translated from 00cb5d00 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2805,18 +2835,21 @@ pub fn hkp_world_operation_util_remove_entity_bp(e: &mut Engine, world: Ptr, ent
 /// slot `0x1c`) for the phantom's pairs and removes them on the dispatcher.
 pub fn hkp_world_operation_util_remove_phantom_bp(e: &mut Engine, world: Ptr, phantom: Ptr) {
     let world_addr = world.addr();
-    let frame = e.mem.alloc(0x10);
-    scratch_array_create(e, frame, world_addr);
-    let broad_phase = e.mem.u32(world_addr + WORLD_BROAD_PHASE);
-    e.vcall(broad_phase, 0x1c, &args![phantom.addr() + 0x24, frame]);
-    let count = e.mem.u32(frame + 4);
-    if count != 0 {
-        let dispatcher = e.mem.u32(world_addr + WORLD_DISPATCHER);
-        let data = e.mem.u32(frame);
-        e.call(DISPATCHER_REMOVE_PAIRS, &args![dispatcher, data, count]);
-    }
-    scratch_array_destroy(e, frame);
-    e.mem.free(frame);
+    // The exe's frame (`SUB ESP,0x10`, three pushes): 0x1c bytes, the pair array at +0xc
+    // (00cb5d12).
+    e.with_stack(0x1c, |e, frame| {
+        let array = frame.addr() + 0xc;
+        scratch_array_create(e, array, world_addr);
+        let broad_phase = e.mem.u32(world_addr + WORLD_BROAD_PHASE);
+        e.vcall(broad_phase, 0x1c, &args![phantom.addr() + 0x24, array]);
+        let count = e.mem.u32(array + 4);
+        if count != 0 {
+            let dispatcher = e.mem.u32(world_addr + WORLD_DISPATCHER);
+            let data = e.mem.u32(array);
+            e.call(DISPATCHER_REMOVE_PAIRS, &args![dispatcher, data, count]);
+        }
+        scratch_array_destroy(e, array);
+    });
 }
 
 // Translated from 00cb5dd0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2829,46 +2862,49 @@ pub fn fn_00cb5dd0(e: &mut Engine, world: Ptr, entity: Ptr, out: Ptr) {
     let world_addr = world.addr();
     let entity_addr = entity.addr();
     let island = e.mem.u32(entity_addr + ENTITY_ISLAND);
-    // The inline array (data, size, capacity-and-flags, 16 words of storage).
-    let list = e.mem.alloc(0x50);
-    inplace_array_init(e, list);
-    if e.mem.u16(entity_addr + ENTITY_ACTIONS_SIZE) != 0 {
-        let mut index = 0u32;
-        loop {
-            let actions = e.mem.u32(entity_addr + ENTITY_ACTIONS);
-            let action = e.mem.u32(actions + index * 4);
-            e.vcall(action, 0x10, &args![list]);
-            let count = e.mem.i32(list + 4);
-            let data = e.mem.u32(list);
-            let mut only_fixed_or_this = true;
-            let mut position = 0i32;
-            while position < count {
-                let other = e.mem.u32(data.wrapping_add(position as u32 * 4));
-                if e.mem.u8(other + ENTITY_MOTION_TYPE) as u32 != MOTION_FIXED
-                    && other != entity_addr
-                {
-                    only_fixed_or_this = false;
+    // The inline array (data, size, capacity-and-flags, 16 words of storage). The exe's frame
+    // (`SUB ESP,0x50`, four pushes): 0x60 bytes, the array at +0x14 with its storage at +0x20
+    // (00cb5de8).
+    e.with_stack(0x60, |e, frame| {
+        let list = frame.addr() + 0x14;
+        inplace_array_init(e, list);
+        if e.mem.u16(entity_addr + ENTITY_ACTIONS_SIZE) != 0 {
+            let mut index = 0u32;
+            loop {
+                let actions = e.mem.u32(entity_addr + ENTITY_ACTIONS);
+                let action = e.mem.u32(actions + index * 4);
+                e.vcall(action, 0x10, &args![list]);
+                let count = e.mem.i32(list + 4);
+                let data = e.mem.u32(list);
+                let mut only_fixed_or_this = true;
+                let mut position = 0i32;
+                while position < count {
+                    let other = e.mem.u32(data.wrapping_add(position as u32 * 4));
+                    if e.mem.u8(other + ENTITY_MOTION_TYPE) as u32 != MOTION_FIXED
+                        && other != entity_addr
+                    {
+                        only_fixed_or_this = false;
+                        break;
+                    }
+                    position += 1;
+                }
+                if only_fixed_or_this {
+                    push_word(e, out.addr(), action);
+                    e.call(ADD_REFERENCE, &args![action]);
+                    e.call(ISLAND_REGISTER_ACTION, &args![island, action]);
+                    let flags = e.mem.u8(island + ISLAND_FLAGS_25);
+                    e.mem
+                        .set_u8(island + ISLAND_FLAGS_25, (flags & 0xdf) | 0x10);
+                    mark_island_dirty(e, world_addr, island);
+                }
+                index += 1;
+                if index >= e.mem.u16(entity_addr + ENTITY_ACTIONS_SIZE) as u32 {
                     break;
                 }
-                position += 1;
-            }
-            if only_fixed_or_this {
-                push_word(e, out.addr(), action);
-                e.call(ADD_REFERENCE, &args![action]);
-                e.call(ISLAND_REGISTER_ACTION, &args![island, action]);
-                let flags = e.mem.u8(island + ISLAND_FLAGS_25);
-                e.mem
-                    .set_u8(island + ISLAND_FLAGS_25, (flags & 0xdf) | 0x10);
-                mark_island_dirty(e, world_addr, island);
-            }
-            index += 1;
-            if index >= e.mem.u16(entity_addr + ENTITY_ACTIONS_SIZE) as u32 {
-                break;
             }
         }
-    }
-    array_free_storage(e, list, 4);
-    e.mem.free(list);
+        array_free_storage(e, list, 4);
+    });
 }
 
 // Translated from 00cb5f50 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2886,42 +2922,45 @@ pub fn hkp_world_operation_util_add_actions_to_entitys_island(
     let world_addr = world.addr();
     let entity_addr = entity.addr();
     let island = e.mem.u32(entity_addr + ENTITY_ISLAND);
-    let list = e.mem.alloc(0x50);
-    inplace_array_init(e, list);
-    if e.mem.i32(actions.addr() + 4) > 0 {
-        let mut index = 0u32;
-        loop {
-            let data = e.mem.u32(actions.addr());
-            let action = e.mem.u32(data + index * 4);
-            let fixed_island = e.mem.u32(world_addr + WORLD_FIXED_ISLAND);
-            e.call(ISLAND_ADD_ACTION, &args![island, action]);
-            e.call(REMOVE_REFERENCE, &args![action]);
-            if island != fixed_island {
-                e.mem.set_u32(list + 4, 0);
-                e.vcall(action, 0x10, &args![list]);
-                let mut position = 0i32;
-                while position < e.mem.i32(list + 4) {
-                    let other = e.mem.u32(e.mem.u32(list).wrapping_add(position as u32 * 4));
-                    if other != entity_addr
-                        && e.mem.u8(other + ENTITY_MOTION_TYPE) as u32 != MOTION_FIXED
-                        && e.mem.u8(entity_addr + ENTITY_MOTION_TYPE) as u32 != MOTION_FIXED
-                        && e.mem.u32(other + ENTITY_ISLAND)
-                            != e.mem.u32(entity_addr + ENTITY_ISLAND)
-                    {
-                        let other_world = e.mem.u32(other + ENTITY_WORLD);
-                        e.call(0x00cb_5570, &args![other_world, other, entity_addr]);
+    // The exe's frame (`SUB ESP,0x4c`, four pushes): 0x5c bytes, the action's entity array at
+    // +0x10 with its storage at +0x1c (00cb5f6d).
+    e.with_stack(0x5c, |e, frame| {
+        let list = frame.addr() + 0x10;
+        inplace_array_init(e, list);
+        if e.mem.i32(actions.addr() + 4) > 0 {
+            let mut index = 0u32;
+            loop {
+                let data = e.mem.u32(actions.addr());
+                let action = e.mem.u32(data + index * 4);
+                let fixed_island = e.mem.u32(world_addr + WORLD_FIXED_ISLAND);
+                e.call(ISLAND_ADD_ACTION, &args![island, action]);
+                e.call(REMOVE_REFERENCE, &args![action]);
+                if island != fixed_island {
+                    e.mem.set_u32(list + 4, 0);
+                    e.vcall(action, 0x10, &args![list]);
+                    let mut position = 0i32;
+                    while position < e.mem.i32(list + 4) {
+                        let other = e.mem.u32(e.mem.u32(list).wrapping_add(position as u32 * 4));
+                        if other != entity_addr
+                            && e.mem.u8(other + ENTITY_MOTION_TYPE) as u32 != MOTION_FIXED
+                            && e.mem.u8(entity_addr + ENTITY_MOTION_TYPE) as u32 != MOTION_FIXED
+                            && e.mem.u32(other + ENTITY_ISLAND)
+                                != e.mem.u32(entity_addr + ENTITY_ISLAND)
+                        {
+                            let other_world = e.mem.u32(other + ENTITY_WORLD);
+                            e.call(0x00cb_5570, &args![other_world, other, entity_addr]);
+                        }
+                        position += 1;
                     }
-                    position += 1;
+                }
+                index += 1;
+                if index as i32 >= e.mem.i32(actions.addr() + 4) {
+                    break;
                 }
             }
-            index += 1;
-            if index as i32 >= e.mem.i32(actions.addr() + 4) {
-                break;
-            }
         }
-    }
-    array_free_storage(e, list, 4);
-    e.mem.free(list);
+        array_free_storage(e, list, 4);
+    });
 }
 
 // Translated from 00cb6f70 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -3597,8 +3636,14 @@ mod tests {
         e.mem.set_u8(world + 0x305, 1);
         e.mem.set_u8(world + 0x306, 2);
         e.mem.set_u8(world + 0x307, 3);
-        // Fixed, from a dynamic motion, with a world: frozen at the world's time.
+        // Fixed, from a dynamic motion, with a world: frozen at the world's time. The motion
+        // copy sits at +0x20 of the exe's aligned 0x170-byte frame.
+        let frame = next_aligned_frame(&mut e, 0x170);
         e.call(0x00cb_4230, &args![entity, 5u32, 0u32, 1u32, world]);
+        assert_eq!(
+            calls(&e, KEYFRAMED_MOTION_DESTRUCTOR),
+            vec![vec![frame + 0x20]]
+        );
         assert_eq!(
             calls(&e, FIXED_MOTION_CONSTRUCTOR),
             vec![vec![entity + 0xe0, entity + 0x120, entity + 0x160]]
@@ -4159,6 +4204,99 @@ mod tests {
         assert!(calls(&e, OBJECT_SLOT_20).is_empty());
     }
 
+    /// The next `size`-byte block (the one the frame takes) and its 16-byte boundary.
+    fn next_aligned_frame(e: &mut Engine, size: u32) -> u32 {
+        let block = e.mem.alloc(size + 0x10);
+        e.mem.free(block);
+        (block + 0xf) & !0xf
+    }
+
+    #[test]
+    fn merge_and_update_keep_their_records_at_the_exe_frame_offsets() {
+        let (mut e, _) = rig();
+        stub(
+            &mut e,
+            &[
+                WORLD_ENQUEUE_OPERATION,
+                ENTITY_BATCH_RECALC_AABB,
+                WORLD_RUN_PENDING_OPERATIONS,
+                WORLD_RUN_PENDING_BODY_OPERATIONS,
+                DISPATCHER_REMOVE_DUPLICATES,
+                DISPATCHER_REMOVE_PAIRS,
+                DISPATCHER_ADD_PAIRS,
+            ],
+        );
+        let (world, _, _) = broad_phase_world(&mut e);
+        let entity = e.mem.alloc(0x220);
+        e.mem.set_u32(world + WORLD_LOCK_COUNT, 1);
+        // mergeIslands queues its record at +0x8 of its 0x14-byte frame.
+        let block = e.mem.alloc(0x14);
+        e.mem.free(block);
+        e.call(0x00cb_5570, &args![world, entity, entity]);
+        assert_eq!(calls(&e, WORLD_ENQUEUE_OPERATION)[0][1], block + 8);
+        // updateEntityBP queues its record at +0x18 of its aligned frame.
+        let frame = next_aligned_frame(&mut e, 0x70);
+        e.call(0x00cb_5750, &args![world, entity]);
+        assert_eq!(calls(&e, WORLD_ENQUEUE_OPERATION)[1][1], frame + 0x18);
+        // Unlocked: the handle slot +0x18, the box +0x40, added +0x30, removed +0x20 and the
+        // entity's argument slot +0x6c.
+        e.mem.set_u32(world + WORLD_LOCK_COUNT, 0);
+        e.mem.set_u32(entity + 0x10, 0x7777);
+        e.mem.set_u32(entity + 0x30, 2);
+        e.mem.set_u32(entity + 0x40, 1);
+        let frame = next_aligned_frame(&mut e, 0x70);
+        e.call(0x00cb_5750, &args![world, entity]);
+        assert_eq!(calls(&e, ENTITY_BATCH_RECALC_AABB)[0][1], frame + 0x6c);
+        assert_eq!(
+            calls(&e, OBJECT_SLOT_2C)[0][1..],
+            [frame + 0x18, frame + 0x40, 1, frame + 0x30, frame + 0x20]
+        );
+    }
+
+    #[test]
+    fn the_bp_updates_keep_their_locals_at_the_exe_frame_offsets() {
+        let (mut e, _) = rig();
+        stub(
+            &mut e,
+            &[
+                ENTITY_BATCH_RECALC_AABB,
+                DISPATCHER_ADD_PAIRS,
+                DISPATCHER_REMOVE_PAIRS,
+                PHANTOM_SET_BOUNDING_VOLUME_DATA,
+            ],
+        );
+        let (world, _, _) = broad_phase_world(&mut e);
+        let simulation = object(&mut e, 0x10);
+        e.mem.set_u32(world + WORLD_SIMULATION, simulation);
+        let entity = e.mem.alloc(0x220);
+        e.mem.set_u32(entity + 0x10, 0x7777);
+        // addEntityBP: the entity's argument slot +0x4c, the AABB +0x20, the pairs +0x10.
+        let frame = next_aligned_frame(&mut e, 0x50);
+        e.call(0x00cb_59f0, &args![world, entity]);
+        assert_eq!(calls(&e, ENTITY_BATCH_RECALC_AABB)[0][1], frame + 0x4c);
+        let query = &calls(&e, OBJECT_SLOT_14)[0];
+        assert_eq!((query[2], query[3]), (frame + 0x20, frame + 0x10));
+        // addPhantomBP: the AABB buffer +0x20, the pairs +0x10.
+        let phantom = object(&mut e, 0x40);
+        let frame = next_aligned_frame(&mut e, 0x40);
+        e.call(0x00cb_5b10, &args![world, phantom]);
+        assert_eq!(calls(&e, OBJECT_SLOT_18)[0][1], frame + 0x20);
+        assert_eq!(calls(&e, OBJECT_SLOT_10)[0][3], frame + 0x10);
+        // removeEntityBP: the entity's argument slot +0x28, the pairs +0x10.
+        let block = e.mem.alloc(0x2c);
+        e.mem.free(block);
+        e.call(0x00cb_5c10, &args![world, entity]);
+        assert_eq!(calls(&e, OBJECT_SLOT_20)[0][1], block + 0x28);
+        assert_eq!(e.mem.u32(block + 0x28), entity);
+        assert_eq!(calls(&e, OBJECT_SLOT_1C)[0][2], block + 0x10);
+        // removePhantomBP: the pairs +0xc.
+        e.call_log = Some(Vec::new());
+        let block = e.mem.alloc(0x1c);
+        e.mem.free(block);
+        e.call(0x00cb_5d00, &args![world, phantom]);
+        assert_eq!(calls(&e, OBJECT_SLOT_1C)[0][2], block + 0xc);
+    }
+
     #[test]
     fn remove_phantom_bp_removes_the_pairs() {
         let (mut e, router) = rig();
@@ -4222,7 +4360,11 @@ mod tests {
         });
         let out = e.mem.alloc(12);
         e.mem.set_u32(out + 8, 0x8000_0000);
+        // The exe frame (0x60 bytes) holds the inline array at +0x14.
+        let frame = e.mem.alloc(0x60);
+        e.mem.free(frame);
         e.call(0x00cb_5dd0, &args![world, entity, out]);
+        assert_eq!(calls(&e, OBJECT_SLOT_10)[0][1], frame + 0x14);
         assert_eq!(array_words(&e, out), vec![action_a]);
         assert_eq!(
             calls(&e, ISLAND_REGISTER_ACTION),
@@ -4256,7 +4398,11 @@ mod tests {
         });
         let actions = e.mem.alloc(12);
         word_array(&mut e, actions, &[action]);
+        // The exe frame (0x5c bytes) holds the entity array at +0x10.
+        let frame = e.mem.alloc(0x5c);
+        e.mem.free(frame);
         e.call(0x00cb_5f50, &args![world, entity, actions]);
+        assert_eq!(calls(&e, OBJECT_SLOT_10)[0][1], frame + 0x10);
         assert_eq!(calls(&e, ISLAND_ADD_ACTION), vec![vec![island, action]]);
         assert_eq!(calls(&e, REMOVE_REFERENCE), vec![vec![action]]);
         assert_eq!(calls(&e, 0x00cb_5570), vec![vec![world, other, entity]]);

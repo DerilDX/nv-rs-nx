@@ -755,10 +755,13 @@ pub fn fn_00c6ccc0(e: &mut Engine, out: Ptr, a: Ptr, b: Ptr) {
 
 // Translated from 00c6cce0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// cdecl `(out, a, b)`: `out = a` with its first lane `a.x + b.x` (`ADDSS`).
-pub fn fn_00c6cce0(e: &mut Engine, out: Ptr, a: Ptr, b: Ptr) {
+/// Answers `out` (`MOV EAX,[EBP+8]` before the `RET`): callers read the vector through `EAX`
+/// (00d8cd9f).
+pub fn fn_00c6cce0(e: &mut Engine, out: Ptr, a: Ptr, b: Ptr) -> Ptr {
     let mut v = load4(e, a.addr());
     v[0] += e.mem.f32(b.addr());
     store4(e, out.addr(), v);
+    out
 }
 
 // Translated from 00c6cd00 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -5535,7 +5538,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x00c6_cca0, fn_00c6cca0(Ptr)),
         entry!(0x00c6_ccc0, fn_00c6ccc0(Ptr, Ptr, Ptr)),
-        entry!(0x00c6_cce0, fn_00c6cce0(Ptr, Ptr, Ptr)),
+        entry!(0x00c6_cce0, fn_00c6cce0(Ptr, Ptr, Ptr) -> Ptr),
         entry!(0x00c6_cd00, fn_00c6cd00(Ptr, Ptr)),
         entry!(0x00c6_cd30, fn_00c6cd30(Ptr, Ptr) -> Ptr),
         entry!(0x00c6_cd60, fn_00c6cd60(Ptr, Ptr) -> Ptr),
@@ -5882,6 +5885,16 @@ mod tests {
         let out = e.mem.alloc(0x10);
         fn_00c6cce0(&mut e, Ptr::new(out), Ptr::new(a), Ptr::new(b));
         assert_eq!(load4(&e, out), [7.0, 6.0, 7.0, 8.0]);
+    }
+
+    #[test]
+    fn first_lane_sum_answers_its_out_vector() {
+        let mut e = engine();
+        let a = vec_at(&mut e, [5.0, 6.0, 7.0, 8.0]);
+        let b = vec_at(&mut e, [2.0, 100.0, 100.0, 100.0]);
+        let out = e.mem.alloc(0x10);
+        // `MOV EAX,[EBP+8]` before the RET: the callers read the vector through EAX (00d8cd9f).
+        assert_eq!(e.call(0x00c6_cce0, &args![out, a, b]).u32(), out);
     }
 
     fn filled(e: &mut Engine, words: u32) -> u32 {

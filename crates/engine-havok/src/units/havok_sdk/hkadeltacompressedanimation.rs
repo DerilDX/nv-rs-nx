@@ -252,19 +252,22 @@ pub fn decompress_ov2(
         } else {
             e.mem.u8(widths.addr() + track)
         };
-        let record = e.mem.alloc(12);
-        e.mem.set_u8(record, first_byte);
-        e.mem.set_u8(record + 1, second_byte);
-        e.mem.set_u32(record + 4, from_second);
-        e.mem.set_u32(record + 8, from_first);
-        e.call(
-            EXPAND_REAL,
-            &args![data.addr().wrapping_add(offset), record, dest, frames],
-        );
-        e.call(INVERSE_DELTA_TRANSFORM, &args![dest, frames]);
-        dest = dest.wrapping_add(stride.wrapping_mul(4));
-        let size = e.call(CALC_QUANTIZED_SIZE, &args![frames, record]).u32();
-        e.mem.free(record);
+        // The exe's frame (`SUB ESP,0xc`, four pushes): 0x1c bytes, the quantization record at
+        // +0x10 (00e349d5, 00e34a15).
+        let size = e.with_stack(0x1c, |e, frame| {
+            let record = frame.addr() + 0x10;
+            e.mem.set_u8(record, first_byte);
+            e.mem.set_u8(record + 1, second_byte);
+            e.mem.set_u32(record + 4, from_second);
+            e.mem.set_u32(record + 8, from_first);
+            e.call(
+                EXPAND_REAL,
+                &args![data.addr().wrapping_add(offset), record, dest, frames],
+            );
+            e.call(INVERSE_DELTA_TRANSFORM, &args![dest, frames]);
+            dest = dest.wrapping_add(stride.wrapping_mul(4));
+            e.call(CALC_QUANTIZED_SIZE, &args![frames, record]).u32()
+        });
         track += 1;
         offset = offset.wrapping_add(size);
         if track >= count {
@@ -453,31 +456,34 @@ pub fn get_max_size_of_combined_data_chunks(e: &mut Engine, this: Ptr) -> i32 {
         return 0;
     }
     let static_size = e.mem.u32(a + STATIC_DATA_SIZE).wrapping_add(0xf) & 0xffff_fff0;
-    let chunk = e.mem.alloc(16);
-    let mut block = 0u32;
-    loop {
-        e.mem.set_u32(chunk, 0);
-        e.mem.set_u32(chunk + 4, 0);
-        e.mem.set_u8(chunk + 8, 0);
-        fn_00e34bb0(e, this, block, blocks, Ptr::new(chunk));
-        let mut total = e
-            .mem
-            .u32(chunk + 4)
-            .wrapping_add(static_size)
-            .wrapping_add(0x80);
-        if block < blocks.wrapping_sub(1) {
-            fn_00e34bb0(e, this, block + 1, blocks, Ptr::new(chunk));
-            total = total.wrapping_add(e.mem.u32(chunk + 4));
+    // The exe's frame (`SUB ESP,0x14`, four pushes): 0x24 bytes, the chunk record at +0x18
+    // (00e34cc9..00e34cd1).
+    e.with_stack(0x24, |e, frame| {
+        let chunk = frame.addr() + 0x18;
+        let mut block = 0u32;
+        loop {
+            e.mem.set_u32(chunk, 0);
+            e.mem.set_u32(chunk + 4, 0);
+            e.mem.set_u8(chunk + 8, 0);
+            fn_00e34bb0(e, this, block, blocks, Ptr::new(chunk));
+            let mut total = e
+                .mem
+                .u32(chunk + 4)
+                .wrapping_add(static_size)
+                .wrapping_add(0x80);
+            if block < blocks.wrapping_sub(1) {
+                fn_00e34bb0(e, this, block + 1, blocks, Ptr::new(chunk));
+                total = total.wrapping_add(e.mem.u32(chunk + 4));
+            }
+            if total as i32 > maximum {
+                maximum = total as i32;
+            }
+            block += 1;
+            if block >= blocks {
+                break;
+            }
         }
-        if total as i32 > maximum {
-            maximum = total as i32;
-        }
-        block += 1;
-        if block >= blocks {
-            break;
-        }
-    }
-    e.mem.free(chunk);
+    });
     maximum
 }
 
@@ -663,68 +669,71 @@ pub fn fn_00e35050(e: &mut Engine, this: Ptr) {
             }
         }
     }
-    let stats = e.mem.alloc(0x38);
-    e.call(
-        CALC_DYNAMIC_STATS,
-        &args![
-            values,
-            values.wrapping_add(tracks.wrapping_mul(2)),
-            tracks,
-            floats,
-            stats
-        ],
-    );
-    let stat = |e: &Engine, index: u32| e.mem.u32(stats + 4 * index);
-    let static_total = stat(e, 2)
-        .wrapping_add(stat(e, 3))
-        .wrapping_add(stat(e, 1))
-        .wrapping_add(stat(e, 0));
-    let mut at = e.mem.u32(a + STATIC_FLOATS).wrapping_add(data);
-    let mut done = 0u32;
-    if (static_total as i32) >= 4 {
-        let groups = (static_total.wrapping_sub(4) >> 2) + 1;
-        done = groups * 4;
-        for _ in 0..groups {
-            for lane in 0..4 {
-                swap_float_word(e, at.wrapping_add(4 * lane));
+    // The exe's frame (`SUB ESP,0x48`, four pushes): 0x58 bytes, the dynamic statistics at +0x20
+    // (00e350c9..00e35105).
+    e.with_stack(0x58, |e, frame| {
+        let stats = frame.addr() + 0x20;
+        e.call(
+            CALC_DYNAMIC_STATS,
+            &args![
+                values,
+                values.wrapping_add(tracks.wrapping_mul(2)),
+                tracks,
+                floats,
+                stats
+            ],
+        );
+        let stat = |e: &Engine, index: u32| e.mem.u32(stats + 4 * index);
+        let static_total = stat(e, 2)
+            .wrapping_add(stat(e, 3))
+            .wrapping_add(stat(e, 1))
+            .wrapping_add(stat(e, 0));
+        let mut at = e.mem.u32(a + STATIC_FLOATS).wrapping_add(data);
+        let mut done = 0u32;
+        if (static_total as i32) >= 4 {
+            let groups = (static_total.wrapping_sub(4) >> 2) + 1;
+            done = groups * 4;
+            for _ in 0..groups {
+                for lane in 0..4 {
+                    swap_float_word(e, at.wrapping_add(4 * lane));
+                }
+                at = at.wrapping_add(0x10);
             }
-            at = at.wrapping_add(0x10);
         }
-    }
-    if (done as i32) < (static_total as i32) {
-        for _ in 0..static_total.wrapping_sub(done) {
-            swap_float_word(e, at);
-            at = at.wrapping_add(4);
-        }
-    }
-    let array_total = stat(e, 10)
-        .wrapping_add(stat(e, 9))
-        .wrapping_add(stat(e, 8))
-        .wrapping_add(stat(e, 7));
-    let mut first = e.mem.u32(a + FIRST_FLOAT_ARRAY).wrapping_add(data);
-    let mut second = e.mem.u32(a + SECOND_FLOAT_ARRAY).wrapping_add(data);
-    let mut done = 0u32;
-    if (array_total as i32) >= 4 {
-        let groups = (array_total.wrapping_sub(4) >> 2) + 1;
-        done = groups * 4;
-        for _ in 0..groups {
-            for lane in 0..4 {
-                swap_float_word(e, first.wrapping_add(4 * lane));
-                swap_float_word(e, second.wrapping_add(4 * lane));
+        if (done as i32) < (static_total as i32) {
+            for _ in 0..static_total.wrapping_sub(done) {
+                swap_float_word(e, at);
+                at = at.wrapping_add(4);
             }
-            first = first.wrapping_add(0x10);
-            second = second.wrapping_add(0x10);
         }
-    }
-    if done < array_total {
-        for _ in 0..array_total - done {
-            swap_float_word(e, first);
-            swap_float_word(e, second);
-            first = first.wrapping_add(4);
-            second = second.wrapping_add(4);
+        let array_total = stat(e, 10)
+            .wrapping_add(stat(e, 9))
+            .wrapping_add(stat(e, 8))
+            .wrapping_add(stat(e, 7));
+        let mut first = e.mem.u32(a + FIRST_FLOAT_ARRAY).wrapping_add(data);
+        let mut second = e.mem.u32(a + SECOND_FLOAT_ARRAY).wrapping_add(data);
+        let mut done = 0u32;
+        if (array_total as i32) >= 4 {
+            let groups = (array_total.wrapping_sub(4) >> 2) + 1;
+            done = groups * 4;
+            for _ in 0..groups {
+                for lane in 0..4 {
+                    swap_float_word(e, first.wrapping_add(4 * lane));
+                    swap_float_word(e, second.wrapping_add(4 * lane));
+                }
+                first = first.wrapping_add(0x10);
+                second = second.wrapping_add(0x10);
+            }
         }
-    }
-    e.mem.free(stats);
+        if done < array_total {
+            for _ in 0..array_total - done {
+                swap_float_word(e, first);
+                swap_float_word(e, second);
+                first = first.wrapping_add(4);
+                second = second.wrapping_add(4);
+            }
+        }
+    });
 }
 
 /// One interpolated value: `second * second_weight + first * first_weight`, computed in double
@@ -2052,5 +2061,74 @@ mod tests {
         );
         let stats = calls_to(&calls, CALC_DYNAMIC_STATS);
         assert_eq!(stats[0][..4], [data + 0x40, data + 0x44, 2, 4]);
+    }
+
+    #[test]
+    fn the_decompression_record_sits_at_0x10_of_the_exe_frame() {
+        let mut e = engine();
+        let calls: Calls = Rc::default();
+        expansion(&mut e, &calls, u32::MAX);
+        let records = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&records);
+        e.register_double(CALC_QUANTIZED_SIZE, move |_, a| {
+            sink.borrow_mut().push(a[1]);
+            100u32.into_ret()
+        });
+        let first = e.mem.alloc(8);
+        let second = e.mem.alloc(8);
+        let dest = e.mem.alloc(0x100);
+        let frame = e.mem.alloc(0x1c);
+        e.mem.free(frame);
+        e.call(
+            0x00e3_49c0,
+            &args![
+                dest,
+                1u32,
+                3u32,
+                4u32,
+                0x0907u32,
+                first,
+                second,
+                0u32,
+                0x0777_0000u32
+            ],
+        );
+        assert_eq!(*records.borrow(), vec![frame + 0x10]);
+    }
+
+    #[test]
+    fn the_combined_chunk_record_sits_at_0x18_of_the_exe_frame() {
+        let mut e = engine();
+        let this = chunked(&mut e);
+        e.mem.set_u32(this + NUM_FRAMES, 3);
+        let frame = e.mem.alloc(0x24);
+        e.mem.free(frame);
+        e.call(0x00e3_4c90, &args![this]);
+        // One block: its chunk record (data, size, flag byte) is what `00e34bb0` fills there.
+        let expected = e.mem.alloc(0x10);
+        e.call(0x00e3_4bb0, &args![this, 0u32, 1u32, expected]);
+        assert_eq!(e.mem.u32(frame + 0x18), e.mem.u32(expected));
+        assert_eq!(e.mem.u32(frame + 0x1c), e.mem.u32(expected + 4));
+        assert_eq!(e.mem.u8(frame + 0x20), e.mem.u8(expected + 8));
+    }
+
+    #[test]
+    fn the_swap_statistics_sit_at_0x20_of_the_exe_frame() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x80);
+        let data = e.mem.alloc(0x400);
+        e.mem.set_u32(this + SWAP_FLAG, 4);
+        e.mem.set_u32(this + DATA, data);
+        e.mem.set_u8(data, 1);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&seen);
+        e.register_double(CALC_DYNAMIC_STATS, move |_, a| {
+            sink.borrow_mut().push(a[4]);
+            Ret::default()
+        });
+        let frame = e.mem.alloc(0x58);
+        e.mem.free(frame);
+        e.call(0x00e3_5050, &args![this]);
+        assert_eq!(*seen.borrow(), vec![frame + 0x20]);
     }
 }

@@ -462,7 +462,8 @@ pub fn fn_00e8d450(
         RENDER_STATE_GROUP_SET_00E7F430,
         &args![group, 0x1bu32, 1u32, 1u32],
     );
-    let table = e.call(STATE_TABLE_00E7F7C0, &args![]).u32();
+    // 00e8d495: ECX is the current pass (ESI, `0126f74c`).
+    let table = e.call(STATE_TABLE_00E7F7C0, &args![pass]).u32();
     for (state, keep, index) in [
         (0x13u32, keep_source, source),
         (0x14u32, keep_destination, destination),

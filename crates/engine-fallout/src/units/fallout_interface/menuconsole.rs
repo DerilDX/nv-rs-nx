@@ -248,17 +248,20 @@ pub fn menu_console_print_line(
     format: u32,
     arguments: &[u32],
 ) {
-    let scratch = e.mem.alloc(8);
-    e.call(STRING_CONSTRUCT, &args![scratch]);
-    // The `va_list` is the address of the first argument word.
-    let list = e.mem.alloc(4 * arguments.len().max(1) as u32);
-    for (i, word) in arguments.iter().enumerate() {
-        e.mem.set_u32(list + 4 * i as u32, *word);
-    }
-    fn_0071d0a0(e, this, format, list);
-    e.mem.free(list);
-    e.call(STRING_DESTRUCT, &args![scratch]);
-    e.mem.free(scratch);
+    // The exe's frame (`SUB ESP,0xc` under the exception record, then the record link):
+    // the unused string at `EBP-0x14` (+8). The `va_list` is the argument words.
+    e.with_stack(0x1c, |e, frame| {
+        let scratch = frame.addr() + 0x8;
+        e.call(STRING_CONSTRUCT, &args![scratch]);
+        // The `va_list` is the address of the first argument word.
+        let list = e.mem.alloc(4 * arguments.len().max(1) as u32);
+        for (i, word) in arguments.iter().enumerate() {
+            e.mem.set_u32(list + 4 * i as u32, *word);
+        }
+        fn_0071d0a0(e, this, format, list);
+        e.mem.free(list);
+        e.call(STRING_DESTRUCT, &args![scratch]);
+    });
 }
 
 /// Registry form of [`menu_console_print_line`]: words are `this`, the
@@ -280,89 +283,89 @@ pub fn fn_0071d0a0(e: &mut Engine, this: Ptr<MenuConsole>, format: u32, argument
     if e.call(0x0070_5ea0, &args![]).bool() && !e.call(0x0070_edf0, &args![]).bool() {
         return;
     }
-    let text = e.mem.alloc(8);
-    e.call(STRING_CONSTRUCT, &args![text]);
-    e.call(STRING_FORMAT_LIST, &args![text, format, arguments]);
-    let c_text = e.call(FIRST_MEMBER, &args![text]).u32();
-    e.call(0x0071_dd90, &args![this, c_text]);
-    let size = e.mem.alloc(4);
-    e.mem.set_u32(size, 0x4b0);
-    let unused = e.mem.alloc(4);
-    let font = setting_int(e, CONSOLE_FONT);
-    let fonts = e.call(FONT_ARRAY_GETTER, &args![]).u32();
-    let font_object = e.call(FONT_ARRAY_ELEMENT, &args![fonts, font - 1]).u32();
-    // `Font::LineBreakText` (Xbox PDB) breaks the text in place at the
-    // width and returns the number of lines.
-    let lines = e
-        .call(
-            0x00a1_60c0,
-            &args![font_object, text, size, unused, 0u32, 0u32],
-        )
-        .i32();
-    e.mem.free(size);
-    e.mem.free(unused);
-    if lines == 0 {
-        e.call(STRING_DESTRUCT, &args![text]);
-        e.mem.free(text);
-        return;
-    }
-    // The wrapped text, with a NUL after each line, is copied into a stack
-    // buffer of 1200 bytes (larger when the text is).
-    let length = e.call(STRING_LENGTH, &args![text]).u32();
-    let buffer = e.mem.alloc((length + 1).max(0x4b0));
-    for i in 0..=length {
+    // The exe's frame (`SUB ESP,0x840` under the exception record, then `ESI` and the record
+    // link): the text at `EBP-0x1c` (+0x838), the width at `EBP-0x828` (+0x2c), the unused word
+    // at `EBP-0x10` (+0x844), the line buffer at `EBP-0x824` (+0x30, 0x808 bytes up to the
+    // text; the copy is not bounded), the line at `EBP-0x83c` (+0x18), the removed line at
+    // `EBP-0x848` (+0xc).
+    e.with_stack(0x854, |e, frame| {
+        let text = frame.addr() + 0x838;
+        e.call(STRING_CONSTRUCT, &args![text]);
+        e.call(STRING_FORMAT_LIST, &args![text, format, arguments]);
         let c_text = e.call(FIRST_MEMBER, &args![text]).u32();
-        let byte = e.mem.u8(c_text + i);
-        e.mem.set_u8(buffer + i, byte);
-    }
-    let mut cursor = buffer;
-    let strings = this.addr() + STRINGS_LIST;
-    for index in 0..lines {
-        let mut was_last = false;
-        let count = e.call(LIST_COUNT, &args![strings]).i32();
-        if e.get(this, MenuConsole::iLastString) == count {
-            was_last = true;
+        e.call(0x0071_dd90, &args![this, c_text]);
+        let size = frame.addr() + 0x2c;
+        e.mem.set_u32(size, 0x4b0);
+        let unused = frame.addr() + 0x844;
+        let font = setting_int(e, CONSOLE_FONT);
+        let fonts = e.call(FONT_ARRAY_GETTER, &args![]).u32();
+        let font_object = e.call(FONT_ARRAY_ELEMENT, &args![fonts, font - 1]).u32();
+        // `Font::LineBreakText` (Xbox PDB) breaks the text in place at the
+        // width and returns the number of lines.
+        let lines = e
+            .call(
+                0x00a1_60c0,
+                &args![font_object, text, size, unused, 0u32, 0u32],
+            )
+            .i32();
+        if lines == 0 {
+            e.call(STRING_DESTRUCT, &args![text]);
+            return;
         }
-        let line = e.mem.alloc(8);
-        e.call(STRING_CONSTRUCT, &args![line]);
-        e.call(STRING_ASSIGN, &args![line, cursor]);
-        // Appends the line to the list (`NiTList::AddTail`).
-        e.call(0x0071_df60, &args![strings, line]);
-        if was_last {
-            let count = e.call(LIST_COUNT, &args![strings]).i32();
-            e.set(this, MenuConsole::iLastString, count);
+        // The wrapped text, with a NUL after each line, is copied into the stack
+        // buffer (the exe does not bound the copy).
+        let length = e.call(STRING_LENGTH, &args![text]).u32();
+        let buffer = frame.addr() + 0x30;
+        for i in 0..=length {
+            let c_text = e.call(FIRST_MEMBER, &args![text]).u32();
+            let byte = e.mem.u8(c_text + i);
+            e.mem.set_u8(buffer + i, byte);
         }
-        loop {
+        let mut cursor = buffer;
+        let strings = this.addr() + STRINGS_LIST;
+        for index in 0..lines {
+            let mut was_last = false;
             let count = e.call(LIST_COUNT, &args![strings]).i32();
-            let limit = setting_int(e, CONSOLE_HISTORY_SIZE);
-            if count <= limit {
-                break;
+            if e.get(this, MenuConsole::iLastString) == count {
+                was_last = true;
             }
-            // Removes the first line into a temporary string.
-            let removed = e.mem.alloc(8);
-            e.call(0x0071_dfa0, &args![strings, removed]);
-            e.call(STRING_DESTRUCT, &args![removed]);
-            e.mem.free(removed);
-            let last = e.get(this, MenuConsole::iLastString);
-            e.set(this, MenuConsole::iLastString, last - 1);
-        }
-        if index + 1 < lines {
-            // On to the next NUL-separated line.
-            while e.mem.i8(cursor) != 0 {
+            let line = frame.addr() + 0x18;
+            e.call(STRING_CONSTRUCT, &args![line]);
+            e.call(STRING_ASSIGN, &args![line, cursor]);
+            // Appends the line to the list (`NiTList::AddTail`).
+            e.call(0x0071_df60, &args![strings, line]);
+            if was_last {
+                let count = e.call(LIST_COUNT, &args![strings]).i32();
+                e.set(this, MenuConsole::iLastString, count);
+            }
+            loop {
+                let count = e.call(LIST_COUNT, &args![strings]).i32();
+                let limit = setting_int(e, CONSOLE_HISTORY_SIZE);
+                if count <= limit {
+                    break;
+                }
+                // Removes the first line into a temporary string.
+                let removed = frame.addr() + 0xc;
+                e.call(0x0071_dfa0, &args![strings, removed]);
+                e.call(STRING_DESTRUCT, &args![removed]);
+                let last = e.get(this, MenuConsole::iLastString);
+                e.set(this, MenuConsole::iLastString, last - 1);
+            }
+            if index + 1 < lines {
+                // On to the next NUL-separated line.
+                while e.mem.i8(cursor) != 0 {
+                    cursor += 1;
+                }
                 cursor += 1;
             }
-            cursor += 1;
+            e.call(STRING_DESTRUCT, &args![line]);
         }
-        e.call(STRING_DESTRUCT, &args![line]);
-        e.mem.free(line);
-    }
-    let count = e.call(LIST_COUNT, &args![strings]).i32();
-    if e.get(this, MenuConsole::iLastString) == count {
-        menu_console_refresh_lines(e, this);
-    }
-    e.mem.free(buffer);
-    e.call(STRING_DESTRUCT, &args![text]);
-    e.mem.free(text);
+        let count = e.call(LIST_COUNT, &args![strings]).i32();
+        if e.get(this, MenuConsole::iLastString) == count {
+            menu_console_refresh_lines(e, this);
+        }
+        e.call(STRING_DESTRUCT, &args![text]);
+    });
 }
 
 // Translated from 0071d380 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -537,119 +540,120 @@ const TEXTURE_TYPE: u32 = 0x011f_444c;
 /// rewrites the header buffer instead of formatting a line; and the total
 /// memory reported is always 0.
 pub fn menu_console_dump_textures(e: &mut Engine, this: Ptr<MenuConsole>) {
-    let slots = e.mem.alloc(0x320);
-    e.call(MEMSET, &args![slots, 0u32, 0x320u32]);
-    let mut node = e.call(0x0045_6510, &args![]).u32();
-    while node != 0 {
-        if e.call(0x0043_b300, &args![TEXTURE_TYPE, node]).bool() {
-            let texture = node;
-            let size = e.call(0x0059_bb30, &args![texture]).u32();
-            if size != 0 {
-                let flag = e.call(0x0040_8d60, &args![DUMP_MENU_TEXTURES]).u32();
-                let include_menu_textures = e.mem.u8(flag) != 0;
-                if include_menu_textures || !e.call(0x0071_dca0, &args![this, texture]).bool() {
-                    let mut position = -1i32;
-                    let mut i = 0i32;
-                    while i < 200 && position == -1 {
-                        let slot = e.mem.u32(slots + 4 * i as u32);
-                        if slot == 0 {
-                            position = i;
-                        } else {
-                            e.call(0x0059_bb30, &args![slot]);
+    // The exe's frame (`SUB ESP,0x770` under the exception record, then the record link):
+    // the texture slots at `EBP-0x32c` (+0x454), the text buffer at `EBP-0x754` (+0x2c).
+    e.with_stack(0x780, |e, frame| {
+        let slots = frame.addr() + 0x454;
+        e.call(MEMSET, &args![slots, 0u32, 0x320u32]);
+        let mut node = e.call(0x0045_6510, &args![]).u32();
+        while node != 0 {
+            if e.call(0x0043_b300, &args![TEXTURE_TYPE, node]).bool() {
+                let texture = node;
+                let size = e.call(0x0059_bb30, &args![texture]).u32();
+                if size != 0 {
+                    let flag = e.call(0x0040_8d60, &args![DUMP_MENU_TEXTURES]).u32();
+                    let include_menu_textures = e.mem.u8(flag) != 0;
+                    if include_menu_textures || !e.call(0x0071_dca0, &args![this, texture]).bool() {
+                        let mut position = -1i32;
+                        let mut i = 0i32;
+                        while i < 200 && position == -1 {
+                            let slot = e.mem.u32(slots + 4 * i as u32);
+                            if slot == 0 {
+                                position = i;
+                            } else {
+                                e.call(0x0059_bb30, &args![slot]);
+                            }
+                            i += 1;
                         }
-                        i += 1;
-                    }
-                    if position != -1 {
-                        let mut j = 199i32;
-                        while position < j {
-                            let moved = e.mem.u32(slots + 4 * (j - 1) as u32);
-                            e.mem.set_u32(slots + 4 * j as u32, moved);
-                            j -= 1;
+                        if position != -1 {
+                            let mut j = 199i32;
+                            while position < j {
+                                let moved = e.mem.u32(slots + 4 * (j - 1) as u32);
+                                e.mem.set_u32(slots + 4 * j as u32, moved);
+                                j -= 1;
+                            }
+                            e.mem.set_u32(slots + 4 * position as u32, texture);
                         }
-                        e.mem.set_u32(slots + 4 * position as u32, texture);
                     }
                 }
             }
+            node = e.call(0x0055_b980, &args![node]).u32();
         }
-        node = e.call(0x0055_b980, &args![node]).u32();
-    }
-    let memory = e.call(ALLOCATE, &args![0x158u32]).u32();
-    let file = if memory != 0 {
-        e.call(
-            FILE_CONSTRUCT,
-            &args![memory, TEXTURES_FILE_NAME, 1u32, 0x1000u32, 1u32],
-        )
-        .u32()
-    } else {
-        0
-    };
-    if file == 0 || !e.vcall(file, 0x20, &args![0u32, 0u32]).bool() {
-        e.call(PRINT_TO_CONSOLE, &args![TEXTURES_FILE_FAILED]);
-        e.mem.free(slots);
-        return;
-    }
-    let total_memory = 0u32;
-    let tes: u32 = e.global(TES_SINGLETON);
-    // The worldspace name of the current cell, or "{unknown}".
-    let world_name = if e.call(0x0045_7070, &args![tes]).u32() != 0 {
-        let cell = e.call(0x0045_7070, &args![tes]).u32();
-        if e.call(0x0054_ddd0, &args![cell]).u32() != 0 {
+        let memory = e.call(ALLOCATE, &args![0x158u32]).u32();
+        let file = if memory != 0 {
+            e.call(
+                FILE_CONSTRUCT,
+                &args![memory, TEXTURES_FILE_NAME, 1u32, 0x1000u32, 1u32],
+            )
+            .u32()
+        } else {
+            0
+        };
+        if file == 0 || !e.vcall(file, 0x20, &args![0u32, 0u32]).bool() {
+            e.call(PRINT_TO_CONSOLE, &args![TEXTURES_FILE_FAILED]);
+            return;
+        }
+        let total_memory = 0u32;
+        let tes: u32 = e.global(TES_SINGLETON);
+        // The worldspace name of the current cell, or "{unknown}".
+        let world_name = if e.call(0x0045_7070, &args![tes]).u32() != 0 {
             let cell = e.call(0x0045_7070, &args![tes]).u32();
-            let world = e.call(0x0054_ddd0, &args![cell]).u32();
-            e.call(0x0040_8da0, &args![world + 0x18]).u32()
+            if e.call(0x0054_ddd0, &args![cell]).u32() != 0 {
+                let cell = e.call(0x0045_7070, &args![tes]).u32();
+                let world = e.call(0x0054_ddd0, &args![cell]).u32();
+                e.call(0x0040_8da0, &args![world + 0x18]).u32()
+            } else {
+                UNKNOWN_NAME
+            }
         } else {
             UNKNOWN_NAME
-        }
-    } else {
-        UNKNOWN_NAME
-    };
-    // The name of the current cell, or "{unknown}".
-    let cell_name = if e.call(0x0045_7070, &args![tes]).u32() != 0 {
-        let cell = e.call(0x0045_7070, &args![tes]).u32();
-        e.call(0x0040_8da0, &args![cell + 0x18]).u32()
-    } else {
-        UNKNOWN_NAME
-    };
-    let grid_y = e.call(0x0045_cd60, &args![tes]).u32();
-    let grid_x = e.call(0x0059_bb30, &args![tes]).u32();
-    let buffer = e.mem.alloc(0x400);
-    e.call(
-        SNPRINTF,
-        &args![
-            buffer,
-            0x400u32,
-            TEXTURES_HEADER_FORMAT,
-            cell_name,
-            grid_x,
-            grid_y,
-            world_name
-        ],
-    );
-    let length = e.call(STRING_LENGTH_C, &args![buffer]).u32();
-    e.call(FILE_WRITE, &args![file, buffer, length]);
-    let mut i = 0u32;
-    while i < 200 {
-        let texture = e.mem.u32(slots + 4 * i);
-        if texture == 0 {
-            break;
-        }
-        e.call(0x0059_bb30, &args![texture]);
-        let name = e.vcall(texture, 0x9c, &args![]).u32();
-        e.call(0x0043_b1b0, &args![name]);
+        };
+        // The name of the current cell, or "{unknown}".
+        let cell_name = if e.call(0x0045_7070, &args![tes]).u32() != 0 {
+            let cell = e.call(0x0045_7070, &args![tes]).u32();
+            e.call(0x0040_8da0, &args![cell + 0x18]).u32()
+        } else {
+            UNKNOWN_NAME
+        };
+        let grid_y = e.call(0x0045_cd60, &args![tes]).u32();
+        let grid_x = e.call(0x0059_bb30, &args![tes]).u32();
+        let buffer = frame.addr() + 0x2c;
+        e.call(
+            SNPRINTF,
+            &args![
+                buffer,
+                0x400u32,
+                TEXTURES_HEADER_FORMAT,
+                cell_name,
+                grid_x,
+                grid_y,
+                world_name
+            ],
+        );
         let length = e.call(STRING_LENGTH_C, &args![buffer]).u32();
         e.call(FILE_WRITE, &args![file, buffer, length]);
-        i += 1;
-    }
-    e.call(
-        SNPRINTF,
-        &args![buffer, 0x400u32, TEXTURES_FOOTER_FORMAT, total_memory],
-    );
-    let length = e.call(STRING_LENGTH_C, &args![buffer]).u32();
-    e.call(FILE_WRITE, &args![file, buffer, length]);
-    e.call(FILE_CLOSE, &args![file]);
-    e.call(PRINT_TO_CONSOLE, &args![TEXTURES_DUMPED_MESSAGE]);
-    e.mem.free(buffer);
-    e.mem.free(slots);
+        let mut i = 0u32;
+        while i < 200 {
+            let texture = e.mem.u32(slots + 4 * i);
+            if texture == 0 {
+                break;
+            }
+            e.call(0x0059_bb30, &args![texture]);
+            let name = e.vcall(texture, 0x9c, &args![]).u32();
+            e.call(0x0043_b1b0, &args![name]);
+            let length = e.call(STRING_LENGTH_C, &args![buffer]).u32();
+            e.call(FILE_WRITE, &args![file, buffer, length]);
+            i += 1;
+        }
+        e.call(
+            SNPRINTF,
+            &args![buffer, 0x400u32, TEXTURES_FOOTER_FORMAT, total_memory],
+        );
+        let length = e.call(STRING_LENGTH_C, &args![buffer]).u32();
+        e.call(FILE_WRITE, &args![file, buffer, length]);
+        e.call(FILE_CLOSE, &args![file]);
+        e.call(PRINT_TO_CONSOLE, &args![TEXTURES_DUMPED_MESSAGE]);
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -768,10 +772,10 @@ const TAG_LOOKUP_TABLE: u32 = 0x011f_4428;
 /// Stack frame of `Idle`: the original keeps these locals at fixed distances
 /// below its frame pointer. The values are those distances.
 mod frame {
-    /// Bytes of game memory the frame uses, and where the frame pointer sits
-    /// in them (offsets used are down to -0x28cc).
-    pub const SIZE: u32 = 0x2900;
-    pub const POINTER: u32 = 0x28f0;
+    /// Bytes of the exe's frame (`_chkstk` of 0x28c8 under the exception record, then
+    /// `ESI`, `EDI` and the record link) and where `EBP` sits in them: at its top.
+    pub const SIZE: u32 = 0x28e0;
+    pub const POINTER: u32 = 0x28e0;
     /// The text read back from the debug text (0x808 bytes).
     pub const TYPED_TEXT: i32 = -0x1024;
     /// The command line being edited (0x800 bytes), with its cursor.
@@ -931,10 +935,10 @@ pub fn menu_console_idle(e: &mut Engine, this: Ptr<MenuConsole>, message: u32) -
     if message == 0 {
         return 1;
     }
-    let block = e.mem.alloc(frame::SIZE);
-    let ebp = block + frame::POINTER;
-    idle_message(e, this, message, ebp);
-    e.mem.free(block);
+    e.with_stack(frame::SIZE, |e, block| {
+        let ebp = block.addr() + frame::POINTER;
+        idle_message(e, this, message, ebp);
+    });
     1
 }
 
@@ -2221,9 +2225,14 @@ mod tests {
         e.register(FILE_CLOSE, |_, _| Ret::default());
         e.register(PRINT_TO_CONSOLE, |_, _| Ret::default());
         let console = new_console(&mut e);
-        e.call_log = Some(vec![]);
+        // The 0x780-byte frame: the slots at +0x454, the text buffer at +0x2c.
+        let frame = next_frame(&mut e, 0x780);
         e.call(0x0071_d800, &args![console]);
         let log = e.call_log.take().unwrap();
+        assert_eq!(first_words(&log, MEMSET), vec![frame + 0x454]);
+        assert!(first_words(&log, SNPRINTF)
+            .iter()
+            .all(|a| *a == frame + 0x2c));
         // The header is formatted with the unknown cell and world names and
         // the grid, then one write per kept texture plus header and footer.
         let format = log.iter().find(|(a, _)| *a == SNPRINTF).unwrap();
@@ -2456,13 +2465,18 @@ mod tests {
             *heard.borrow_mut() = read_string(e, a[1]);
             Ret::default()
         });
-        e.call_log = Some(vec![]);
+        // The 0x28e0-byte frame with `EBP` at its top: the command script at `EBP-0x281c`.
+        let frame = next_frame(&mut e, 0x28e0);
         assert_eq!(
             e.call(0x0071_b210, &args![console, MESSAGE_ENTER_LINE])
                 .u32(),
             1
         );
         let log = e.call_log.take().unwrap();
+        assert_eq!(
+            first_words(&log, 0x005a_be50),
+            vec![frame + 0x28e0 - 0x281c]
+        );
         // The line without the cursor was echoed, remembered and compiled.
         assert_eq!(lines_of(&e, console), ["foo"]);
         assert_eq!(inputs_of(&e, console), ["foo"]);
@@ -2701,5 +2715,55 @@ mod tests {
         e.call(0x0071_b210, &args![console, MESSAGE_ENTER_LINE]);
         // The line feed became a space; the one-character line is skipped.
         assert_eq!(*compiled.borrow(), ["one ", "two"]);
+    }
+
+    // ---- the exe's stack frames ----
+
+    /// The block the next `with_stack(size)` takes (the last freed block of that size), with
+    /// the call log switched on.
+    fn next_frame(e: &mut Engine, size: u32) -> u32 {
+        let frame = e.mem.alloc(size);
+        e.mem.free(frame);
+        e.call_log = Some(vec![]);
+        frame
+    }
+
+    fn first_words(log: &[(u32, Vec<u32>)], address: u32) -> Vec<u32> {
+        log.iter()
+            .filter(|(a, _)| *a == address)
+            .map(|(_, w)| w[0])
+            .collect()
+    }
+
+    #[test]
+    fn format_line_keeps_its_locals_at_the_exe_offsets() {
+        let (mut e, _) = console_engine();
+        put_string(&mut e, 0x0106_fcb4, "ab cd");
+        e.register(0x00a1_60c0, |e, a| {
+            let text = e.mem.u32(a[1]);
+            e.mem.set_u8(text + 2, 0);
+            ret(2)
+        });
+        let console = new_console(&mut e);
+        // 0071d0a0 (0x854 bytes): the text at +0x838, the width at +0x2c, the unused word at
+        // +0x844, the lines at +0x18.
+        let frame = next_frame(&mut e, 0x854);
+        e.call(0x0071_d0a0, &args![console, 0x0106_fcb4u32, 0u32]);
+        let log = e.call_log.take().unwrap();
+        let wrap: Vec<u32> = log.iter().find(|(a, _)| *a == 0x00a1_60c0).unwrap().1[1..4].to_vec();
+        assert_eq!(wrap, vec![frame + 0x838, frame + 0x2c, frame + 0x844]);
+        assert_eq!(
+            log.iter()
+                .filter(|(a, _)| *a == 0x0071_df60)
+                .map(|(_, w)| w[1])
+                .collect::<Vec<u32>>(),
+            vec![frame + 0x18; 2]
+        );
+        assert_eq!(lines_of(&e, console), ["ab", "cd"]);
+        // 0071d030 (0x1c bytes): the unused string at +8.
+        let frame = next_frame(&mut e, 0x1c);
+        e.call(0x0071_d030, &args![console, 0x0106_fcb4u32, 7u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(first_words(&log, STRING_CONSTRUCT)[0], frame + 8);
     }
 }

@@ -796,7 +796,8 @@ pub fn bhk_world_assign_collision_group(e: &mut Engine, collidable: Ptr, filter:
     if encoded_group == 0 {
         e.call(0x00c8_5ce0, &args![collidable, group]);
     }
-    true
+    // 00c66f78: AL is BL, set only on the paths that call 00c85ce0.
+    encoded_group == 0
 }
 
 // Translated from 00c66f90 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -843,7 +844,8 @@ pub fn bhk_collision_agent_update(e: &mut Engine, agent: Ptr, filter: Ptr) {
     if collidable != 0 {
         let property = e.vcall(agent.addr(), 0x3c, &[]).u32();
         if property != 0 {
-            let flags = e.mem.u16(filter.addr() + 0x14);
+            // 00c67016: CMP dword ptr [EDI+0x14],0 (the whole word).
+            let flags = e.mem.u32(filter.addr() + 0x14);
             let current = e.mem.u16(property + 0xc);
             e.mem.set_u16(
                 property + 0xc,
@@ -5103,7 +5105,8 @@ mod tests {
         assert!(e.call(0x00c6_6f10, &args![collidable, filter]).bool());
         assert_eq!(e.mem.u32(filter + 0x10), 77);
         e.mem.set_u32(filter + 0x10, 0);
-        assert!(e.call(0x00c6_6f10, &args![collidable, filter]).bool());
+        // An encoded group is stored without the call: AL (BL) stays 0.
+        assert!(!e.call(0x00c6_6f10, &args![collidable, filter]).bool());
         assert_eq!(e.mem.u32(filter + 0x10), 0x1234);
         let groups: Vec<_> = e
             .call_log

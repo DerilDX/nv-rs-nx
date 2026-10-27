@@ -11,10 +11,13 @@ const HIT_FRACTION: u32 = 4;
 /// `hkpKdTreeWorldLinearCaster::hasHit` (Xbox PDB): writes to the byte at `out` whether
 /// `1.0` is greater than the hit fraction at `+4` of the record `this + 0xC` points to
 /// (false for a NaN fraction, as the x87 compare is unordered).
-pub fn hkp_kd_tree_world_linear_caster_has_hit(e: &mut Engine, this: Ptr, out: Ptr) {
+/// Answers `out`: the exe leaves it in `EAX` at every `RET` (the hkBool/hkResult result
+/// returned through a pointer, which callers read through `EAX`).
+pub fn hkp_kd_tree_world_linear_caster_has_hit(e: &mut Engine, this: Ptr, out: Ptr) -> Ptr {
     let record = e.mem.u32(this.addr() + 0xc);
     let found = 1.0f32 > e.mem.f32(record + HIT_FRACTION);
     e.mem.set_u8(out.addr(), u8::from(found));
+    out
 }
 
 // Translated from 00d98420 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -35,12 +38,14 @@ pub fn hkp_kd_tree_world_linear_caster_get_hit_fraction(e: &mut Engine, this: Pt
 /// `dispatcher + (([this + 0x18] + 0xD) << 5) + [object + 0xC]` indexes a table of 20-byte
 /// entries at `dispatcher + 0x9AC`, whose first word is the function, called with
 /// `([this + 0x14], candidate, this + 0x20, [this + 0xC], [this + 0x10])`.
+/// Answers `result`: the exe leaves it in `EAX` at every `RET` (the hkBool result returned
+/// through a pointer), and virtual call sites test the flag through `EAX` (e.g. 00d1b726).
 pub fn hkp_kd_tree_world_linear_caster_add_mid_phase_hit(
     e: &mut Engine,
     this: Ptr,
     result: Ptr,
     candidate: Ptr,
-) {
+) -> Ptr {
     let this = this.addr();
     let candidate = candidate.addr();
     let object = e.mem.u32(candidate);
@@ -66,6 +71,7 @@ pub fn hkp_kd_tree_world_linear_caster_add_mid_phase_hit(
         })
     };
     e.mem.set_u8(result.addr(), u8::from(handed_on));
+    result
 }
 
 /// This unit's translated functions, by exe address.
@@ -73,7 +79,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(
             0x00d9_83f0,
-            hkp_kd_tree_world_linear_caster_has_hit(Ptr, Ptr)
+            hkp_kd_tree_world_linear_caster_has_hit(Ptr, Ptr) -> Ptr
         ),
         entry!(
             0x00d9_8420,
@@ -81,7 +87,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x00d9_8430,
-            hkp_kd_tree_world_linear_caster_add_mid_phase_hit(Ptr, Ptr, Ptr)
+            hkp_kd_tree_world_linear_caster_add_mid_phase_hit(Ptr, Ptr, Ptr) -> Ptr
         ),
     ]
 }
@@ -121,6 +127,15 @@ mod tests {
             assert_eq!(e.mem.u8(out), expected, "fraction bits {bits:08x}");
             assert_eq!(e.mem.u8(out + 1), 0);
         }
+    }
+
+    #[test]
+    fn fn_00d983f0_answers_its_result_pointer() {
+        let mut e = engine();
+        let out = e.mem.alloc(4);
+        let this = caster_with_fraction(&mut e, 0.5f32.to_bits());
+        // EAX is `out` at both RETs (the hkBool result pointer the callers read through).
+        assert_eq!(e.call(0x00d9_83f0, &args![this, out]).u32(), out);
     }
 
     #[test]
@@ -182,6 +197,20 @@ mod tests {
         assert_eq!(
             calls(&log, HANDLER),
             vec![vec![0x5000, candidate, this + 0x20, 0x1111, 0x2222]]
+        );
+    }
+
+    #[test]
+    fn fn_00d98430_answers_its_result_pointer() {
+        let mut e = engine();
+        let log = new_log();
+        let (this, candidate, _filter) = add_hit_setup(&mut e, &log, 1, 0x5000);
+        let result = e.mem.alloc(4);
+        e.mem.set_u8(result, 0xee);
+        // The exe leaves the result pointer in EAX at every RET; callers read through it.
+        assert_eq!(
+            e.call(0x00d9_8430, &args![this, result, candidate]).u32(),
+            args![result][0]
         );
     }
 

@@ -634,71 +634,77 @@ pub fn bs_texture_palette_purge_unused_textures(e: &mut Engine) {
     lock(e);
     let mut removed: i32 = 0;
     e.mem.set_u8(PARTIALLY_PURGED, 0);
-    let iterator_block = e.mem.alloc(0xc);
-    let out = e.mem.alloc(4);
-    let iterator = Ptr::<BSTexMapIterator>::new(iterator_block);
-    if fn_00a616e0(e, iterator) {
-        loop {
-            let class = e.get(iterator, BSTexMapIterator::iPriority);
-            let item = e.get(iterator, BSTexMapIterator::pItem);
-            let map = e
-                .mem
-                .u32(TEX_MAP_ARRAY)
-                .wrapping_add(class.wrapping_mul(MAP_SIZE));
-            let mut more = fn_00a619b0(e, Ptr::new(map), iterator, out);
-            if !more {
-                // Move to the next lower class that has items.
-                loop {
-                    let class_now = e.get(iterator, BSTexMapIterator::iPriority);
-                    if class_now == 0 {
-                        e.set(iterator, BSTexMapIterator::iPriority, u32::MAX);
-                        break;
-                    }
-                    let lower = class_now - 1;
-                    e.set(iterator, BSTexMapIterator::iPriority, lower);
-                    let lower_map = e.mem.u32(TEX_MAP_ARRAY) + lower * MAP_SIZE;
-                    e.set(iterator, BSTexMapIterator::iIndex, 0);
-                    e.set(iterator, BSTexMapIterator::pItem, 0);
-                    if e.get(Ptr::<BSTexMap>::new(lower_map), BSTexMap::iCount) != 0 {
-                        for index in 0..MAP_BUCKETS {
-                            let head = e.mem.u32(lower_map + index * 4);
-                            if head != 0 {
-                                let head_class =
-                                    e.get(Ptr::<BSTexMapItem>::new(head), BSTexMapItem::sPriority);
-                                e.set(iterator, BSTexMapIterator::pItem, head);
-                                e.set(iterator, BSTexMapIterator::iPriority, head_class as u32);
-                                e.set(iterator, BSTexMapIterator::iIndex, index);
-                                break;
+    // The exe's frame (`SUB ESP,0x1c`, one push, three more inside): the base after the first
+    // push holds the iterator at +0x14 (00a61ced) and the answered texture at +0x8 (00a61d2c,
+    // three pushes later); the whole frame is 0x2c bytes, the base 0xc above its bottom.
+    e.with_stack(0x2c, |e, frame| {
+        let base = frame.addr() + 0xc;
+        let iterator_block = base + 0x14;
+        let out = base + 0x8;
+        let iterator = Ptr::<BSTexMapIterator>::new(iterator_block);
+        if fn_00a616e0(e, iterator) {
+            loop {
+                let class = e.get(iterator, BSTexMapIterator::iPriority);
+                let item = e.get(iterator, BSTexMapIterator::pItem);
+                let map = e
+                    .mem
+                    .u32(TEX_MAP_ARRAY)
+                    .wrapping_add(class.wrapping_mul(MAP_SIZE));
+                let mut more = fn_00a619b0(e, Ptr::new(map), iterator, out);
+                if !more {
+                    // Move to the next lower class that has items.
+                    loop {
+                        let class_now = e.get(iterator, BSTexMapIterator::iPriority);
+                        if class_now == 0 {
+                            e.set(iterator, BSTexMapIterator::iPriority, u32::MAX);
+                            break;
+                        }
+                        let lower = class_now - 1;
+                        e.set(iterator, BSTexMapIterator::iPriority, lower);
+                        let lower_map = e.mem.u32(TEX_MAP_ARRAY) + lower * MAP_SIZE;
+                        e.set(iterator, BSTexMapIterator::iIndex, 0);
+                        e.set(iterator, BSTexMapIterator::pItem, 0);
+                        if e.get(Ptr::<BSTexMap>::new(lower_map), BSTexMap::iCount) != 0 {
+                            for index in 0..MAP_BUCKETS {
+                                let head = e.mem.u32(lower_map + index * 4);
+                                if head != 0 {
+                                    let head_class = e.get(
+                                        Ptr::<BSTexMapItem>::new(head),
+                                        BSTexMapItem::sPriority,
+                                    );
+                                    e.set(iterator, BSTexMapIterator::pItem, head);
+                                    e.set(iterator, BSTexMapIterator::iPriority, head_class as u32);
+                                    e.set(iterator, BSTexMapIterator::iIndex, index);
+                                    break;
+                                }
                             }
                         }
+                        more = e.get(iterator, BSTexMapIterator::pItem) != 0;
+                        if more {
+                            break;
+                        }
                     }
-                    more = e.get(iterator, BSTexMapIterator::pItem) != 0;
-                    if more {
-                        break;
+                }
+                let texture = e.mem.u32(out);
+                if texture != 0 && e.mem.u32(texture + 4) == 2 {
+                    let file_entry = e.mem.u32(item + 4);
+                    if file_entry != 0 {
+                        let entry_map = e.mem.u32(ENTRY_MAP);
+                        bs_entry_map_remove(e, Ptr::new(entry_map), file_entry);
                     }
+                    bs_tex_map_remove(e, Ptr::new(map), item);
+                    removed += 1;
+                }
+                if !(more && removed < e.global::<i32>(MAX_TEXTURES_TO_PURGE)) {
+                    break;
                 }
             }
             let texture = e.mem.u32(out);
-            if texture != 0 && e.mem.u32(texture + 4) == 2 {
-                let file_entry = e.mem.u32(item + 4);
-                if file_entry != 0 {
-                    let entry_map = e.mem.u32(ENTRY_MAP);
-                    bs_entry_map_remove(e, Ptr::new(entry_map), file_entry);
-                }
-                bs_tex_map_remove(e, Ptr::new(map), item);
-                removed += 1;
-            }
-            if !(more && removed < e.global::<i32>(MAX_TEXTURES_TO_PURGE)) {
-                break;
+            if texture != 0 {
+                release(e, texture);
             }
         }
-        let texture = e.mem.u32(out);
-        if texture != 0 {
-            release(e, texture);
-        }
-    }
-    e.mem.free(out);
-    e.mem.free(iterator_block);
+    });
     unlock(e);
 }
 
@@ -778,20 +784,23 @@ pub fn bs_texture_palette_remove_texture_ov2(e: &mut Engine, path: u32) -> bool 
     if e.mem.u32(ENTRY_MAP) == 0 {
         return false;
     }
-    let out = e.mem.alloc(4);
-    lock(e);
-    let mut removed = false;
-    if bs_texture_palette_get_texture_ov2(e, path, out) {
+    // The exe's frame (`PUSH ECX` and two pushes): 0xc bytes, the answered texture in the `ECX`
+    // slot at +0x8 (00a61fc5, 00a61fd6).
+    e.with_stack(0xc, |e, frame| {
+        let out = frame.addr() + 8;
+        lock(e);
+        let mut removed = false;
+        if bs_texture_palette_get_texture_ov2(e, path, out) {
+            let texture = e.mem.u32(out);
+            removed = bs_texture_palette_remove_texture(e, texture);
+        }
+        unlock(e);
         let texture = e.mem.u32(out);
-        removed = bs_texture_palette_remove_texture(e, texture);
-    }
-    unlock(e);
-    let texture = e.mem.u32(out);
-    if texture != 0 {
-        release(e, texture);
-    }
-    e.mem.free(out);
-    removed
+        if texture != 0 {
+            release(e, texture);
+        }
+        removed
+    })
 }
 
 // Translated from 00a61590 (PC disassembly, FalloutNV.exe 1.4.0.525)
@@ -1410,6 +1419,25 @@ mod tests {
         assert_eq!(f.refs(wall), 1);
         assert_eq!(f.e.mem.u32(ADD_CRIT), 0);
         assert!(!bs_texture_palette_remove_texture(&mut f.e, wall));
+    }
+
+    #[test]
+    fn purging_and_removing_by_path_keep_their_locals_in_the_exe_frames() {
+        let mut f = Fixture::new();
+        f.init();
+        let only = f.add("small.dds", 64, 0x100);
+        f.e.mem.set_u32(only + 4, 3);
+        f.e.mem.set_u32(MAX_TEXTURES_TO_PURGE, 10);
+        let frame = f.e.mem.alloc(0x2c);
+        f.e.mem.free(frame);
+        bs_texture_palette_purge_unused_textures(&mut f.e);
+        // The answered texture sits at +0x8 of the base 0xc above the frame's bottom.
+        assert_eq!(f.e.mem.u32(frame + 0xc + 8), only);
+        let path = f.string("textures\\small.dds");
+        let frame = f.e.mem.alloc(0xc);
+        f.e.mem.free(frame);
+        assert!(bs_texture_palette_remove_texture_ov2(&mut f.e, path));
+        assert_eq!(f.e.mem.u32(frame + 8), only);
     }
 
     #[test]

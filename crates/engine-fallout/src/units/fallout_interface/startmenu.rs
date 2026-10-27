@@ -663,18 +663,21 @@ pub fn fn_007cb7a0(e: &mut Engine) {
 /// menu, reads `Data\Menus\Options\start_menu.xml` as the menu, installs it as
 /// `StartMenu::pMe` and runs `_Create`. Returns whether the menu was made.
 pub fn start_menu_create(e: &mut Engine, flag_a: u8, flag_b: u8) -> bool {
-    let guard = e.mem.alloc(4);
-    e.call(
-        SCOPE_GUARD_NEW,
-        &args![guard, 0xdu32, 1u32, SOURCE_FILE_NAME, 0x151u32],
-    );
-    let result = start_menu_create_body(e, flag_a, flag_b);
-    e.call(SCOPE_GUARD_DESTROY, &args![guard]);
-    e.mem.free(guard);
-    result
+    // The exe's frame (`SUB ESP,0x50` under the exception record, then `ESI` and the record
+    // link): the scope at `EBP-0x24` (+0x40), the menu list cursor at `EBP-0x28` (+0x3c).
+    e.with_stack(0x64, |e, frame| {
+        let guard = frame.addr() + 0x40;
+        e.call(
+            SCOPE_GUARD_NEW,
+            &args![guard, 0xdu32, 1u32, SOURCE_FILE_NAME, 0x151u32],
+        );
+        let result = start_menu_create_body(e, frame.addr(), flag_a, flag_b);
+        e.call(SCOPE_GUARD_DESTROY, &args![guard]);
+        result
+    })
 }
 
-fn start_menu_create_body(e: &mut Engine, flag_a: u8, flag_b: u8) -> bool {
+fn start_menu_create_body(e: &mut Engine, frame: u32, flag_a: u8, flag_b: u8) -> bool {
     let now = e.call(TICK_COUNT, &args![]).u32();
     e.set_global(TICK_CREATED, now);
     if flag_a != 0 {
@@ -696,7 +699,8 @@ fn start_menu_create_body(e: &mut Engine, flag_a: u8, flag_b: u8) -> bool {
     let root = e.call(MENUS_ROOT_GETTER, &args![manager]).u32();
     let list = root + 4;
     let first = e.call(FIRST_WORD, &args![list]).u32();
-    let blocked = e.with_stack(4, |e, position| {
+    let blocked = 'scan: {
+        let position = Ptr::<()>::new(frame + 0x3c);
         e.mem.set_u32(position.addr(), first);
         while e.mem.u32(position.addr()) != 0 {
             let slot = e
@@ -713,13 +717,13 @@ fn start_menu_create_body(e: &mut Engine, flag_a: u8, flag_b: u8) -> bool {
                 if state == 8 || state == 2 {
                     let stacking = tile_value(e, Ptr::new(tile), TRAIT_STACKING_TYPE);
                     if f64::from(stacking) != e.global::<f64>(STACKING_DOES_NOT_STACK) {
-                        return true;
+                        break 'scan true;
                     }
                 }
             }
         }
         false
-    });
+    };
     if blocked {
         return false;
     }
@@ -907,17 +911,28 @@ const FN_007D3AA0: u32 = 0x007d_3aa0;
 /// (`flag_a` set) or main-menu look (VATS off, background alpha) and plays
 /// the end-credits music when the credits setting is non-zero.
 pub fn start_menu_create_inner(e: &mut Engine, this: Ptr<StartMenu>, flag_a: u8, flag_b: u8) {
-    let guard = e.mem.alloc(4);
-    e.call(
-        SCOPE_GUARD_NEW,
-        &args![guard, 0xdu32, 1u32, SOURCE_FILE_NAME, 0x1aau32],
-    );
-    start_menu_create_inner_body(e, this, flag_a, flag_b);
-    e.call(SCOPE_GUARD_DESTROY, &args![guard]);
-    e.mem.free(guard);
+    // The exe's frame (`SUB ESP,0x2d0` under the exception record, then the record link): the
+    // scope at `EBP-0x120` (+0x1c0), the save path at `EBP-0x11c` (+0x1c4), the find data at
+    // `EBP-0x264` (+0x7c), the tile at `EBP-0x280` (+0x60) and the music name at `EBP-0x2c4`
+    // (+0x1c).
+    e.with_stack(0x2e0, |e, frame| {
+        let guard = frame.addr() + 0x1c0;
+        e.call(
+            SCOPE_GUARD_NEW,
+            &args![guard, 0xdu32, 1u32, SOURCE_FILE_NAME, 0x1aau32],
+        );
+        start_menu_create_inner_body(e, frame.addr(), this, flag_a, flag_b);
+        e.call(SCOPE_GUARD_DESTROY, &args![guard]);
+    });
 }
 
-fn start_menu_create_inner_body(e: &mut Engine, this: Ptr<StartMenu>, flag_a: u8, flag_b: u8) {
+fn start_menu_create_inner_body(
+    e: &mut Engine,
+    frame: u32,
+    this: Ptr<StartMenu>,
+    flag_a: u8,
+    flag_b: u8,
+) {
     let texture_owner = e.global::<u32>(TEXTURE_OWNER);
     e.call(
         CREATE_TEXTURE_IMAGE,
@@ -957,7 +972,8 @@ fn start_menu_create_inner_body(e: &mut Engine, this: Ptr<StartMenu>, flag_a: u8
         &args![this, 0x80u32, u32::from(flag_a == 0)],
     );
 
-    let found = e.with_stack(0x104, |e, path| {
+    let found = {
+        let path = frame + 0x1c4;
         let owner = e.global::<u32>(CALLBACK_OWNER);
         if owner != 0 {
             e.call(SAVE_MANAGER_PATH, &args![owner, path]);
@@ -970,12 +986,11 @@ fn start_menu_create_inner_body(e: &mut Engine, this: Ptr<StartMenu>, flag_a: u8
         }
         e.call(STRING_APPEND, &args![path, 0x104u32, TEXT_PATH_SEPARATOR]);
         e.call(STRING_APPEND, &args![path, 0x104u32, TEXT_SAVE_PATTERN]);
-        e.with_stack(0x144, |e, data| {
-            let handle = e.call(FIND_FIRST_FILE, &args![path, data]).u32();
-            e.call(FIND_CLOSE, &args![handle]);
-            handle != 0xffff_ffff
-        })
-    });
+        let data = frame + 0x7c;
+        let handle = e.call(FIND_FIRST_FILE, &args![path, data]).u32();
+        e.call(FIND_CLOSE, &args![handle]);
+        handle != 0xffff_ffff
+    };
 
     let count = e.call(ARRAY_SIZE, &args![OPTIONS_ARRAY]).u32();
     let mut index = 0;
@@ -1110,10 +1125,9 @@ fn start_menu_create_inner_body(e: &mut Engine, this: Ptr<StartMenu>, flag_a: u8
                     let menu = e.call(TILE_GET_MENU, &args![tile]).u32();
                     if e.call(MENU_FADE_STATE, &args![menu]).u32() == 1 {
                         e.call(TILE_SET_INT, &args![tile, TRAIT_VISIBLE, 0u32]);
-                        e.with_stack(4, |e, cell| {
-                            e.mem.set_u32(cell.addr(), tile);
-                            e.call(POINTER_LIST_ADD, &args![SCRIPT_LIST, cell]);
-                        });
+                        let cell = frame + 0x60;
+                        e.mem.set_u32(cell, tile);
+                        e.call(POINTER_LIST_ADD, &args![SCRIPT_LIST, cell]);
                     }
                 }
             }
@@ -1151,7 +1165,8 @@ fn start_menu_create_inner_body(e: &mut Engine, this: Ptr<StartMenu>, flag_a: u8
         let menu = e.global::<u32>(START_MENU);
         e.call(MENU_FLAGS_SET, &args![menu, 0x10000u32, 1u32]);
         e.call(MENU_FLAGS_SET, &args![menu, 0x4000_0000u32, 1u32]);
-        e.with_stack(0x44, |e, name| {
+        {
+            let name = frame + 0x1c;
             e.call(MEMSET, &args![name, 0u32, 0x40u32]);
             e.call(
                 STRING_COPY_NARROW,
@@ -1162,7 +1177,7 @@ fn start_menu_create_inner_body(e: &mut Engine, this: Ptr<StartMenu>, flag_a: u8
                 &args![8u32, name, 0x7d0u32, 1u32, 1u32, 0.0f32, 0u32],
             );
             e.call(MEDIA_FINISH, &args![]);
-        });
+        }
     }
     let menu = start_menu_global(e);
     if !menu_flag(e, menu, 1) {
@@ -1578,6 +1593,7 @@ const LIST_BOX_SELECT: u32 = 0x007d_7a80;
 /// and `007d6160`/`007d6d70` (on the menu): follow-up refreshes.
 const OPTIONS_LIST_HAS_SELECTION: u32 = 0x007d_7630;
 const MENU_REFRESH_A: u32 = 0x007d_6160;
+/// Takes no `this`: none of its 4 exe callers (007cec93, 007cfbab ...) sets ECX.
 const MENU_REFRESH_B: u32 = 0x007d_6d70;
 /// `Interface::ShowMessageBox`-like call made when defaults are reset in the
 /// controls list (`00703e80`, cdecl, 11 words): text, then `0, 0,
@@ -1801,7 +1817,7 @@ pub fn start_menu_do_click(e: &mut Engine, this: Ptr<StartMenu>, code: i32, tile
         e.call(LIST_BOX_DESELECT_ALL, &args![this.byte_add(0x84), 1u32]);
         fade(e, this.cast(), 5, 0);
         if menu_flag(e, this.cast(), 2) {
-            e.call(MENU_REFRESH_B, &args![this]);
+            e.call(MENU_REFRESH_B, &args![]);
             e.call(MENU_FLAGS_SET, &args![this, 2u32, 0u32]);
         }
     }
@@ -1870,9 +1886,11 @@ pub fn start_menu_do_click(e: &mut Engine, this: Ptr<StartMenu>, code: i32, tile
     {
         let getter = e.call(DLC_GETTER, &args![]).u32();
         let step = e.call(DLC_STEP_A, &args![getter]).u32();
-        let instance = e.call(DLC_INSTANCE, &args![step]).u32();
+        // 007ceedd pushes `step` before the no-argument getter 00af2640; the
+        // word is popped by 00af28f0 (RET 4, which never reads it).
+        let instance = e.call(DLC_INSTANCE, &args![]).u32();
         let next = e.call(DLC_STEP_B, &args![instance]).u32();
-        e.call(DLC_OPEN, &args![next]);
+        e.call(DLC_OPEN, &args![next, step]);
     }
     let parent = e.call(TILE_PARENT, &args![tile]).u32();
     let item = e
@@ -2516,12 +2534,12 @@ pub fn start_menu_do_idle(e: &mut Engine, this: Ptr<StartMenu>) {
                     e.call(MENU_FLAGS_SET, &args![this, 0x8000u32, 1u32]);
                     let now = e.call(TICK_COUNT, &args![]).u32();
                     e.set_global(FADE_DEADLINE, now.wrapping_add(3000));
-                    e.call(MENU_REFRESH_D, &args![this]);
+                    e.call(MENU_REFRESH_D, &args![]);
                     shown = true;
                 }
             }
             if !shown && e.call(MESSAGE_MENU_ACTIVE, &args![]).u32() == 0 {
-                e.call(MENU_REFRESH_D, &args![this]);
+                e.call(MENU_REFRESH_D, &args![]);
                 e.call(MENU_FLAGS_SET, &args![this, 0x4000u32, 0u32]);
                 e.call(MENU_FLAGS_SET, &args![this, 2u32, 0u32]);
             }
@@ -2656,68 +2674,74 @@ pub fn fn_007cfe40(e: &mut Engine, tile: Ptr, item: Ptr) {
     if menu.is_null() {
         return;
     }
-    let text = Ptr::new(e.mem.alloc(8));
-    e.call(STRING_NEW, &args![text]);
-    e.call(TILE_SET_INT, &args![tile, TRAIT_USER_0, 1u32]);
-    let mode = control_mode(e, menu);
-    let value = e.mem.u32(item.addr() + 0xc);
-    let main = e.global::<u32>(MAIN_OBJECT);
-    let input = e.call(INPUT_OBJECT_GETTER, &args![main]).u32();
-    let key = e.call(KEY_LOOKUP, &args![input, value, mode]).u8();
-    let key_word = u32::from(key);
-    let menu = start_menu_global(e);
-    let table_name = |e: &mut Engine, table: u32| -> Option<u32> {
-        let setting = e.mem.u32(table + 4 * key_word);
-        if setting == 0 {
-            None
-        } else {
-            Some(e.call(SETTING_STRING, &args![setting]).u32())
-        }
-    };
-    if key == 0xff {
-        e.call(STRING_SET, &args![text, TEXT_EMPTY, 0u32]);
-    } else if mode == 0 && key_word < 0xee && e.mem.u32(KEY_NAMES_KEYBOARD + 4 * key_word) != 0 {
-        let name = table_name(e, KEY_NAMES_KEYBOARD).unwrap_or(0);
-        format_key_text(e, text, FORMAT_STRING, name);
-    } else if control_mode(e, menu) == 1
-        && key_word < 9
-        && e.mem.u32(KEY_NAMES_MOUSE + 4 * key_word) != 0
-    {
-        let name = table_name(e, KEY_NAMES_MOUSE).unwrap_or(0);
-        format_key_text(e, text, FORMAT_STRING, name);
-    } else if control_mode(e, menu) == 2 {
+    // The exe's frame (`SUB ESP,0x14` under the exception record, then `ESI` and the record
+    // link): the text at `EBP-0x14` (+0x14).
+    e.with_stack(0x28, |e, frame| {
+        let text = Ptr::new(frame.addr() + 0x14);
+        e.call(STRING_NEW, &args![text]);
+        e.call(TILE_SET_INT, &args![tile, TRAIT_USER_0, 1u32]);
+        let mode = control_mode(e, menu);
+        let value = e.mem.u32(item.addr() + 0xc);
+        let main = e.global::<u32>(MAIN_OBJECT);
         let input = e.call(INPUT_OBJECT_GETTER, &args![main]).u32();
-        let count = e.call(CONTROL_COUNT, &args![input, 0u32]).i32();
-        if (key_word as i32) < count {
-            let name = e.call(SETTING_STRING, &args![SETTING_KEY_NUMBER]).u32();
-            e.call(
-                STRING_FORMAT,
-                &args![text, FORMAT_STRING_NUMBER, name, key_word + 1],
-            );
-        } else if (0x20..0x28).contains(&key_word) && e.mem.u32(KEY_NAMES_PAD + 4 * key_word) != 0 {
-            let name = table_name(e, KEY_NAMES_PAD).unwrap_or(0);
-            format_key_text(e, text, FORMAT_STRING, name);
-        } else {
-            e.call(STRING_SET, &args![text, TEXT_EMPTY, 0u32]);
-        }
-    } else if control_mode(e, menu) == 3 {
-        match GLOW_BUTTON_NAMES.iter().find(|(id, _)| *id == key_word) {
-            Some((_, name)) => {
-                format_key_text(e, text, FORMAT_GLOW_BUTTON, *name);
-                e.call(TILE_SET_INT, &args![tile, TRAIT_USER_0, 2u32]);
+        let key = e.call(KEY_LOOKUP, &args![input, value, mode]).u8();
+        let key_word = u32::from(key);
+        let menu = start_menu_global(e);
+        let table_name = |e: &mut Engine, table: u32| -> Option<u32> {
+            let setting = e.mem.u32(table + 4 * key_word);
+            if setting == 0 {
+                None
+            } else {
+                Some(e.call(SETTING_STRING, &args![setting]).u32())
             }
-            None => format_key_text(e, text, FORMAT_NUMBER, key_word),
+        };
+        if key == 0xff {
+            e.call(STRING_SET, &args![text, TEXT_EMPTY, 0u32]);
+        } else if mode == 0 && key_word < 0xee && e.mem.u32(KEY_NAMES_KEYBOARD + 4 * key_word) != 0
+        {
+            let name = table_name(e, KEY_NAMES_KEYBOARD).unwrap_or(0);
+            format_key_text(e, text, FORMAT_STRING, name);
+        } else if control_mode(e, menu) == 1
+            && key_word < 9
+            && e.mem.u32(KEY_NAMES_MOUSE + 4 * key_word) != 0
+        {
+            let name = table_name(e, KEY_NAMES_MOUSE).unwrap_or(0);
+            format_key_text(e, text, FORMAT_STRING, name);
+        } else if control_mode(e, menu) == 2 {
+            let input = e.call(INPUT_OBJECT_GETTER, &args![main]).u32();
+            let count = e.call(CONTROL_COUNT, &args![input, 0u32]).i32();
+            if (key_word as i32) < count {
+                let name = e.call(SETTING_STRING, &args![SETTING_KEY_NUMBER]).u32();
+                e.call(
+                    STRING_FORMAT,
+                    &args![text, FORMAT_STRING_NUMBER, name, key_word + 1],
+                );
+            } else if (0x20..0x28).contains(&key_word)
+                && e.mem.u32(KEY_NAMES_PAD + 4 * key_word) != 0
+            {
+                let name = table_name(e, KEY_NAMES_PAD).unwrap_or(0);
+                format_key_text(e, text, FORMAT_STRING, name);
+            } else {
+                e.call(STRING_SET, &args![text, TEXT_EMPTY, 0u32]);
+            }
+        } else if control_mode(e, menu) == 3 {
+            match GLOW_BUTTON_NAMES.iter().find(|(id, _)| *id == key_word) {
+                Some((_, name)) => {
+                    format_key_text(e, text, FORMAT_GLOW_BUTTON, *name);
+                    e.call(TILE_SET_INT, &args![tile, TRAIT_USER_0, 2u32]);
+                }
+                None => format_key_text(e, text, FORMAT_NUMBER, key_word),
+            }
+        } else {
+            format_key_text(e, text, FORMAT_NUMBER, key_word);
         }
-    } else {
-        format_key_text(e, text, FORMAT_NUMBER, key_word);
-    }
-    let characters = e.call(FIRST_WORD, &args![text]).u32();
-    e.call(
-        TILE_SET_STRING,
-        &args![tile, TRAIT_USER_1, characters, 1u32],
-    );
-    e.call(STRING_DESTROY, &args![text]);
-    e.mem.free(text.addr());
+        let characters = e.call(FIRST_WORD, &args![text]).u32();
+        e.call(
+            TILE_SET_STRING,
+            &args![tile, TRAIT_USER_1, characters, 1u32],
+        );
+        e.call(STRING_DESTROY, &args![text]);
+    });
 }
 
 // Translated from 007d01b0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -5337,6 +5361,13 @@ mod tests {
     /// An engine whose every external callee is a recording double
     /// returning 0, with the tile trait getters and setters backed by a
     /// table and `Tile::TextToTrait` returning the address of its name.
+    /// The block the next `with_stack(size)` takes (the last freed block of that size).
+    fn next_frame(e: &mut Engine, size: u32) -> u32 {
+        let frame = e.mem.alloc(size);
+        e.mem.free(frame);
+        frame
+    }
+
     fn rig() -> Rig {
         let mut r = Rig {
             e: Engine::new(),
@@ -6023,7 +6054,10 @@ mod tests {
         let (menu, tile) = create_scene(&mut r);
         r.set_tile(tile, TRAIT_STACKING_TYPE, 6006.0);
         r.e.mem.set_f64(STACKING_NO_CLICK_PAST_DONE, 6006.0);
+        let frame = next_frame(&mut r.e, 0x64);
         assert!(r.e.call(0x007c_b7d0, &args![0u32, 0u32]).bool());
+        // The 0x64-byte frame: the scope at +0x40.
+        assert_eq!(r.calls_to(SCOPE_GUARD_NEW)[0][0], frame + 0x40);
         assert_eq!(r.e.global::<u32>(START_MENU), menu);
         assert_eq!(r.e.global::<u32>(TICK_CREATED), 777);
         // Flag a clear and the loading byte clear: the loading menu is set up.
@@ -6214,7 +6248,17 @@ mod tests {
     fn create_inner_sets_the_flags_and_initialises_the_six_lists() {
         let mut r = rig();
         let menu = inner_scene(&mut r);
+        let frame = next_frame(&mut r.e, 0x2e0);
         r.e.call(0x007c_baf0, &args![menu, 1u32, 0u32]);
+        // The 0x2e0-byte frame: the scope at +0x1c0, the save path at +0x1c4, the find data at +0x7c.
+        assert_eq!(
+            r.calls_to(SCOPE_GUARD_NEW).last().unwrap()[0],
+            frame + 0x1c0
+        );
+        assert_eq!(
+            r.calls_to(FIND_FIRST_FILE),
+            vec![vec![frame + 0x1c4, frame + 0x7c]]
+        );
         let flags = r.e.get(menu, StartMenu::uiFlags);
         // Flag a: bit 1 set; flag b: bit 4 clear; loading byte clear: 0x10.
         assert_eq!(flags & 0x15, 0x11);
@@ -7404,10 +7448,13 @@ mod tests {
         items(&mut r, &[(downloads, 0x9000, 0xffff_ffff)]);
         r.stub(DLC_GETTER, 1);
         r.with(DLC_STEP_A, |_, a| eax(a[0] + 1));
-        r.with(DLC_INSTANCE, |_, a| eax(a[0] + 1));
+        r.with(DLC_INSTANCE, |_, a| {
+            assert!(a.is_empty());
+            eax(3)
+        });
         r.with(DLC_STEP_B, |_, a| eax(a[0] + 1));
         r.e.call(0x007c_e9b0, &args![menu, 9i32, 0x9000u32]);
-        assert_eq!(r.calls_to(DLC_OPEN), vec![vec![4]]);
+        assert_eq!(r.calls_to(DLC_OPEN), vec![vec![4, 2]]);
     }
 
     /// A user option: value, default, count, type, change function.
@@ -8341,7 +8388,10 @@ mod tests {
     fn key_label_of_an_unbound_control_is_empty() {
         let mut r = rig();
         let (_, tile, item) = label_scene(&mut r, 0, 0xff);
+        let frame = next_frame(&mut r.e, 0x28);
         r.e.call(0x007c_fe40, &args![tile, item]);
+        // The 0x28-byte frame: the text at +0x14.
+        assert_eq!(r.calls_to(STRING_SET)[0][0], frame + 0x14);
         // The tile is flagged and receives the (empty) string.
         assert_eq!(r.tile(tile, TRAIT_USER_0), 1.0);
         assert_eq!(r.calls_to(KEY_LOOKUP), vec![vec![0x7e7e, 0x66, 0]]);

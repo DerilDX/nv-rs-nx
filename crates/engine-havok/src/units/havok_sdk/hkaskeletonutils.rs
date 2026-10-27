@@ -534,6 +534,7 @@ pub fn fn_00cde2d0(e: &mut Engine, skeleton: Ptr, poses: u32, out: u32) {
 /// ended on is not negative. `stop` and `start` are the raw words of the arguments (only the
 /// low 16 bits are used; the push reads them from memory, as the exe passes the address of the
 /// argument slots).
+/// Answers `found` (`EAX` at the `RET`; callers test the flag through it, 00ce37ca).
 pub fn hka_skeleton_utils_get_bone_chain(
     e: &mut Engine,
     found: u32,
@@ -541,7 +542,7 @@ pub fn hka_skeleton_utils_get_bone_chain(
     stop: u32,
     start: u32,
     chain: u32,
-) {
+) -> u32 {
     let skeleton = skeleton.addr();
     e.with_stack(8, |e, slots| {
         let start_slot = slots.addr();
@@ -569,6 +570,7 @@ pub fn hka_skeleton_utils_get_bone_chain(
         e.call(PUSH_BACK, &args![chain, allocator, 0u32, stop_slot]);
         e.mem.set_u8(found, u8::from(bone as u16 as i16 >= 0));
     });
+    found
 }
 
 /// `hkArray<i16>::pushBack`: the room for one more element is made through `00c90940` when the
@@ -771,7 +773,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00cd_e2d0, fn_00cde2d0(Ptr, u32, u32)),
         entry!(
             0x00cd_e3d0,
-            hka_skeleton_utils_get_bone_chain(u32, Ptr, u32, u32, u32)
+            hka_skeleton_utils_get_bone_chain(u32, Ptr, u32, u32, u32) -> u32
         ),
         entry!(
             0x00cd_e450,
@@ -1458,6 +1460,21 @@ mod tests {
         e.call(0x00cd_e3d0, &args![found, skeleton, 5u32, 0u32, chain]);
         assert_eq!(array_words(&e, chain), vec![5]);
         assert_eq!(e.mem.u8(found), 1);
+    }
+
+    #[test]
+    fn get_bone_chain_answers_its_flag_pointer() {
+        let mut e = engine();
+        install_router(&mut e, 0x0500_0000, 0x1234);
+        install_array_insert(&mut e);
+        let skeleton = make_skeleton(&mut e, &[0xffff, 0, 1, 2], &[0; 4]);
+        let found = e.mem.alloc(4);
+        let chain = make_array(&mut e, 8);
+        // EAX is `found` at the RET; the callers test the flag through it (00ce37ca).
+        let answered = e
+            .call(0x00cd_e3d0, &args![found, skeleton, 1u32, 3u32, chain])
+            .u32();
+        assert_eq!(answered, found);
     }
 
     #[test]

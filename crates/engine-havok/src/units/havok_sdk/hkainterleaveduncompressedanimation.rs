@@ -18,6 +18,22 @@ use crate::prelude::*;
 use crate::units::havok_sdk::hkadeltacompressedanimation::profile_record;
 use crate::units::havok_sdk::hkpsphereshape::{load_vec, store_vec, zip_with, Vec4};
 
+/// Runs `f` on an exe-shaped frame: a function that aligns `ESP` (`AND ESP,0xfffffff0`) and
+/// then reserves `below` bytes (its `SUB ESP` and pushes) has its frame `below` bytes under a
+/// 16-byte boundary; `f` gets the frame's lowest address.
+fn with_aligned_frame<R>(e: &mut Engine, below: u32, f: impl FnOnce(&mut Engine, u32) -> R) -> R {
+    e.with_stack(below + 0x10, |e, raw| {
+        let boundary = (raw.addr() + below + 0xf) & !0xf;
+        f(e, boundary - below)
+    })
+}
+
+/// The frame base [`with_aligned_frame`] picks for a block at `raw` (tests).
+#[cfg(test)]
+fn aligned_frame_at(raw: u32, below: u32) -> u32 {
+    ((raw + below + 0xf) & !0xf) - below
+}
+
 /// `hkaAnimation::getFrameAndDelta` (`00e2f7c0`, `this`, `(time, frame pointer, delta pointer)`).
 const GET_FRAME_AND_DELTA: u32 = 0x00e2_f7c0;
 /// The quaternion step both blending functions end with (`005611c0`, `this` = the quaternion).
@@ -430,23 +446,26 @@ pub fn sample_partial_tracks(
     } else {
         let (frame, delta) = frame_and_delta(e, a, time);
         let delta = x87_quiet(delta);
-        let chunks = e.mem.alloc(0x24);
-        for offset in [8u32, 0x14, 0x20] {
-            e.mem.set_u8(chunks + offset, 0);
-        }
-        e.vcall(a, SLOT_GET_DATA_CHUNKS, &args![frame, delta, chunks, 3u32]);
-        sample_partial_with_data_chunks(
-            e,
-            frame,
-            delta,
-            num_transforms,
-            transforms_out,
-            num_floats,
-            floats_out,
-            Ptr::new(chunks),
-            3,
-        );
-        e.mem.free(chunks);
+        // The exe aligns ESP, then `SUB ESP,0x34` and three pushes: a 0x40-byte frame, the three
+        // chunk records at +0x1c (00e40138..00e4015e).
+        with_aligned_frame(e, 0x40, |e, stack| {
+            let chunks = stack + 0x1c;
+            for offset in [8u32, 0x14, 0x20] {
+                e.mem.set_u8(chunks + offset, 0);
+            }
+            e.vcall(a, SLOT_GET_DATA_CHUNKS, &args![frame, delta, chunks, 3u32]);
+            sample_partial_with_data_chunks(
+                e,
+                frame,
+                delta,
+                num_transforms,
+                transforms_out,
+                num_floats,
+                floats_out,
+                Ptr::new(chunks),
+                3,
+            );
+        });
     }
     profile_record(e, LABEL_END);
 }
@@ -1030,5 +1049,27 @@ mod tests {
             labels(&e, stream, records),
             [LABEL_SAMPLE, LABEL_END, LABEL_SAMPLE, LABEL_END]
         );
+    }
+
+    #[test]
+    fn the_partial_chunks_sit_at_0x1c_of_the_aligned_frame() {
+        let mut e = engine();
+        let calls: Calls = Rc::default();
+        profile(&mut e);
+        quaternion_step(&mut e, &calls);
+        answer_frame(&mut e, &calls, 1, 0.25);
+        let anim = partial_scene(&mut e);
+        let transforms_out = output(&mut e, 24);
+        let floats_out = output(&mut e, 4);
+        let raw = e.mem.alloc(0x50);
+        e.mem.free(raw);
+        e.call(
+            0x00e3_ffc0,
+            &args![anim, 1.0f32, 2u32, transforms_out, 3u32, floats_out, 0u32],
+        );
+        // The first chunk record's data pointer is the animation's frame data.
+        let frame = aligned_frame_at(raw, 0x40);
+        assert_ne!(e.mem.u32(frame + 0x1c), 0);
+        assert_eq!(e.mem.u8(frame + 0x1c + 8), 0);
     }
 }

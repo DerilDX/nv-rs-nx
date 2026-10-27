@@ -349,17 +349,20 @@ pub fn hk_solver_allocator_buf_free(e: &mut Engine, this: Ptr, block: u32, size:
             return;
         }
     }
-    let pair = e.mem.alloc(8);
-    e.mem.set_u32(pair, block);
-    e.mem.set_u32(pair + 4, size);
-    fn_00d5eda0(
-        e,
-        Ptr::new(base + 0x18),
-        0,
-        index.wrapping_add(1) as u32,
-        pair,
-    );
-    e.mem.free(pair);
+    // The exe's frame (`SUB ESP,0x8`, four pushes): 0x18 bytes, the inserted pair at +0x10
+    // (00d5ec96).
+    e.with_stack(0x18, |e, frame| {
+        let pair = frame.addr() + 0x10;
+        e.mem.set_u32(pair, block);
+        e.mem.set_u32(pair + 4, size);
+        fn_00d5eda0(
+            e,
+            Ptr::new(base + 0x18),
+            0,
+            index.wrapping_add(1) as u32,
+            pair,
+        );
+    });
     e.call(LEAVE_CRITICAL_SECTION, &args![section]);
 }
 
@@ -791,10 +794,17 @@ mod tests {
         let list = [(0x1_1000, 0x40), (0x1_5000, 0x80)];
         let (mut e, this) = allocator(&FIELDS, &list);
         e.call_log = Some(vec![]);
+        // The inserted pair sits at +0x10 of the exe's 0x18-byte frame.
+        let frame = e.mem.alloc(0x18);
+        e.mem.free(frame);
         free(&mut e, this, 0x1_3000, 0x100);
         assert_eq!(
             free_list(&e, this),
             vec![(0x1_1000, 0x40), (0x1_3000, 0x100), (0x1_5000, 0x80)]
+        );
+        assert_eq!(
+            (e.mem.u32(frame + 0x10), e.mem.u32(frame + 0x14)),
+            (0x1_3000, 0x100)
         );
         let inserted: Vec<_> = e
             .call_log

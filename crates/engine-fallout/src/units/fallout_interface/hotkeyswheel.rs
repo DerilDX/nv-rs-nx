@@ -251,39 +251,41 @@ fn biped_model(e: &mut Engine, entry: u32) -> u32 {
 /// prints a warning and leaves the object untouched.
 // Translation incomplete: 00701610 - the C++ exception-unwinding frame (FS:[0]) that destroys the temporary string is not translated
 pub fn hotkeys_wheel_initialize(e: &mut Engine, this: Ptr<HotKeysWheel>, parent: Ptr) {
-    let text = e.mem.alloc(8);
-    e.call(STRING_CONSTRUCT, &args![text]);
-    if parent.is_null() {
-        e.call(PRINT_MESSAGE, &args![NULL_PARENT_MESSAGE]);
+    // The exe's frame (`SUB ESP,0x10` under the exception record, then the record link):
+    // the text at `EBP-0x14` (+0xc).
+    e.with_stack(0x20, |e, frame| {
+        let text = frame.addr() + 0xc;
+        e.call(STRING_CONSTRUCT, &args![text]);
+        if parent.is_null() {
+            e.call(PRINT_MESSAGE, &args![NULL_PARENT_MESSAGE]);
+            e.call(STRING_DESTROY, &args![text]);
+            return;
+        }
+        e.set(this, HotKeysWheel::pWheel, parent);
+        for index in 0..HOTKEY_COUNT {
+            e.call(STRING_FORMAT, &args![text, ITEM_NAME_FORMAT, index]);
+            let name = e.call(STRING_C_STR, &args![text]).u32();
+            let wheel = e.get(this, HotKeysWheel::pWheel);
+            let tile = e.call(GET_CHILD_BY_NAME, &args![wheel, name]).u32();
+            e.mem.set_u32(this.addr() + TILES + 4 * index, tile);
+        }
+        let id = e
+            .call(ADD_USER_TRAIT, &args![SELECTED_HOTKEY_NAME, -1i32])
+            .i32();
+        e.set(this, HotKeysWheel::iUT_HighlightedHotkey, id);
+        let id = e
+            .call(ADD_USER_TRAIT, &args![SELECTED_TEXT_NAME, -1i32])
+            .i32();
+        e.set(this, HotKeysWheel::iUT_HighlightedText, id);
+        e.set(this, HotKeysWheel::bSelectingHotkey, false);
+        let wheel = e.get(this, HotKeysWheel::pWheel).addr();
+        let hotkey_trait = e.get(this, HotKeysWheel::iUT_HighlightedHotkey);
+        set_trait_from_int(e, wheel, hotkey_trait, -1);
+        let wheel = e.get(this, HotKeysWheel::pWheel).addr();
+        let text_trait = e.get(this, HotKeysWheel::iUT_HighlightedText);
+        set_string(e, wheel, text_trait, EMPTY_STRING);
         e.call(STRING_DESTROY, &args![text]);
-        e.mem.free(text);
-        return;
-    }
-    e.set(this, HotKeysWheel::pWheel, parent);
-    for index in 0..HOTKEY_COUNT {
-        e.call(STRING_FORMAT, &args![text, ITEM_NAME_FORMAT, index]);
-        let name = e.call(STRING_C_STR, &args![text]).u32();
-        let wheel = e.get(this, HotKeysWheel::pWheel);
-        let tile = e.call(GET_CHILD_BY_NAME, &args![wheel, name]).u32();
-        e.mem.set_u32(this.addr() + TILES + 4 * index, tile);
-    }
-    let id = e
-        .call(ADD_USER_TRAIT, &args![SELECTED_HOTKEY_NAME, -1i32])
-        .i32();
-    e.set(this, HotKeysWheel::iUT_HighlightedHotkey, id);
-    let id = e
-        .call(ADD_USER_TRAIT, &args![SELECTED_TEXT_NAME, -1i32])
-        .i32();
-    e.set(this, HotKeysWheel::iUT_HighlightedText, id);
-    e.set(this, HotKeysWheel::bSelectingHotkey, false);
-    let wheel = e.get(this, HotKeysWheel::pWheel).addr();
-    let hotkey_trait = e.get(this, HotKeysWheel::iUT_HighlightedHotkey);
-    set_trait_from_int(e, wheel, hotkey_trait, -1);
-    let wheel = e.get(this, HotKeysWheel::pWheel).addr();
-    let text_trait = e.get(this, HotKeysWheel::iUT_HighlightedText);
-    set_string(e, wheel, text_trait, EMPTY_STRING);
-    e.call(STRING_DESTROY, &args![text]);
-    e.mem.free(text);
+    });
 }
 
 // Translated from 00701740 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -321,59 +323,62 @@ pub fn hotkeys_wheel_set_visible(e: &mut Engine, this: Ptr<HotKeysWheel>, visibl
 pub fn hotkeys_wheel_update_hotkey_list(e: &mut Engine, this: Ptr<HotKeysWheel>) {
     let player: u32 = e.global(PLAYER);
     let inventory = e.call(GET_INVENTORY_CHANGES, &args![player]).u32();
-    let text = e.mem.alloc(8);
-    e.call(STRING_CONSTRUCT, &args![text]);
-    if inventory != 0 {
-        let entries = e.call(HOTKEY_ENTRIES, &args![inventory, 0u32, 7u32]).u32();
-        for index in 0..HOTKEY_COUNT {
-            if index as i32 == SKIPPED_HOTKEY {
-                continue;
-            }
-            let entry = e.mem.u32(entries + 4 * index);
-            let tile = hotkey_tile(e, this, index);
-            if entry != 0 {
-                e.call(STRING_SET, &args![text, ICON_DIRECTORY]);
-                let form = e.call(ENTRY_OBJECT, &args![entry]).u32();
-                let equip_type = e.call(GET_EQUIP_TYPE, &args![form]).u32();
-                let icon = e
-                    .call(GET_EQUIP_TYPE_ICON_FILENAME, &args![equip_type])
-                    .u32();
-                e.call(STRING_APPEND, &args![text, icon]);
-                let path = e.call(STRING_C_STR, &args![text]).u32();
-                let icon_trait = e.call(TEXT_TO_TRAIT, &args![HOTKEY_ICON_NAME]).i32();
-                set_string(e, tile, icon_trait, path);
-                let assigned = e.call(TEXT_TO_TRAIT, &args![HOTKEY_ASSIGNED_NAME]).i32();
-                set_trait_from_int(e, tile, assigned, 1);
-                let count = e.call(WORD_AT_FOUR, &args![entry]).i32();
-                if count > 1 {
-                    let count = e.call(WORD_AT_FOUR, &args![entry]).u32();
-                    let name = e.call(ITEM_FULL_NAME, &args![entry]).u32();
-                    e.call(
-                        STRING_FORMAT,
-                        &args![text, NAME_AND_COUNT_FORMAT, name, count],
-                    );
-                } else {
-                    let name = e.call(ITEM_FULL_NAME, &args![entry]).u32();
-                    e.call(STRING_SET, &args![text, name]);
+    // The exe's frame (`SUB ESP,0x30` under the exception record, then the record link):
+    // the text at `EBP-0x14` (+0x2c).
+    e.with_stack(0x40, |e, frame| {
+        let text = frame.addr() + 0x2c;
+        e.call(STRING_CONSTRUCT, &args![text]);
+        if inventory != 0 {
+            let entries = e.call(HOTKEY_ENTRIES, &args![inventory, 0u32, 7u32]).u32();
+            for index in 0..HOTKEY_COUNT {
+                if index as i32 == SKIPPED_HOTKEY {
+                    continue;
                 }
-                let shown = e.call(STRING_C_STR, &args![text]).u32();
-                set_string(e, tile, TRAIT_STRING, shown);
-            } else {
-                let assigned = e.call(TEXT_TO_TRAIT, &args![HOTKEY_ASSIGNED_NAME]).i32();
-                set_trait_from_int(e, tile, assigned, 0);
-                set_string(e, tile, TRAIT_STRING, EMPTY_STRING);
+                let entry = e.mem.u32(entries + 4 * index);
+                let tile = hotkey_tile(e, this, index);
+                if entry != 0 {
+                    e.call(STRING_SET, &args![text, ICON_DIRECTORY]);
+                    let form = e.call(ENTRY_OBJECT, &args![entry]).u32();
+                    let equip_type = e.call(GET_EQUIP_TYPE, &args![form]).u32();
+                    let icon = e
+                        .call(GET_EQUIP_TYPE_ICON_FILENAME, &args![equip_type])
+                        .u32();
+                    e.call(STRING_APPEND, &args![text, icon]);
+                    let path = e.call(STRING_C_STR, &args![text]).u32();
+                    let icon_trait = e.call(TEXT_TO_TRAIT, &args![HOTKEY_ICON_NAME]).i32();
+                    set_string(e, tile, icon_trait, path);
+                    let assigned = e.call(TEXT_TO_TRAIT, &args![HOTKEY_ASSIGNED_NAME]).i32();
+                    set_trait_from_int(e, tile, assigned, 1);
+                    let count = e.call(WORD_AT_FOUR, &args![entry]).i32();
+                    if count > 1 {
+                        let count = e.call(WORD_AT_FOUR, &args![entry]).u32();
+                        let name = e.call(ITEM_FULL_NAME, &args![entry]).u32();
+                        e.call(
+                            STRING_FORMAT,
+                            &args![text, NAME_AND_COUNT_FORMAT, name, count],
+                        );
+                    } else {
+                        let name = e.call(ITEM_FULL_NAME, &args![entry]).u32();
+                        e.call(STRING_SET, &args![text, name]);
+                    }
+                    let shown = e.call(STRING_C_STR, &args![text]).u32();
+                    set_string(e, tile, TRAIT_STRING, shown);
+                } else {
+                    let assigned = e.call(TEXT_TO_TRAIT, &args![HOTKEY_ASSIGNED_NAME]).i32();
+                    set_trait_from_int(e, tile, assigned, 0);
+                    set_string(e, tile, TRAIT_STRING, EMPTY_STRING);
+                }
             }
-        }
-        for index in 0..HOTKEY_COUNT {
-            let entry = e.mem.u32(entries + 4 * index);
-            if entry != 0 {
-                e.call(ENTRY_DESTROY, &args![entry, 1u32]);
+            for index in 0..HOTKEY_COUNT {
+                let entry = e.mem.u32(entries + 4 * index);
+                if entry != 0 {
+                    e.call(ENTRY_DESTROY, &args![entry, 1u32]);
+                }
             }
+            e.call(FREE_ARRAY, &args![entries]);
         }
-        e.call(FREE_ARRAY, &args![entries]);
-    }
-    e.call(STRING_DESTROY, &args![text]);
-    e.mem.free(text);
+        e.call(STRING_DESTROY, &args![text]);
+    });
 }
 
 // Translated from 007019e0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1676,5 +1681,24 @@ mod tests {
             .map(|c| c[0])
             .collect();
         assert_eq!(order, [2, 1, 4]);
+    }
+
+    #[test]
+    fn the_wheel_text_is_at_the_exe_frame_offset() {
+        // 00701610 (0x20 bytes): the text at +0xc.
+        let mut w = world();
+        let this = wheel(&mut w.e);
+        let frame = w.e.mem.alloc(0x20);
+        w.e.mem.free(frame);
+        w.e.call_log = Some(vec![]);
+        w.e.call(0x0070_1610, &args![this, 0u32]);
+        assert_eq!(calls(&w.e, STRING_CONSTRUCT), vec![vec![frame + 0xc]]);
+        assert_eq!(calls(&w.e, STRING_DESTROY), vec![vec![frame + 0xc]]);
+        // 007017b0 (0x40 bytes): the text at +0x2c.
+        let frame = w.e.mem.alloc(0x40);
+        w.e.mem.free(frame);
+        w.e.call_log = Some(vec![]);
+        w.e.call(0x0070_17b0, &args![this]);
+        assert_eq!(calls(&w.e, STRING_CONSTRUCT), vec![vec![frame + 0x2c]]);
     }
 }

@@ -6,6 +6,22 @@ use crate::prelude::*;
 
 use crate::x87::rsqrt_estimate;
 
+/// Runs `f` on an exe-shaped frame: a function that aligns `ESP` (`AND ESP,0xfffffff0`) and
+/// then reserves `below` bytes (its `SUB ESP` and pushes) has its frame `below` bytes under a
+/// 16-byte boundary; `f` gets the frame's lowest address.
+fn with_aligned_frame<R>(e: &mut Engine, below: u32, f: impl FnOnce(&mut Engine, u32) -> R) -> R {
+    e.with_stack(below + 0x10, |e, raw| {
+        let boundary = (raw.addr() + below + 0xf) & !0xf;
+        f(e, boundary - below)
+    })
+}
+
+/// The frame base [`with_aligned_frame`] picks for a block at `raw` (tests).
+#[cfg(test)]
+fn aligned_frame_at(raw: u32, below: u32) -> u32 {
+    ((raw + below + 0xf) & !0xf) - below
+}
+
 /// The memory router (`00c85750`): `+0` is the address the temporary stack allocator hands out
 /// next, `+0x10` the allocator whose slot `+0xc` is `bufAlloc(size in and out)` and slot `+0x10`
 /// is `bufFree(block, size)`.
@@ -354,15 +370,20 @@ pub fn hk_tree_bundle_ray_cast_util_split_to_octant(
 
 /// What the two group builders (`00e29cd0`, `00e2a010`) share, as the exe's `rays` they work
 /// on: scratch vectors for the ray being placed, a bundle search over the bundles made so far
-/// and the creation of a new bundle. The scratch block is 0x60 bytes: start, end and direction
-/// of the new ray, then of the bundle's first ray.
-const SCRATCH_SIZE: u32 = 0x60;
-const SCRATCH_START_A: u32 = 0;
-const SCRATCH_END_A: u32 = 0x10;
-const SCRATCH_DIRECTION_A: u32 = 0x20;
-const SCRATCH_START_B: u32 = 0x30;
-const SCRATCH_END_B: u32 = 0x40;
-const SCRATCH_DIRECTION_B: u32 = 0x50;
+/// and the creation of a new bundle. The six scratch vectors (start, end and direction of the
+/// new ray, then of the bundle's first ray, the order `00e29920` takes them in) sit in the
+/// builder's frame, at offsets of its own for each builder ([`ScratchLayout`]).
+type ScratchLayout = [u32; 6];
+
+/// `00e29cd0`'s frame (aligned, `SUB ESP,0xc4` and three pushes under the boundary) and where
+/// its scratch vectors are (the pointers it pushes for `00e29920`, 00e29ec9..00e29f1f).
+const INDEXED_FRAME_BELOW: u32 = 0xd0;
+const INDEXED_SCRATCH: ScratchLayout = [0x60, 0x70, 0xa0, 0x50, 0x80, 0x90];
+
+/// `00e2a010`'s frame (aligned, `SUB ESP,0xd4` and three pushes) and its scratch vectors
+/// (00e2a22c..00e2a282).
+const OCTANT_FRAME_BELOW: u32 = 0xe0;
+const OCTANT_SCRATCH: ScratchLayout = [0x80, 0x50, 0xa0, 0x70, 0x60, 0xb0];
 /// A bundle of rays: up to four ray indices and their count at `+0x10`.
 const BUNDLE_SIZE: u32 = 0x14;
 
@@ -400,11 +421,13 @@ fn ray_direction(start: Lanes, end: Lanes) -> (Lanes, f32, f32) {
 /// threshold`; the exe's inner loop over the bundle's rays runs once), the ray joining the
 /// first that takes it. When none does (or there are none) a new bundle holding the ray is
 /// started at the next entry of the buffer, unless that address is null. Returns whether a new
-/// bundle was started (the `made` counter then went up).
+/// bundle was started (the `made` counter then went up). `frame` is the builder's frame and
+/// `layout` where its scratch vectors are.
 #[allow(clippy::too_many_arguments)]
 fn place_ray(
     e: &mut Engine,
-    scratch: Ptr,
+    frame: u32,
+    layout: &ScratchLayout,
     build: &mut BundleBuild,
     starts: u32,
     ends: u32,
@@ -415,10 +438,11 @@ fn place_ray(
 ) {
     let (start_a, end_a) = ray;
     let (direction_a, _, length) = ray_direction(start_a, end_a);
-    let scratch = scratch.addr();
-    store(e, scratch + SCRATCH_START_A, start_a);
-    store(e, scratch + SCRATCH_END_A, end_a);
-    store(e, scratch + SCRATCH_DIRECTION_A, direction_a);
+    let [start_at_a, end_at_a, direction_at_a, start_at_b, end_at_b, direction_at_b] =
+        layout.map(|offset| frame + offset);
+    store(e, start_at_a, start_a);
+    store(e, end_at_a, end_a);
+    store(e, direction_at_a, direction_a);
     let power = power_of_length(e, length.to_bits());
     let mut bundle = build.buffer;
     let mut index = 0;
@@ -432,17 +456,17 @@ fn place_ray(
                 let start_b = load(e, starts.wrapping_add(offset));
                 let end_b = load(e, ends.wrapping_add(offset));
                 let (direction_b, _, _) = ray_direction(start_b, end_b);
-                store(e, scratch + SCRATCH_START_B, start_b);
-                store(e, scratch + SCRATCH_END_B, end_b);
-                store(e, scratch + SCRATCH_DIRECTION_B, direction_b);
+                store(e, start_at_b, start_b);
+                store(e, end_at_b, end_b);
+                store(e, direction_at_b, direction_b);
                 let alike = fn_00e29920(
                     e,
-                    Ptr::new(scratch + SCRATCH_START_A),
-                    Ptr::new(scratch + SCRATCH_END_A),
-                    Ptr::new(scratch + SCRATCH_DIRECTION_A),
-                    Ptr::new(scratch + SCRATCH_START_B),
-                    Ptr::new(scratch + SCRATCH_END_B),
-                    Ptr::new(scratch + SCRATCH_DIRECTION_B),
+                    Ptr::new(start_at_a),
+                    Ptr::new(end_at_a),
+                    Ptr::new(direction_at_a),
+                    Ptr::new(start_at_b),
+                    Ptr::new(end_at_b),
+                    Ptr::new(direction_at_b),
                     x87_quiet(abs_cos),
                     x87_quiet(limit),
                 );
@@ -540,27 +564,28 @@ pub fn fn_00e29cd0(
 ) {
     let abs_cos = absolute_cosine(e, cos_argument);
     let mut build = take_bundle_buffer(e, count);
-    let scratch_block = e.mem.alloc(SCRATCH_SIZE);
-    let mut position = 0u32;
-    for _ in 0..count.max(0) {
-        let ray = e.mem.u32(word_at(indices.addr(), position));
-        position += 1;
-        let offset = ray << 4;
-        let start = load(e, starts.addr().wrapping_add(offset));
-        let end = load(e, ends.addr().wrapping_add(offset));
-        place_ray(
-            e,
-            Ptr::new(scratch_block),
-            &mut build,
-            starts.addr(),
-            ends.addr(),
-            (start, end),
-            ray,
-            abs_cos,
-            threshold,
-        );
-    }
-    e.mem.free(scratch_block);
+    with_aligned_frame(e, INDEXED_FRAME_BELOW, |e, frame| {
+        let mut position = 0u32;
+        for _ in 0..count.max(0) {
+            let ray = e.mem.u32(word_at(indices.addr(), position));
+            position += 1;
+            let offset = ray << 4;
+            let start = load(e, starts.addr().wrapping_add(offset));
+            let end = load(e, ends.addr().wrapping_add(offset));
+            place_ray(
+                e,
+                frame,
+                &INDEXED_SCRATCH,
+                &mut build,
+                starts.addr(),
+                ends.addr(),
+                (start, end),
+                ray,
+                abs_cos,
+                threshold,
+            );
+        }
+    });
     finish_bundles(
         e,
         &build,
@@ -600,31 +625,32 @@ pub fn fn_00e2a010(
 ) {
     let abs_cos = absolute_cosine(e, cos_argument);
     let mut build = take_bundle_buffer(e, count);
-    let scratch_block = e.mem.alloc(SCRATCH_SIZE);
-    for ray in 0..count.max(0) as u32 {
-        let offset = ray << 4;
-        let start = load(e, starts.addr().wrapping_add(offset));
-        let end = load(e, ends.addr().wrapping_add(offset));
-        let gap = sub(end, start);
-        let sign_bits = u32::from(gap[0] < 0.0)
-            + (u32::from(gap[1] < 0.0) << 1)
-            + (u32::from(gap[2] < 0.0) << 2);
-        if sign_bits as i32 != octant {
-            continue;
+    with_aligned_frame(e, OCTANT_FRAME_BELOW, |e, frame| {
+        for ray in 0..count.max(0) as u32 {
+            let offset = ray << 4;
+            let start = load(e, starts.addr().wrapping_add(offset));
+            let end = load(e, ends.addr().wrapping_add(offset));
+            let gap = sub(end, start);
+            let sign_bits = u32::from(gap[0] < 0.0)
+                + (u32::from(gap[1] < 0.0) << 1)
+                + (u32::from(gap[2] < 0.0) << 2);
+            if sign_bits as i32 != octant {
+                continue;
+            }
+            place_ray(
+                e,
+                frame,
+                &OCTANT_SCRATCH,
+                &mut build,
+                starts.addr(),
+                ends.addr(),
+                (start, end),
+                ray,
+                abs_cos,
+                threshold,
+            );
         }
-        place_ray(
-            e,
-            Ptr::new(scratch_block),
-            &mut build,
-            starts.addr(),
-            ends.addr(),
-            (start, end),
-            ray,
-            abs_cos,
-            threshold,
-        );
-    }
-    e.mem.free(scratch_block);
+    });
     finish_bundles(
         e,
         &build,
@@ -642,9 +668,13 @@ pub fn fn_00e2a010(
 }
 
 /// The group job `startWorldRayCastWithAutoBundleJobs` queues (`hkJobQueue::addJob`) is 0x70
-/// bytes on the exe's stack: the exe writes the words `fill_job` lists and leaves the other
-/// bytes as it finds them (here zero).
-const JOB_SIZE: u32 = 0x70;
+/// bytes on the exe's stack, at `+0x60` of its frame (aligned: `SUB ESP,0xe4` and three pushes
+/// under the boundary, [`AUTO_BUNDLE_FRAME_BELOW`]): the exe writes the words `fill_job` lists
+/// and leaves the other bytes as it finds them (here zero). The eight octant counts
+/// `splitToOctant` fills are at `+0xd0` (00e2a6bc).
+const AUTO_BUNDLE_FRAME_BELOW: u32 = 0xf0;
+const JOB_AT: u32 = 0x60;
+const COUNTS_AT: u32 = 0xd0;
 
 /// The words both paths of `startWorldRayCastWithAutoBundleJobs` put into a job: the header
 /// bytes 7, 3, 1 (+0, +1, +2), the word 0x70 at +4 and 0xffff at +6, zeros at +0x10, +0x14
@@ -762,152 +792,151 @@ pub fn hk_tree_bundle_ray_cast_util_start_world_ray_cast_with_auto_bundle_jobs(
     auto_jobs: bool,
 ) {
     let params = params.addr();
-    let job = e.mem.alloc(JOB_SIZE);
-    if auto_jobs {
-        profile_record(e, LABEL_AUTO_JOB, 0x10, Some(LABEL_ADD_JOBS));
+    with_aligned_frame(e, AUTO_BUNDLE_FRAME_BELOW, |e, frame| {
+        let job = frame + JOB_AT;
+        if auto_jobs {
+            profile_record(e, LABEL_AUTO_JOB, 0x10, Some(LABEL_ADD_JOBS));
+            let mut first_output = e.mem.u32(params + 0x24);
+            let mut second_output = e.mem.u32(params + 0x2c);
+            for index in 0..8u32 {
+                let words = JobWords {
+                    first,
+                    second,
+                    count,
+                    near,
+                    far,
+                    ninth,
+                    first_output,
+                    second_output,
+                };
+                fill_job(e, job, &words, params);
+                e.mem.set_u32(job + 0x20, 0);
+                e.mem.set_u32(job + 0x24, index);
+                e.mem.set_u32(job + 0x28, 0);
+                add_job(e, queue, job);
+                first_output = first_output.wrapping_add(count << 6);
+                second_output = second_output.wrapping_add(count << 8);
+            }
+            e.vcall(runner.addr(), 0xc, &args![queue, 0xbu32]);
+            profile_record(e, LABEL_WAIT_THREADS, 0xc, None);
+            e.vcall(runner.addr(), 0x10, &args![]);
+            profile_record(e, LABEL_BEFORE_WAIT, 0xc, None);
+            let semaphore = e.mem.u32(params + 0x10);
+            e.call(SEMAPHORE_ACQUIRE, &args![semaphore]);
+            return;
+        }
+        profile_record(e, LABEL_CPU_SPLIT, 0xc, None);
+
+        // The directions buffer.
+        let allocator = router_allocator(e);
+        let mut directions = 0u32;
+        let mut directions_capacity = DONT_DEALLOCATE;
+        if count != 0 {
+            let mut size = count << 4;
+            directions = buf_alloc(e, allocator, &mut size);
+            directions_capacity = capacity_of(size, 16);
+        }
+        // The lengths buffer.
+        let allocator = router_allocator(e);
+        let mut lengths = 0u32;
+        let mut lengths_capacity = DONT_DEALLOCATE;
+        if count != 0 {
+            let mut size = count << 4;
+            lengths = buf_alloc(e, allocator, &mut size);
+            lengths_capacity = capacity_of(size, 16);
+        }
+        // The array of eight hkArray<int>.
+        let allocator = router_allocator(e);
+        let mut size = 0x60u32;
+        let octants = buf_alloc(e, allocator, &mut size);
+        let octant_arrays = (size as i32) / 12;
+        let octants_capacity = capacity_of(size, 12);
+        let mut array = octants;
+        for _ in 0..octant_arrays.max(0) {
+            if array != 0 {
+                e.mem.set_u32(array, 0);
+                e.mem.set_u32(array + 4, 0);
+                e.mem.set_u32(array + 8, DONT_DEALLOCATE);
+            }
+            array = array.wrapping_add(12);
+        }
+        let counts = frame + COUNTS_AT;
+        hk_tree_bundle_ray_cast_util_split_to_octant(
+            e,
+            Ptr::new(first),
+            Ptr::new(second),
+            count as i32,
+            Ptr::new(directions),
+            Ptr::new(lengths),
+            Ptr::new(octants),
+            Ptr::new(counts),
+        );
+        // Two scratch buffers of eight words the exe never reads.
+        let allocator = router_allocator(e);
+        let mut size = 0x20u32;
+        let scratch_a = buf_alloc(e, allocator, &mut size);
+        let scratch_a_capacity = capacity_of(size, 4);
+        let allocator = router_allocator(e);
+        let mut size = 0x20u32;
+        let scratch_b = buf_alloc(e, allocator, &mut size);
+        let scratch_b_capacity = capacity_of(size, 4);
+
         let mut first_output = e.mem.u32(params + 0x24);
         let mut second_output = e.mem.u32(params + 0x2c);
-        for index in 0..8u32 {
-            let words = JobWords {
-                first,
-                second,
-                count,
-                near,
-                far,
-                ninth,
-                first_output,
-                second_output,
-            };
-            fill_job(e, job, &words, params);
-            e.mem.set_u32(job + 0x20, 0);
-            e.mem.set_u32(job + 0x24, index);
-            e.mem.set_u32(job + 0x28, 0);
-            add_job(e, queue, job);
-            first_output = first_output.wrapping_add(count << 6);
-            second_output = second_output.wrapping_add(count << 8);
+        let mut array = octants.wrapping_add(4);
+        for _ in 0..8 {
+            let entries = e.mem.u32(array);
+            if entries != 0 {
+                let data = e.mem.u32(array.wrapping_sub(4));
+                let words = JobWords {
+                    first,
+                    second,
+                    count,
+                    near,
+                    far,
+                    ninth,
+                    first_output,
+                    second_output,
+                };
+                fill_job(e, job, &words, params);
+                e.mem.set_u32(job + 0x20, data);
+                e.mem.set_u32(job + 0x28, entries);
+                add_job(e, queue, job);
+                first_output = first_output.wrapping_add(count << 6);
+                second_output = second_output.wrapping_add(count << 8);
+            }
+            array = array.wrapping_add(12);
         }
+        profile_record(e, LABEL_END, 0xc, None);
+        profile_record(e, LABEL_AUTO_BUNDLE_JOBS, 0xc, None);
         e.vcall(runner.addr(), 0xc, &args![queue, 0xbu32]);
-        profile_record(e, LABEL_WAIT_THREADS, 0xc, None);
         e.vcall(runner.addr(), 0x10, &args![]);
-        profile_record(e, LABEL_BEFORE_WAIT, 0xc, None);
         let semaphore = e.mem.u32(params + 0x10);
         e.call(SEMAPHORE_ACQUIRE, &args![semaphore]);
-        e.mem.free(job);
-        return;
-    }
-    profile_record(e, LABEL_CPU_SPLIT, 0xc, None);
+        profile_record(e, LABEL_END, 0xc, None);
 
-    // The directions buffer.
-    let allocator = router_allocator(e);
-    let mut directions = 0u32;
-    let mut directions_capacity = DONT_DEALLOCATE;
-    if count != 0 {
-        let mut size = count << 4;
-        directions = buf_alloc(e, allocator, &mut size);
-        directions_capacity = capacity_of(size, 16);
-    }
-    // The lengths buffer.
-    let allocator = router_allocator(e);
-    let mut lengths = 0u32;
-    let mut lengths_capacity = DONT_DEALLOCATE;
-    if count != 0 {
-        let mut size = count << 4;
-        lengths = buf_alloc(e, allocator, &mut size);
-        lengths_capacity = capacity_of(size, 16);
-    }
-    // The array of eight hkArray<int>.
-    let allocator = router_allocator(e);
-    let mut size = 0x60u32;
-    let octants = buf_alloc(e, allocator, &mut size);
-    let octant_arrays = (size as i32) / 12;
-    let octants_capacity = capacity_of(size, 12);
-    let mut array = octants;
-    for _ in 0..octant_arrays.max(0) {
-        if array != 0 {
-            e.mem.set_u32(array, 0);
-            e.mem.set_u32(array + 4, 0);
-            e.mem.set_u32(array + 8, DONT_DEALLOCATE);
+        let allocator = router_allocator(e);
+        release_buffer(e, allocator, scratch_b, scratch_b_capacity, 4);
+        let allocator = router_allocator(e);
+        release_buffer(e, allocator, scratch_a, scratch_a_capacity, 4);
+        let allocator = router_allocator(e);
+        let mut array = octants.wrapping_add(8);
+        for _ in 0..octant_arrays.max(0) {
+            let allocator_now = router_allocator(e);
+            let capacity = e.mem.u32(array);
+            e.mem.set_u32(array.wrapping_sub(4), 0);
+            let data = e.mem.u32(array.wrapping_sub(8));
+            release_buffer(e, allocator_now, data, capacity, 4);
+            e.mem.set_u32(array.wrapping_sub(8), 0);
+            e.mem.set_u32(array, DONT_DEALLOCATE);
+            array = array.wrapping_add(12);
         }
-        array = array.wrapping_add(12);
-    }
-    let counts = e.mem.alloc(0x20);
-    hk_tree_bundle_ray_cast_util_split_to_octant(
-        e,
-        Ptr::new(first),
-        Ptr::new(second),
-        count as i32,
-        Ptr::new(directions),
-        Ptr::new(lengths),
-        Ptr::new(octants),
-        Ptr::new(counts),
-    );
-    e.mem.free(counts);
-    // Two scratch buffers of eight words the exe never reads.
-    let allocator = router_allocator(e);
-    let mut size = 0x20u32;
-    let scratch_a = buf_alloc(e, allocator, &mut size);
-    let scratch_a_capacity = capacity_of(size, 4);
-    let allocator = router_allocator(e);
-    let mut size = 0x20u32;
-    let scratch_b = buf_alloc(e, allocator, &mut size);
-    let scratch_b_capacity = capacity_of(size, 4);
-
-    let mut first_output = e.mem.u32(params + 0x24);
-    let mut second_output = e.mem.u32(params + 0x2c);
-    let mut array = octants.wrapping_add(4);
-    for _ in 0..8 {
-        let entries = e.mem.u32(array);
-        if entries != 0 {
-            let data = e.mem.u32(array.wrapping_sub(4));
-            let words = JobWords {
-                first,
-                second,
-                count,
-                near,
-                far,
-                ninth,
-                first_output,
-                second_output,
-            };
-            fill_job(e, job, &words, params);
-            e.mem.set_u32(job + 0x20, data);
-            e.mem.set_u32(job + 0x28, entries);
-            add_job(e, queue, job);
-            first_output = first_output.wrapping_add(count << 6);
-            second_output = second_output.wrapping_add(count << 8);
-        }
-        array = array.wrapping_add(12);
-    }
-    profile_record(e, LABEL_END, 0xc, None);
-    profile_record(e, LABEL_AUTO_BUNDLE_JOBS, 0xc, None);
-    e.vcall(runner.addr(), 0xc, &args![queue, 0xbu32]);
-    e.vcall(runner.addr(), 0x10, &args![]);
-    let semaphore = e.mem.u32(params + 0x10);
-    e.call(SEMAPHORE_ACQUIRE, &args![semaphore]);
-    profile_record(e, LABEL_END, 0xc, None);
-
-    let allocator = router_allocator(e);
-    release_buffer(e, allocator, scratch_b, scratch_b_capacity, 4);
-    let allocator = router_allocator(e);
-    release_buffer(e, allocator, scratch_a, scratch_a_capacity, 4);
-    let allocator = router_allocator(e);
-    let mut array = octants.wrapping_add(8);
-    for _ in 0..octant_arrays.max(0) {
-        let allocator_now = router_allocator(e);
-        let capacity = e.mem.u32(array);
-        e.mem.set_u32(array.wrapping_sub(4), 0);
-        let data = e.mem.u32(array.wrapping_sub(8));
-        release_buffer(e, allocator_now, data, capacity, 4);
-        e.mem.set_u32(array.wrapping_sub(8), 0);
-        e.mem.set_u32(array, DONT_DEALLOCATE);
-        array = array.wrapping_add(12);
-    }
-    release_buffer(e, allocator, octants, octants_capacity, 12);
-    let allocator = router_allocator(e);
-    release_buffer(e, allocator, lengths, lengths_capacity, 16);
-    let allocator = router_allocator(e);
-    release_buffer(e, allocator, directions, directions_capacity, 16);
-    e.mem.free(job);
+        release_buffer(e, allocator, octants, octants_capacity, 12);
+        let allocator = router_allocator(e);
+        release_buffer(e, allocator, lengths, lengths_capacity, 16);
+        let allocator = router_allocator(e);
+        release_buffer(e, allocator, directions, directions_capacity, 16);
+    });
 }
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
@@ -1416,6 +1445,51 @@ mod tests {
         assert_eq!(e.mem.u32(ROUTER_OBJECT), TEMP_STACK);
     }
 
+    #[test]
+    fn the_builders_keep_their_scratch_vectors_at_the_exe_frame_offsets() {
+        let mut e = Engine::new();
+        memory_fixture(&mut e);
+        group_doubles(&mut e);
+        let (starts, ends) = put_rays(&mut e);
+        let indices = e.mem.alloc(16);
+        e.mem.set_u32(indices, 0);
+        e.mem.set_u32(indices + 4, 1);
+        let out = group_outputs(&mut e);
+        let x_of = |e: &Engine, at: u32| (e.mem.f32(at), e.mem.f32(at + 4));
+        // The frame block is the one just freed. Placing ray 1 leaves it (the new ray) and ray 0
+        // (the bundle's first ray) in the frame: in the indexed builder the new ray's start and
+        // end at +0x60 and +0x70, the other's at +0x50 and +0x80.
+        let raw = e.mem.alloc(INDEXED_FRAME_BELOW + 0x10);
+        e.mem.free(raw);
+        let frame = aligned_frame_at(raw, INDEXED_FRAME_BELOW);
+        e.call(
+            0x00e2_9cd0,
+            &args![
+                indices, 2i32, starts, ends, 0u32, 0.25f32, 2.0f32, out[0], out[1], out[2], out[3],
+                out[4]
+            ],
+        );
+        assert_eq!(x_of(&e, frame + 0x60), (0.0, 0.1));
+        assert_eq!(x_of(&e, frame + 0x70), (10.0, 0.1));
+        assert_eq!(x_of(&e, frame + 0x50), (0.0, 0.0));
+        assert_eq!(x_of(&e, frame + 0x80), (10.0, 0.0));
+        // The octant builder: the new ray's start and end at +0x80 and +0x50, the other's at
+        // +0x70 and +0x60.
+        let raw = e.mem.alloc(OCTANT_FRAME_BELOW + 0x10);
+        e.mem.free(raw);
+        let frame = aligned_frame_at(raw, OCTANT_FRAME_BELOW);
+        e.call(
+            0x00e2_a010,
+            &args![
+                0i32, starts, ends, 2i32, 0.25f32, 2.0f32, out[0], out[1], out[2], out[3], out[4]
+            ],
+        );
+        assert_eq!(x_of(&e, frame + 0x80), (0.0, 0.1));
+        assert_eq!(x_of(&e, frame + 0x50), (10.0, 0.1));
+        assert_eq!(x_of(&e, frame + 0x70), (0.0, 0.0));
+        assert_eq!(x_of(&e, frame + 0x60), (10.0, 0.0));
+    }
+
     /// The start-up function's collaborators: the job queue's `addJob` (logging the job's
     /// 0x70 bytes as words), the runner object (slots `+0xc` and `+0x10`) and the semaphore.
     struct JobFixture {
@@ -1604,6 +1678,69 @@ mod tests {
         assert_eq!(freed, expected);
         // The first record is "TtCPUSplit" (12 bytes).
         assert_eq!(e.mem.u32(MONITOR_STREAM + 0x20), LABEL_CPU_SPLIT);
+    }
+
+    #[test]
+    fn the_job_and_the_octant_counts_sit_at_the_exe_frame_offsets() {
+        let mut e = Engine::new();
+        let fixture = job_fixture(&mut e);
+        memory_fixture(&mut e);
+        e.map(0x0101_1590, 8);
+        e.register(0x00ec_9b00, |_, _| Ret {
+            st0: 2.0,
+            ..Ret::default()
+        });
+        e.register_double(0x00c9_08c0, |e, a| {
+            let data = e.mem.alloc(4 * a[2].max(1));
+            e.mem.set_u32(a[1], data);
+            e.mem.set_u32(a[1] + 8, a[2]);
+            Ret::default()
+        });
+        let (starts, ends) = put_rays(&mut e);
+        // The frame block is the one just freed: the job at +0x60, the counts at +0xd0.
+        let raw = e.mem.alloc(AUTO_BUNDLE_FRAME_BELOW + 0x10);
+        e.mem.free(raw);
+        let frame = aligned_frame_at(raw, AUTO_BUNDLE_FRAME_BELOW);
+        e.call(
+            0x00e2_a390,
+            &args![
+                starts,
+                ends,
+                3u32,
+                1.5f32,
+                2.5f32,
+                fixture.params,
+                0x77u32,
+                fixture.runner,
+                0x99u32,
+                false
+            ],
+        );
+        // Two rays in octant 0, one in octant 4; the last job queued (octant 4) is still there.
+        let counts: Vec<u32> = (0..8).map(|i| e.mem.u32(frame + 0xd0 + 4 * i)).collect();
+        assert_eq!(counts, vec![2, 0, 0, 0, 1, 0, 0, 0]);
+        assert_eq!(e.mem.u32(frame + 0x60 + 4), 0xffff_0070);
+        assert_eq!(e.mem.u32(frame + 0x60 + 0x28), 1);
+        // The auto-job path: the eighth job's index word.
+        let raw = e.mem.alloc(AUTO_BUNDLE_FRAME_BELOW + 0x10);
+        e.mem.free(raw);
+        let frame = aligned_frame_at(raw, AUTO_BUNDLE_FRAME_BELOW);
+        e.call(
+            0x00e2_a390,
+            &args![
+                0x10u32,
+                0x20u32,
+                3u32,
+                1.5f32,
+                2.5f32,
+                fixture.params,
+                0x77u32,
+                fixture.runner,
+                0x99u32,
+                true
+            ],
+        );
+        assert_eq!(e.mem.u32(frame + 0x60 + 0x24), 7);
     }
 
     #[test]

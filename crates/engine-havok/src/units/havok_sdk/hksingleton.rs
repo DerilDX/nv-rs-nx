@@ -40,29 +40,31 @@ fn build_map(e: &mut Engine, map: u32, sources: u32) {
 /// variable and takes a reference on it when it is not null
 /// (`addReferenceLockUnchecked`). Destroys the map.
 pub fn hk_singleton_init_node_populate(e: &mut Engine, targets: u32, sources: u32) {
-    let map = e.mem.alloc(12);
-    build_map(e, map, sources);
-    let mut node = targets;
-    while node != 0 {
-        let name = e.mem.u32(node);
-        let found = e
-            .call(STRING_MAP_GET_WITH_DEFAULT, &args![map, name, 0u32])
-            .u32();
-        if found != 0 {
-            let source_variable = e.mem.u32(found + 0xc);
-            let singleton = e.mem.u32(source_variable);
-            let target_variable = e.mem.u32(node + 0xc);
-            e.mem.set_u32(target_variable, singleton);
-            let target_variable = e.mem.u32(node + 0xc);
-            if e.mem.u32(target_variable) != 0 {
-                let singleton = e.mem.u32(target_variable);
-                e.call(ADD_REFERENCE_LOCK_UNCHECKED, &args![singleton]);
+    // The exe's frame (`SUB ESP,0x14`, one push): 0x18 bytes, the map at +0x8 (00cf6a0e).
+    e.with_stack(0x18, |e, frame| {
+        let map = frame.addr() + 8;
+        build_map(e, map, sources);
+        let mut node = targets;
+        while node != 0 {
+            let name = e.mem.u32(node);
+            let found = e
+                .call(STRING_MAP_GET_WITH_DEFAULT, &args![map, name, 0u32])
+                .u32();
+            if found != 0 {
+                let source_variable = e.mem.u32(found + 0xc);
+                let singleton = e.mem.u32(source_variable);
+                let target_variable = e.mem.u32(node + 0xc);
+                e.mem.set_u32(target_variable, singleton);
+                let target_variable = e.mem.u32(node + 0xc);
+                if e.mem.u32(target_variable) != 0 {
+                    let singleton = e.mem.u32(target_variable);
+                    e.call(ADD_REFERENCE_LOCK_UNCHECKED, &args![singleton]);
+                }
             }
+            node = e.mem.u32(node + 8);
         }
-        node = e.mem.u32(node + 8);
-    }
-    e.call(STRING_MAP_DESTRUCTOR, &args![map]);
-    e.mem.free(map);
+        e.call(STRING_MAP_DESTRUCTOR, &args![map]);
+    });
 }
 
 // Translated from 00cf6a90 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -71,27 +73,29 @@ pub fn hk_singleton_init_node_populate(e: &mut Engine, targets: u32, sources: u3
 /// its variable holds (`removeReferenceLockUnchecked`, when not null) and sets the variable to
 /// 0. Destroys the map.
 pub fn hk_singleton_init_node_depopulate(e: &mut Engine, targets: u32, sources: u32) {
-    let map = e.mem.alloc(12);
-    build_map(e, map, sources);
-    let mut node = targets;
-    while node != 0 {
-        let name = e.mem.u32(node);
-        let found = e
-            .call(STRING_MAP_GET_WITH_DEFAULT, &args![map, name, 0u32])
-            .u32();
-        if found != 0 {
-            let variable = e.mem.u32(node + 0xc);
-            if e.mem.u32(variable) != 0 {
-                let singleton = e.mem.u32(variable);
-                e.call(REMOVE_REFERENCE_LOCK_UNCHECKED, &args![singleton]);
+    // The exe's frame (`SUB ESP,0x14`, one push): 0x18 bytes, the map at +0x8 (00cf6a9e).
+    e.with_stack(0x18, |e, frame| {
+        let map = frame.addr() + 8;
+        build_map(e, map, sources);
+        let mut node = targets;
+        while node != 0 {
+            let name = e.mem.u32(node);
+            let found = e
+                .call(STRING_MAP_GET_WITH_DEFAULT, &args![map, name, 0u32])
+                .u32();
+            if found != 0 {
+                let variable = e.mem.u32(node + 0xc);
+                if e.mem.u32(variable) != 0 {
+                    let singleton = e.mem.u32(variable);
+                    e.call(REMOVE_REFERENCE_LOCK_UNCHECKED, &args![singleton]);
+                }
+                let variable = e.mem.u32(node + 0xc);
+                e.mem.set_u32(variable, 0);
             }
-            let variable = e.mem.u32(node + 0xc);
-            e.mem.set_u32(variable, 0);
+            node = e.mem.u32(node + 8);
         }
-        node = e.mem.u32(node + 8);
-    }
-    e.call(STRING_MAP_DESTRUCTOR, &args![map]);
-    e.mem.free(map);
+        e.call(STRING_MAP_DESTRUCTOR, &args![map]);
+    });
 }
 
 /// This unit's translated functions, by exe address.
@@ -158,7 +162,19 @@ mod tests {
         let (stream, stream_variable) = node(&mut e, "stream", unknown, 0x6666);
         let (memory, memory_variable) = node(&mut e, "memory", stream, 0);
         e.call_log = Some(vec![]);
+        // The map sits at +0x8 of the exe's 0x18-byte frame.
+        let frame = e.mem.alloc(0x18);
+        e.mem.free(frame);
         e.call(0x00cf_6a00, &args![memory, memory_source]);
+        let lookup = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|c| c.0 == STRING_MAP_GET_WITH_DEFAULT)
+            .unwrap()
+            .1[0];
+        assert_eq!(lookup, frame + 8);
         assert_eq!(e.mem.u32(memory_variable), 0x5001);
         // The matching node takes the (null) singleton of its source; a null one takes no reference.
         assert_eq!(e.mem.u32(stream_variable), 0);
@@ -207,7 +223,18 @@ mod tests {
         let (stream, stream_variable) = node(&mut e, "stream", unknown, 0);
         let (memory, memory_variable) = node(&mut e, "memory", stream, 0x5001);
         e.call_log = Some(vec![]);
+        let frame = e.mem.alloc(0x18);
+        e.mem.free(frame);
         e.call(0x00cf_6a90, &args![memory, stream_source]);
+        let lookup = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|c| c.0 == STRING_MAP_GET_WITH_DEFAULT)
+            .unwrap()
+            .1[0];
+        assert_eq!(lookup, frame + 8);
         assert_eq!(e.mem.u32(memory_variable), 0);
         assert_eq!(e.mem.u32(stream_variable), 0);
         assert_eq!(e.mem.u32(unknown_variable), 0x7777);

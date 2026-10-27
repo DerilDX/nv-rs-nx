@@ -383,7 +383,8 @@ pub fn hk_aabb_tree_aabb_uint_construct(e: &mut Engine, this: Ptr) {
 /// +0x60, computes +0x70 as the refined reciprocal of the third (lane 3 taken from the ones
 /// vector at `010c7170`: `RCPPS` then `(r + r) - (r * x) * r`), clears +0x10 and +0x18 and sets the root word
 /// (+0x14) to `0x7fff`.
-pub fn fn_00d9c180(e: &mut Engine, this: Ptr, offset: Ptr, extra: Ptr, scale: Ptr) {
+/// Answers `this` (`MOV EAX,ECX`; the caller stores it, 00d08e53).
+pub fn fn_00d9c180(e: &mut Engine, this: Ptr, offset: Ptr, extra: Ptr, scale: Ptr) -> Ptr {
     let me = this.addr();
     e.mem.set_u32(me, NARROW_TREE_VTABLE);
     for at in [0x1cu32, 0x20, 0x24, 0x28, 0x2c, 0x30] {
@@ -408,6 +409,7 @@ pub fn fn_00d9c180(e: &mut Engine, this: Ptr, offset: Ptr, extra: Ptr, scale: Pt
     e.mem.set_u32(me + 0x10, 0);
     e.mem.set_u32(me + 0x18, 0);
     e.mem.set_u16(me + 0x14, NONE_NARROW);
+    this
 }
 
 /// `RCPPS` of one lane (the host CPU's estimate on x86).
@@ -2110,7 +2112,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x00d9_c090, fn_00d9c090(Ptr)),
         entry!(0x00d9_c110, hk_aabb_tree_aabb_uint_construct(Ptr)),
-        entry!(0x00d9_c180, fn_00d9c180(Ptr, Ptr, Ptr, Ptr)),
+        entry!(0x00d9_c180, fn_00d9c180(Ptr, Ptr, Ptr, Ptr) -> Ptr),
         entry!(0x00d9_c210, hk_aabb_tree_aabb16_node_manager_push_back(Ptr, Ptr, Ptr, Ptr) -> u32),
         entry!(0x00d9_c280, hk_aabb_tree_aabb16_node_manager_new_node(Ptr, Ptr, Ptr, Ptr) -> u32),
         entry!(0x00d9_c2d0, fn_00d9c2d0(Ptr, u16)),
@@ -2692,6 +2694,24 @@ mod tests {
         assert_eq!(s.e.mem.u32(tree + 0x18), 0);
         let manager: Vec<u32> = (0..6).map(|i| s.e.mem.u32(tree + 0x1c + 4 * i)).collect();
         assert_eq!(manager, vec![0, 0, 0x8000_0000, 0, 0, 0x8000_0000]);
+    }
+
+    #[test]
+    fn narrow_constructor_answers_this() {
+        let mut s = setup();
+        let tree = s.e.mem.alloc(0x80);
+        let vectors = s.e.mem.alloc(0x30);
+        for lane in 0..12u32 {
+            s.e.mem.set_f32(vectors + 4 * lane, 1.0);
+        }
+        // `MOV EAX,ECX` first; the caller stores the answer (00d08e53).
+        let answered =
+            s.e.call(
+                0x00d9_c180,
+                &args![tree, vectors, vectors + 0x10, vectors + 0x20],
+            )
+            .u32();
+        assert_eq!(answered, tree);
     }
 
     #[test]

@@ -32,12 +32,14 @@ pub fn fn_00e45530(e: &mut Engine, this: Ptr) -> u32 {
 /// byte is the one at `this + 0x30`. Otherwise it is whether `against` shares a bit with the OR
 /// of the table words `*(this + 0x34 + 4 * k)` over the set bits `k` (0 to 31) of `layers`
 /// (a table word is only read for a set bit).
-pub fn fn_00e455f0(e: &mut Engine, this: Ptr, out: u32, layers: u32, against: u32) {
+/// Answers `out`: the exe leaves it in `EAX` at every `RET` (the hkBool/hkResult result
+/// returned through a pointer, which callers read through `EAX`).
+pub fn fn_00e455f0(e: &mut Engine, this: Ptr, out: u32, layers: u32, against: u32) -> u32 {
     let this = this.addr();
     if layers == 0 || against == 0 {
         let default = e.mem.u8(this.wrapping_add(0x30));
         e.mem.set_u8(out, default);
-        return;
+        return out;
     }
     let mut combined = 0u32;
     for bit in 0..32u32 {
@@ -46,6 +48,7 @@ pub fn fn_00e455f0(e: &mut Engine, this: Ptr, out: u32, layers: u32, against: u3
         }
     }
     e.mem.set_u8(out, u8::from(against & combined != 0));
+    out
 }
 
 // Translated from 00e45890 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -177,7 +180,7 @@ pub fn fn_00e45990(e: &mut Engine, this: Ptr, out: u32, first: u32, second: u32)
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00e4_5530, fn_00e45530(Ptr) -> u32),
-        entry!(0x00e4_55f0, fn_00e455f0(Ptr, u32, u32, u32)),
+        entry!(0x00e4_55f0, fn_00e455f0(Ptr, u32, u32, u32) -> u32),
         entry!(0x00e4_5890, fn_00e45890(Ptr, u32, u32, u32) -> u32),
         entry!(
             0x00e4_58c0,
@@ -249,6 +252,18 @@ mod tests {
         // The words around the table are untouched.
         assert_eq!(e.mem.u32(this + 4), 0xffff_ffff);
         assert_eq!(e.mem.u32(this + 0xb4), 0xffff_ffff);
+    }
+
+    #[test]
+    fn the_layer_filter_answers_its_out_pointer() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0xc0);
+        let out = e.mem.alloc(4);
+        // EAX is `out` at every RET (the hkBool result pointer the callers read through).
+        assert_eq!(
+            e.call(0x00e4_55f0, &args![this, out, 0u32, 0u32]).u32(),
+            out
+        );
     }
 
     #[test]

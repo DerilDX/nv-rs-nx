@@ -159,6 +159,9 @@ fn free_if_owned(e: &mut Engine, allocator: u32, array: u32, flags: u32, bytes: 
     }
 }
 
+/// The size of the constructor's frame (00ddbf00: `SUB ESP,0x4c` and four pushes).
+const CONSTRUCTOR_FRAME_SIZE: u32 = 0x5c;
+
 // Translated from 00ddbf00 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkStatisticsProcess::hkStatisticsProcess` (Xbox PDB), `thiscall`, `RET 4`: `source` is an
 /// `hkArray` of words (data, size at `+4`). Stores the 16-bit word 1 at `+6`, the `hkProcess`
@@ -183,59 +186,58 @@ pub fn hk_statistics_process_hk_statistics_process(e: &mut Engine, this: Ptr, so
     init_array(e, base + 0x20);
     init_array(e, base + 0x2c);
     init_array(e, base + 0x38);
-    let frame_info = e.mem.alloc(0x24);
-    e.call(FRAME_INFO_CONSTRUCTOR, &args![frame_info]);
-    e.mem.set_u32(frame_info, 0);
-    e.mem.set_u32(frame_info + 0xc, 0);
-    e.mem.set_u32(frame_info + 4, 0);
-    e.mem.set_u32(frame_info + 8, 1);
-    let ticks = e.call(GET_TICKS_PER_SECOND, &args![]).u64();
-    let low = ticks as u32;
-    let high = (ticks >> 32) as u32;
-    // The two `FILD`s: the 63 low bits, and the top bit as an `i64` (`-2^63` or 0) negated.
-    let low_part = (u64::from(high & 0x7fff_ffff) << 32 | u64::from(low)) as i64;
-    let top_part = (u64::from(high & 0x8000_0000) << 32) as i64;
-    let total = x87_add(low_part as f64, -(top_part as f64));
-    let numerator = e.mem.f64(THOUSAND);
-    let per_tick = x87_store32(x87_div(numerator, total));
-    let array = e.mem.alloc(12);
-    init_array(e, array);
-    e.mem.set_u32(frame_info + 0x10, per_tick);
-    e.mem.set_u32(frame_info + 0x14, 0x3f80_0000);
-    let writer = e.mem.alloc(0x14);
-    e.call(
-        ARRAY_STREAM_WRITER_CONSTRUCTOR,
-        &args![writer, base + 0x2c, 1u32],
-    );
-    let layout = e.mem.alloc(4);
-    e.call(LAYOUT_RULES_COPY, &args![layout, LAYOUT_RULES]);
-    e.call(
-        WRITE_OBJECT,
-        &args![
-            writer,
-            layout,
-            1u32,
-            0u32,
-            frame_info,
-            FRAME_INFO_CLASS,
-            array
-        ],
-    );
-    e.call(ARRAY_STREAM_WRITER_DESTRUCTOR, &args![writer]);
-    let allocator = router_allocator(e);
-    let flags = e.mem.u32(array + 8);
-    e.mem.set_u32(array + 4, 0);
-    free_if_owned(
-        e,
-        allocator,
-        array,
-        flags,
-        (flags & 0x3fff_ffff).wrapping_mul(0x18),
-    );
-    e.mem.free(layout);
-    e.mem.free(writer);
-    e.mem.free(array);
-    e.mem.free(frame_info);
+    // The exe's frame (00ddbf00: `SUB ESP,0x4c` and four pushes) holds the layout word at
+    // +0x10, the throw-away array at +0x18, the writer at +0x24 and the frame info at +0x38.
+    e.with_stack(CONSTRUCTOR_FRAME_SIZE, |e, frame| {
+        let frame = frame.addr();
+        let (layout, array, writer, frame_info) =
+            (frame + 0x10, frame + 0x18, frame + 0x24, frame + 0x38);
+        e.call(FRAME_INFO_CONSTRUCTOR, &args![frame_info]);
+        e.mem.set_u32(frame_info, 0);
+        e.mem.set_u32(frame_info + 0xc, 0);
+        e.mem.set_u32(frame_info + 4, 0);
+        e.mem.set_u32(frame_info + 8, 1);
+        let ticks = e.call(GET_TICKS_PER_SECOND, &args![]).u64();
+        let low = ticks as u32;
+        let high = (ticks >> 32) as u32;
+        // The two `FILD`s: the 63 low bits, and the top bit as an `i64` (`-2^63` or 0) negated.
+        let low_part = (u64::from(high & 0x7fff_ffff) << 32 | u64::from(low)) as i64;
+        let top_part = (u64::from(high & 0x8000_0000) << 32) as i64;
+        let total = x87_add(low_part as f64, -(top_part as f64));
+        let numerator = e.mem.f64(THOUSAND);
+        let per_tick = x87_store32(x87_div(numerator, total));
+        init_array(e, array);
+        e.mem.set_u32(frame_info + 0x10, per_tick);
+        e.mem.set_u32(frame_info + 0x14, 0x3f80_0000);
+        e.call(
+            ARRAY_STREAM_WRITER_CONSTRUCTOR,
+            &args![writer, base + 0x2c, 1u32],
+        );
+        e.call(LAYOUT_RULES_COPY, &args![layout, LAYOUT_RULES]);
+        e.call(
+            WRITE_OBJECT,
+            &args![
+                writer,
+                layout,
+                1u32,
+                0u32,
+                frame_info,
+                FRAME_INFO_CLASS,
+                array
+            ],
+        );
+        e.call(ARRAY_STREAM_WRITER_DESTRUCTOR, &args![writer]);
+        let allocator = router_allocator(e);
+        let flags = e.mem.u32(array + 8);
+        e.mem.set_u32(array + 4, 0);
+        free_if_owned(
+            e,
+            allocator,
+            array,
+            flags,
+            (flags & 0x3fff_ffff).wrapping_mul(0x18),
+        );
+    });
     let allocator = router_allocator(e);
     copy_words(e, allocator, base + 0x20, source);
     this
@@ -316,19 +318,22 @@ fn next_occupied_slot(e: &mut Engine, map: u32, from: i32, last: i32) -> i32 {
 
 /// `step`'s second half: from the two word arrays `a` and `b` (start and end addresses of the
 /// monitor stream ranges), fills the map and the string map array and writes the packet to the
-/// output archive (`this + 0xc`) or drops the ranges, then frees the arrays. `frame` is the 0x60-byte
-/// frame the code keeps its locals in: the layout word at `+0xc`, array `a` at `+0x10`, `b`
-/// at `+0x1c`, the map (data, size, hash mask) at `+0x28`, the string map array (16-byte
-/// elements) at `+0x34`, the array `c` (24-byte elements) at `+0x40` and the array stream writer
-/// at `+0x4c`.
+/// output archive (`this + 0xc`) or drops the ranges, then frees the arrays. `frame` is the exe's
+/// 0x6c-byte frame ([`STEP_FRAME_SIZE`], `ESP` after its `SUB` and four pushes): the layout word at
+/// `+0x18`, array `a` at `+0x1c`, `b` at `+0x28`, the map (data, size, hash mask) at `+0x34`, the
+/// string map array (16-byte elements) at `+0x40`, the array `c` (24-byte elements) at `+0x4c` and
+/// the array stream writer at `+0x58`.
+/// The size of `step`'s frame (00ddc1c0: `SUB ESP,0x5c` and four pushes).
+const STEP_FRAME_SIZE: u32 = 0x6c;
+
 fn step_write(e: &mut Engine, this: u32, frame: u32) {
-    let a = frame + 0x10;
-    let b = frame + 0x1c;
-    let c = frame + 0x40;
-    let map = frame + 0x28;
-    let strings = frame + 0x34;
-    let layout = frame + 0xc;
-    let writer = frame + 0x4c;
+    let a = frame + 0x1c;
+    let b = frame + 0x28;
+    let c = frame + 0x4c;
+    let map = frame + 0x34;
+    let strings = frame + 0x40;
+    let layout = frame + 0x18;
+    let writer = frame + 0x58;
     let out = this + 0x30;
     let allocator = router_allocator(e);
     let capacity = e.mem.u32(out + 8) & 0x3fff_ffff;
@@ -563,54 +568,55 @@ pub fn hk_statistics_process_step(e: &mut Engine, this: Ptr, _unused_1: f32) {
     if e.mem.u32(base + 0xc) == 0 {
         return;
     }
-    let frame = e.mem.alloc(0x60);
-    let (a, b, c) = (frame + 0x10, frame + 0x1c, frame + 0x40);
-    init_array(e, a);
-    init_array(e, b);
-    init_array(e, c);
-    let count = e.mem.i32(base + 0x1c);
-    let mut found = None;
-    if count > 0 {
-        let list = e.mem.u32(base + 0x18);
-        let mut at = list;
-        let mut index: u32 = 0;
-        loop {
-            let item = e.mem.u32(at);
-            if e.mem.i32(item + 0xc) > 0 {
-                found = Some(index);
-                break;
-            }
-            index += 1;
-            at = at.wrapping_add(4);
-            if (index as i32) >= count {
-                break;
+    e.with_stack(STEP_FRAME_SIZE, |e, frame| {
+        let frame = frame.addr();
+        let (a, b, c) = (frame + 0x1c, frame + 0x28, frame + 0x4c);
+        init_array(e, a);
+        init_array(e, b);
+        init_array(e, c);
+        let count = e.mem.i32(base + 0x1c);
+        let mut found = None;
+        if count > 0 {
+            let list = e.mem.u32(base + 0x18);
+            let mut at = list;
+            let mut index: u32 = 0;
+            loop {
+                let item = e.mem.u32(at);
+                if e.mem.i32(item + 0xc) > 0 {
+                    found = Some(index);
+                    break;
+                }
+                index += 1;
+                at = at.wrapping_add(4);
+                if (index as i32) >= count {
+                    break;
+                }
             }
         }
-    }
-    let mut skip_tls = false;
-    if let Some(index) = found {
-        let list = e.mem.u32(base + 0x18);
-        let item = e.mem.u32(list.wrapping_add(4 * index));
-        let allocator = router_allocator(e);
-        copy_words(e, allocator, a, item + 8);
-        let list = e.mem.u32(base + 0x18);
-        let item = e.mem.u32(list.wrapping_add(4 * index));
-        let allocator = router_allocator(e);
-        copy_words(e, allocator, b, item + 0x2c);
-        skip_tls = e.mem.u32(a + 4) != 0;
-    }
-    if !skip_tls {
-        let slot = e.mem.u32(TLS_INDEX);
-        let block = e.call(TLS_GET_VALUE, &args![slot]).u32();
-        let first = e.mem.u32(block);
-        let second = e.mem.u32(block + 4);
-        let allocator = router_allocator(e);
-        push_word(e, allocator, a, first);
-        let allocator = router_allocator(e);
-        push_word(e, allocator, b, second);
-    }
-    step_write(e, base, frame);
-    e.mem.free(frame);
+        let mut skip_tls = false;
+        if let Some(index) = found {
+            let list = e.mem.u32(base + 0x18);
+            let item = e.mem.u32(list.wrapping_add(4 * index));
+            let allocator = router_allocator(e);
+            copy_words(e, allocator, a, item + 8);
+            let list = e.mem.u32(base + 0x18);
+            let item = e.mem.u32(list.wrapping_add(4 * index));
+            let allocator = router_allocator(e);
+            copy_words(e, allocator, b, item + 0x2c);
+            skip_tls = e.mem.u32(a + 4) != 0;
+        }
+        if !skip_tls {
+            let slot = e.mem.u32(TLS_INDEX);
+            let block = e.call(TLS_GET_VALUE, &args![slot]).u32();
+            let first = e.mem.u32(block);
+            let second = e.mem.u32(block + 4);
+            let allocator = router_allocator(e);
+            push_word(e, allocator, a, first);
+            let allocator = router_allocator(e);
+            push_word(e, allocator, b, second);
+        }
+        step_write(e, base, frame);
+    });
 }
 
 // Translated from 00ddc820 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1259,6 +1265,63 @@ mod statistics_process_tests {
         // The serialization still ran and the arrays were freed.
         assert_eq!(calls(&log, WRITE_OBJECT).len(), 1);
         assert_eq!(calls(&log, FREE_SLOT).len(), 3);
+    }
+
+    #[test]
+    fn the_constructor_keeps_its_locals_at_the_exe_frame_offsets() {
+        let (mut e, log) = world();
+        let this = e.mem.alloc(0x50);
+        let source = array_of_words(&mut e, &[5]);
+        // The frame block is the one just freed: the layout word at +0x10, the throw-away array
+        // at +0x18, the writer at +0x24 and the frame info at +0x38.
+        let frame = e.mem.alloc(CONSTRUCTOR_FRAME_SIZE);
+        e.mem.free(frame);
+        e.call(0x00dd_bf00, &args![this, source]);
+        assert_eq!(
+            calls(&log, FRAME_INFO_CONSTRUCTOR),
+            vec![vec![frame + 0x38]]
+        );
+        assert_eq!(
+            calls(&log, ARRAY_STREAM_WRITER_CONSTRUCTOR),
+            vec![vec![frame + 0x24, this + 0x2c, 1]]
+        );
+        assert_eq!(
+            calls(&log, WRITE_OBJECT),
+            vec![vec![
+                frame + 0x24,
+                frame + 0x10,
+                1,
+                0,
+                frame + 0x38,
+                FRAME_INFO_CLASS,
+                frame + 0x18
+            ]]
+        );
+    }
+    #[test]
+    fn step_keeps_its_locals_at_the_exe_frame_offsets() {
+        let (mut e, log) = world();
+        let this = process(&mut e, &[(&[0x1000], &[0x1010])]);
+        // The frame block is the one just freed: the layout word sits at +0x18, the map at
+        // +0x34, the string map array at +0x40, the array `c` at +0x4c and the array stream
+        // writer at +0x58 of the exe's frame.
+        let frame = e.mem.alloc(STEP_FRAME_SIZE);
+        e.mem.free(frame);
+        e.call(0x00dd_c1c0, &args![this, 0.0f32]);
+        assert_eq!(calls(&log, READ_MONITOR_RANGE)[0][2], frame + 0x34);
+        assert_eq!(
+            calls(&log, WRITE_OBJECT),
+            vec![vec![
+                frame + 0x58,
+                frame + 0x18,
+                1,
+                0,
+                frame + 0x40,
+                STRING_MAP_CLASS,
+                frame + 0x4c
+            ]]
+        );
+        assert_eq!(calls(&log, STRING_MAP_DESTRUCTOR), vec![vec![frame + 0x40]]);
     }
 }
 

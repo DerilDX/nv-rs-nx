@@ -7877,11 +7877,12 @@ fn forget_actor_sound(
 
 /// Destroys the three sound handles `actor_kill` keeps (in the order the
 /// compiler's cleanup does) and releases their memory.
+/// `handles` is the awake handle (`EBP-0x3c` of `0089d900`); the idle and the attack handles
+/// follow at +12 and +24 (`EBP-0x30`, `EBP-0x24`).
 fn destroy_kill_sound_handles(e: &mut Engine, handles: u32) {
-    e.call(SOUND_HANDLE_DESTROY, &args![handles + 24]);
-    e.call(SOUND_HANDLE_DESTROY, &args![handles + 12]);
     e.call(SOUND_HANDLE_DESTROY, &args![handles]);
-    e.mem.free(handles);
+    e.call(SOUND_HANDLE_DESTROY, &args![handles + 12]);
+    e.call(SOUND_HANDLE_DESTROY, &args![handles + 24]);
 }
 
 /// Calls `TESObjectREFR::SetMarkerUsed` on the furniture the process
@@ -8003,7 +8004,7 @@ fn weapon_slot(e: &mut Engine, weapon_form: u32) -> u32 {
 /// combat, releases its furniture, goes to life state 6 with full health
 /// and, at process level 6, shows a message. Returns true when the whole
 /// kill ends here (the first case, which also destroys the sound handles).
-fn kill_essential_actor(e: &mut Engine, this: Ptr<Actor>, handles: u32) -> bool {
+fn kill_essential_actor(e: &mut Engine, ebp: u32, this: Ptr<Actor>, handles: u32) -> bool {
     if e.call(ACTOR_PROCESS_LEVEL_IS_3, &args![this]).bool()
         || e.call(ACTOR_PROCESS_LEVEL_IS_5, &args![this]).bool()
     {
@@ -8044,14 +8045,13 @@ fn kill_essential_actor(e: &mut Engine, this: Ptr<Actor>, handles: u32) -> bool 
             .call(SETTING_GET_STRING, &args![DOWN_MESSAGE_SETTING])
             .u32();
         let name = e.call(REFR_GET_NAME, &args![this]).u32();
-        let buffer = e.mem.alloc(204);
+        let buffer = ebp - 0x170;
         e.call(SPRINTF, &args![buffer, TWO_STRINGS_FORMAT, name, text]);
         let duration: f32 = e.global(MESSAGE_DURATION);
         e.call(
             SHOW_MESSAGE,
             &args![buffer, 0u32, MESSAGE_ICON_SURPRISED, 0u32, duration, 0u32],
         );
-        e.mem.free(buffer);
     }
     false
 }
@@ -8081,8 +8081,16 @@ fn report_death(e: &mut Engine, this: Ptr<Actor>, attacker: Ptr<Actor>) {
 /// The part of `Actor::Kill` that updates the combat bookkeeping for the
 /// player or a teammate of the player: crime for a combatant that sees the
 /// player, and the slow-motion camera when nothing else is fighting.
-fn update_kill_counts(e: &mut Engine, this: Ptr<Actor>, attacker: Ptr<Actor>, player: u32) {
-    let counter = e.mem.alloc(8);
+fn update_kill_counts(
+    e: &mut Engine,
+    ebp: u32,
+    this: Ptr<Actor>,
+    attacker: Ptr<Actor>,
+    player: u32,
+) {
+    // 0089f35e: the count word at `EBP-0x34c` (and the result at `EBP-0x350`) start at 0.
+    let counter = ebp - 0x34c;
+    e.mem.set_u32(counter, 0);
     if attacker.addr() == player
         || (!attacker.is_null()
             && e.call(PROCESS_GET_FORCE_NEXT_UPDATE, &args![attacker])
@@ -8109,7 +8117,6 @@ fn update_kill_counts(e: &mut Engine, this: Ptr<Actor>, attacker: Ptr<Actor>, pl
             );
         }
     }
-    e.mem.free(counter);
 }
 
 /// The killing part of `Actor::Kill` (the actor is not essential): clears
@@ -8121,6 +8128,7 @@ fn update_kill_counts(e: &mut Engine, this: Ptr<Actor>, attacker: Ptr<Actor>, pl
 /// finishes with `Actor::DoDeathStuff` and the debug line.
 fn kill_actor(
     e: &mut Engine,
+    ebp: u32,
     this: Ptr<Actor>,
     attacker: &mut Ptr<Actor>,
     was_aggressor: bool,
@@ -8152,12 +8160,11 @@ fn kill_actor(
         if blamed {
             e.mem.set_u8(this.addr() + 0xc4, u8::from(!was_aggressor));
             if attacker.addr() == player {
-                let flag = e.mem.alloc(4);
+                let flag = ebp - 0x17d;
                 e.mem.set_u8(flag, 0);
                 let reaction = e
                     .call(ACTOR_GET_FACTION_FIGHT_REACTION, &args![this, player, flag])
                     .i32();
-                e.mem.free(flag);
                 if (reaction == 3 || reaction == 2)
                     && e.call(ACTOR_TEST_5A3790, &args![this]).bool()
                 {
@@ -8262,15 +8269,15 @@ fn kill_actor(
         e.vcall(process, PROCESS_SLOT_660, &args![]);
         let process = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
         if e.call(ACQUIRE_OBJECT_FIELD_28, &args![process]).u32() == 0 {
-            play_death_voice(e, this, *attacker, player);
+            play_death_voice(e, ebp, this, *attacker, player);
         }
     }
     e.call(ACTOR_SET_LIFE_STATE, &args![this, 1u32]);
     e.call(ACTOR_SET_HAVOK_WEAPON, &args![this]);
     if this.addr() == player {
-        player_dies(e, this);
+        player_dies(e, ebp, this);
     }
-    finish_dying(e, this, *attacker, player);
+    finish_dying(e, ebp, this, *attacker, player);
     if e.call(DEBUG_MESSAGES_ENABLED, &args![]).bool() {
         let name = e.call(REFR_GET_NAME, &args![this]).u32();
         e.call(PRINT_DEBUG_LINE, &args![IS_DEAD_FORMAT, name]);
@@ -8326,7 +8333,7 @@ fn award_experience(e: &mut Engine, this: Ptr<Actor>, attacker: Ptr<Actor>, play
 /// distance of the player (and is not a teammate-killed or protected
 /// case), a creature plays a creature sound (`PickCreatureSound(8)`) and
 /// anything else starts the combat dialogue 6.
-fn play_death_voice(e: &mut Engine, this: Ptr<Actor>, attacker: Ptr<Actor>, player: u32) {
+fn play_death_voice(e: &mut Engine, ebp: u32, this: Ptr<Actor>, attacker: Ptr<Actor>, player: u32) {
     let mut near = !e.vcall(this.addr(), ACTOR_SLOT_360, &args![]).bool()
         && e.call(GLOBAL_FLAG_525420, &args![]).bool();
     if near {
@@ -8369,7 +8376,7 @@ fn play_death_voice(e: &mut Engine, this: Ptr<Actor>, attacker: Ptr<Actor>, play
         );
         return;
     }
-    let handle = e.mem.alloc(12);
+    let handle = ebp - 0x1f8;
     let id = e.call(FORM_NUMERIC_ID, &args![sound]).u32();
     let audio = e.call(AUDIO_INSTANCE, &args![]).u32();
     e.call(
@@ -8385,16 +8392,15 @@ fn play_death_voice(e: &mut Engine, this: Ptr<Actor>, attacker: Ptr<Actor>, play
     e.call(SOUND_HANDLE_SET_OBJECT_TO_FOLLOW, &args![handle, node]);
     e.call(SOUND_HANDLE_PLAY, &args![handle, 0u32]);
     e.call(SOUND_HANDLE_DESTROY, &args![handle]);
-    e.mem.free(handle);
 }
 
 /// What happens when the player is the one dying: the Pipboy radio is
 /// switched off, the death music plays, a VATS playback ends and an open
 /// surgery menu closes.
-fn player_dies(e: &mut Engine, this: Ptr<Actor>) {
+fn player_dies(e: &mut Engine, ebp: u32, this: Ptr<Actor>) {
     e.call(PIPBOY_RADIO_ENABLE, &args![0u32]);
     e.call(SOUND_FADE_WORKER, &args![0x3e8u32, 0u32]);
-    let handle = e.mem.alloc(12);
+    let handle = ebp - 0x210;
     let audio = e.call(AUDIO_INSTANCE, &args![]).u32();
     let music = e
         .call(
@@ -8404,7 +8410,6 @@ fn player_dies(e: &mut Engine, this: Ptr<Actor>) {
         .u32();
     e.call(SOUND_HANDLE_PLAY, &args![music, 0u32]);
     e.call(SOUND_HANDLE_DESTROY, &args![handle]);
-    e.mem.free(handle);
     e.call(VATS_QUIT_PLAYBACK, &args![VATS_OBJECT, 0u32, 0u32]);
     if e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32() != 0 {
         let process = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
@@ -8419,7 +8424,7 @@ fn player_dies(e: &mut Engine, this: Ptr<Actor>) {
 /// `TES` bookkeeping, the ragdoll impulse (with the many vector helpers)
 /// and the weapon drop, or `Actor::DoDeathStuff` and the dead flag when
 /// there is no process.
-fn finish_dying(e: &mut Engine, this: Ptr<Actor>, attacker: Ptr<Actor>, player: u32) {
+fn finish_dying(e: &mut Engine, ebp: u32, this: Ptr<Actor>, attacker: Ptr<Actor>, player: u32) {
     let face = e.call(ACTOR_GET_FACE_ANIMATION_DATA, &args![this]).u32();
     if face != 0 {
         e.vcall(face, 0xd8, &args![1u32, 0u32]);
@@ -8467,14 +8472,14 @@ fn finish_dying(e: &mut Engine, this: Ptr<Actor>, attacker: Ptr<Actor>, player: 
         e.call(EXTRA_REMOVE_TRESPASS_PACKAGE, &args![extra]);
     }
     let node = e.call(ACTOR_COLLISION_OBJECT, &args![this]).u32();
-    let velocity = e.mem.alloc(16);
+    let velocity = ebp - 0x250;
     let zero = 0.0f32;
     e.call(VECTOR4_CONSTRUCT, &args![velocity, zero, zero, zero, zero]);
     if e.call(MOBILE_OBJECT_GET_CHAR_CONTROLLER, &args![this])
         .u32()
         != 0
     {
-        let linear = e.mem.alloc(16);
+        let linear = ebp - 0x25c;
         let controller = e
             .call(MOBILE_OBJECT_GET_CHAR_CONTROLLER, &args![this])
             .u32();
@@ -8483,7 +8488,6 @@ fn finish_dying(e: &mut Engine, this: Ptr<Actor>, attacker: Ptr<Actor>, player: 
             &args![controller, linear],
         );
         e.call(VECTOR_ASSIGN, &args![velocity, linear]);
-        e.mem.free(linear);
     }
     if this.addr() == player {
         e.call(MOBILE_OBJECT_SET_CHASE_BIP, &args![this, 1u32]);
@@ -8504,9 +8508,9 @@ fn finish_dying(e: &mut Engine, this: Ptr<Actor>, attacker: Ptr<Actor>, player: 
             impulse_branch = e.vcall(process, PROCESS_SLOT_40C, &args![]).u32() == 6;
         }
         if impulse_branch {
-            apply_death_impulse(e, this, attacker, player, node, velocity);
+            apply_death_impulse(e, ebp, this, attacker, player, node, velocity);
         } else if e.vcall(this.addr(), ACTOR_SLOT_234, &args![]).bool() {
-            apply_knocked_impulse(e, this, node);
+            apply_knocked_impulse(e, ebp, this, node);
         }
         let manager = e.global::<u32>(COMBAT_MANAGER);
         let count = e
@@ -8533,7 +8537,6 @@ fn finish_dying(e: &mut Engine, this: Ptr<Actor>, attacker: Ptr<Actor>, player: 
         e.call(REFR_RUN_SCRIPT, &args![this]);
         e.mem.set_u8(this.addr() + 0x118, 1);
     }
-    e.mem.free(velocity);
 }
 
 /// The impulse a dying actor's body gets when it is not knocked down in a
@@ -8542,6 +8545,7 @@ fn finish_dying(e: &mut Engine, this: Ptr<Actor>, attacker: Ptr<Actor>, player: 
 /// the player when the player is the killer.
 fn apply_death_impulse(
     e: &mut Engine,
+    ebp: u32,
     this: Ptr<Actor>,
     attacker: Ptr<Actor>,
     player: u32,
@@ -8551,15 +8555,14 @@ fn apply_death_impulse(
     if e.call(ACTOR_TEST_87EEB0, &args![this]).bool() {
         return;
     }
-    let locals = e.mem.alloc(0x100);
-    let direction = locals;
-    let transformed = locals + 0x10;
-    let rotation = locals + 0x20;
-    let rotated = locals + 0x30;
-    let player_position = locals + 0x40;
-    let own_position = locals + 0x50;
-    let difference = locals + 0x60;
-    let angular = locals + 0x70;
+    let direction = ebp - 0x274;
+    let transformed = ebp - 0x290;
+    let rotation = ebp - 0x2b4;
+    let rotated = ebp - 0x2c0;
+    let player_position = ebp - 0x2cc;
+    let own_position = ebp - 0x2d8;
+    let difference = ebp - 0x2e4;
+    let angular = ebp - 0x2f0;
     copy_vector(e, DEFAULT_DIRECTION, direction);
     let object = e
         .call(VECTOR_TRANSFORM_630B40, &args![velocity, transformed])
@@ -8620,18 +8623,16 @@ fn apply_death_impulse(
     e.call(VECTOR_SCALE_IN_PLACE, &args![direction, factor]);
     e.call(TES_HAVOK_ADD_VELOCITY, &args![node, direction, 0u32]);
     e.vcall(this.addr(), ACTOR_SLOT_48, &args![4u32]);
-    e.mem.free(locals);
 }
 
 /// The push a dying actor gets in the knocked-down state: the body is
 /// un-fixed and given an upward velocity along its heading.
-fn apply_knocked_impulse(e: &mut Engine, this: Ptr<Actor>, node: u32) {
+fn apply_knocked_impulse(e: &mut Engine, ebp: u32, this: Ptr<Actor>, node: u32) {
     e.call(BHK_RIGID_BODY_SET_FIXED, &args![node, 0u32, 1u32]);
-    let locals = e.mem.alloc(0x100);
-    let rotation = locals;
-    let up = locals + 0x20;
-    let rotated = locals + 0x30;
-    let velocity = locals + 0x40;
+    let rotation = ebp - 0x314;
+    let up = ebp - 0x320;
+    let rotated = ebp - 0x32c;
+    let velocity = ebp - 0x340;
     let heading = e
         .vcall(this.addr(), ACTOR_SLOT_GET_HEADING, &args![0u32])
         .f32();
@@ -8644,7 +8645,6 @@ fn apply_knocked_impulse(e: &mut Engine, this: Ptr<Actor>, node: u32) {
     copy_vector(e, result, up);
     e.call(VECTOR_ASSIGN, &args![velocity, up]);
     e.call(TES_HAVOK_SET_VELOCITY, &args![node, velocity, 0u32]);
-    e.mem.free(locals);
 }
 
 // Translated from 0089d900 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -8674,127 +8674,131 @@ pub fn actor_kill(e: &mut Engine, this: Ptr<Actor>, attacker: Ptr<Actor>, damage
     if e.vcall(this.addr(), ACTOR_SLOT_1A0, &args![0u32]).bool() && this.addr() != player_address {
         return;
     }
-    // Three sound handles of 12 bytes (`BSSoundHandle`).
-    let handles = e.mem.alloc(36);
-    forget_actor_sound(
-        e,
-        this,
-        handles,
-        EXTRA_GET_WEAPON_ATTACK_SOUND,
-        EXTRA_SET_WEAPON_ATTACK_SOUND,
-        true,
-    );
-    forget_actor_sound(
-        e,
-        this,
-        handles + 12,
-        EXTRA_GET_WEAPON_IDLE_SOUND,
-        EXTRA_SET_WEAPON_IDLE_SOUND,
-        true,
-    );
-    forget_actor_sound(
-        e,
-        this,
-        handles + 24,
-        EXTRA_GET_CREATURE_AWAKE_SOUND,
-        EXTRA_SET_CREATURE_AWAKE_SOUND,
-        false,
-    );
-    if e.call(PICK_UP_GOES_TO_TASK_QUEUE, &args![]).bool() {
-        let block = e.call(OPERATOR_NEW, &args![4u32]).u32();
-        e.mem.set_f32(block, damage);
-        e.set(this, Actor::pMyKiller, attacker.cast());
-        let tes = e.call(GET_TES, &args![]).u32();
-        e.call(QUEUE_ACTOR_KILL, &args![tes, this, block, 0u32]);
-        destroy_kill_sound_handles(e, handles);
-        return;
-    }
-
-    if !attacker.is_null()
-        && e.vcall(attacker.addr(), ACTOR_SLOT_360, &args![]).bool()
-        && !e.vcall(this.addr(), ACTOR_SLOT_360, &args![]).bool()
-    {
-        record_kill_statistics(e, this, attacker, player_address);
-    }
-
-    e.mem.set_u8(this.addr() + 0xc4, 0);
-    let mut was_aggressor = false;
-    if e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32() != 0 {
-        let process = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
-        if e.vcall(process, PROCESS_SLOT_1C4, &args![]).bool() {
-            was_aggressor = true;
-        }
-    }
-    e.call(MOBILE_OBJECT_STOP_CURRENT_DIALOGUE, &args![this]);
-    e.vcall(this.addr(), ACTOR_SLOT_STOP_COMBAT, &args![0u32]);
-    if e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32() != 0 {
-        let process = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
-        e.vcall(process, PROCESS_SLOT_6C4, &args![]);
-        let process = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
-        e.vcall(process, PROCESS_SLOT_180, &args![]);
-    }
-    if e.vcall(this.addr(), ACTOR_SLOT_234, &args![]).bool() {
-        let collision = e.vcall(this.addr(), ACTOR_SLOT_1D0, &args![]).u32();
-        e.call(BHK_RIGID_BODY_SET_FIXED, &args![collision, 0u32, 1u32]);
-    }
-    let ragdoll = e.mem.u32(this.addr() + 0xac);
-    if ragdoll != 0 {
-        e.call(BHK_RAGDOLL_DISABLE_RAGDOLL_ANIM, &args![ragdoll, 1u32]);
-    }
-
-    let setting = e
-        .call(SETTING_GET_BOOL_POINTER, &args![ESSENTIAL_SETTING])
-        .u32();
-    if e.mem.u8(setting) != 0 && e.call(ACTOR_GET_ESSENTIAL, &args![this]).bool() {
-        if kill_essential_actor(e, this, handles) {
+    // The exe's frame aligns `EBP` to 16 bytes, with 0x364 bytes under it (`SUB ESP,0x34c` under
+    // the exception record and `EBX`, then `ESI` and the record link). Three sound handles of
+    // 12 bytes (`BSSoundHandle`): attack at `EBP-0x24`, idle at `EBP-0x30`, awake at `EBP-0x3c`.
+    e.with_stack(0x364 + 0x10, |e, raw| {
+        let ebp = (raw.addr() + 0x364 + 0xf) & !0xf;
+        let handles = ebp - 0x3c;
+        forget_actor_sound(
+            e,
+            this,
+            handles + 24,
+            EXTRA_GET_WEAPON_ATTACK_SOUND,
+            EXTRA_SET_WEAPON_ATTACK_SOUND,
+            true,
+        );
+        forget_actor_sound(
+            e,
+            this,
+            handles + 12,
+            EXTRA_GET_WEAPON_IDLE_SOUND,
+            EXTRA_SET_WEAPON_IDLE_SOUND,
+            true,
+        );
+        forget_actor_sound(
+            e,
+            this,
+            handles,
+            EXTRA_GET_CREATURE_AWAKE_SOUND,
+            EXTRA_SET_CREATURE_AWAKE_SOUND,
+            false,
+        );
+        if e.call(PICK_UP_GOES_TO_TASK_QUEUE, &args![]).bool() {
+            let block = e.call(OPERATOR_NEW, &args![4u32]).u32();
+            e.mem.set_f32(block, damage);
+            e.set(this, Actor::pMyKiller, attacker.cast());
+            let tes = e.call(GET_TES, &args![]).u32();
+            e.call(QUEUE_ACTOR_KILL, &args![tes, this, block, 0u32]);
+            destroy_kill_sound_handles(e, handles);
             return;
         }
-    } else {
-        kill_actor(e, this, &mut attacker, was_aggressor, player_address);
-    }
 
-    // The common tail.
-    let penetration = e.mem.u32(this.addr() + 0xb0);
-    if penetration != 0 {
-        e.call(BHK_RAGDOLL_PENETRATION_UTIL_CLEAR, &args![penetration]);
-        let output = e.mem.alloc(4);
-        let object = e.call(ACTOR_OUTPUT_931ED0, &args![this, output]).u32();
-        let value = e.call(OBJECT_ACCESSOR_4A3A20, &args![object]).u32();
-        e.mem.free(output);
-        let collision = e.vcall(this.addr(), ACTOR_SLOT_1D0, &args![]).u32();
-        e.call(
-            PENETRATION_UTIL_WORKER,
-            &args![penetration, collision, value],
-        );
-    }
-    let report = e
-        .call(SETTING_GET_BOOL_POINTER, &args![DEATH_REPORT_SETTING])
-        .u32();
-    if e.mem.u8(report) != 0 {
-        report_death(e, this, attacker);
-    }
-    let export = e.call(SETTING_TEST_454AF0, &args![EXPORT_SETTING]).bool();
-    if export && this.addr() == player_address {
-        e.set(this, Actor::pMyKiller, attacker.cast());
-        e.call(PLAYER_EXPORT_PROGRESS_DATA, &args![player_address, 1u32]);
-        e.set(this, Actor::pMyKiller, Ptr::NULL);
-    }
-    update_kill_counts(e, this, attacker, player_address);
-    if fn_0089f500(e, Ptr::new(player_address)) != 0 {
-        let holder = e.global::<u32>(MAGIC_SHADER_HOLDER);
-        let shader = fn_0089f4e0(e, Ptr::new(holder));
-        if shader != 0 {
+        if !attacker.is_null()
+            && e.vcall(attacker.addr(), ACTOR_SLOT_360, &args![]).bool()
+            && !e.vcall(this.addr(), ACTOR_SLOT_360, &args![]).bool()
+        {
+            record_kill_statistics(e, this, attacker, player_address);
+        }
+
+        e.mem.set_u8(this.addr() + 0xc4, 0);
+        let mut was_aggressor = false;
+        if e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32() != 0 {
+            let process = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+            if e.vcall(process, PROCESS_SLOT_1C4, &args![]).bool() {
+                was_aggressor = true;
+            }
+        }
+        e.call(MOBILE_OBJECT_STOP_CURRENT_DIALOGUE, &args![this]);
+        e.vcall(this.addr(), ACTOR_SLOT_STOP_COMBAT, &args![0u32]);
+        if e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32() != 0 {
+            let process = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+            e.vcall(process, PROCESS_SLOT_6C4, &args![]);
+            let process = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+            e.vcall(process, PROCESS_SLOT_180, &args![]);
+        }
+        if e.vcall(this.addr(), ACTOR_SLOT_234, &args![]).bool() {
+            let collision = e.vcall(this.addr(), ACTOR_SLOT_1D0, &args![]).u32();
+            e.call(BHK_RIGID_BODY_SET_FIXED, &args![collision, 0u32, 1u32]);
+        }
+        let ragdoll = e.mem.u32(this.addr() + 0xac);
+        if ragdoll != 0 {
+            e.call(BHK_RAGDOLL_DISABLE_RAGDOLL_ANIM, &args![ragdoll, 1u32]);
+        }
+
+        let setting = e
+            .call(SETTING_GET_BOOL_POINTER, &args![ESSENTIAL_SETTING])
+            .u32();
+        if e.mem.u8(setting) != 0 && e.call(ACTOR_GET_ESSENTIAL, &args![this]).bool() {
+            if kill_essential_actor(e, ebp, this, handles) {
+                return;
+            }
+        } else {
+            kill_actor(e, ebp, this, &mut attacker, was_aggressor, player_address);
+        }
+
+        // The common tail.
+        let penetration = e.mem.u32(this.addr() + 0xb0);
+        if penetration != 0 {
+            e.call(BHK_RAGDOLL_PENETRATION_UTIL_CLEAR, &args![penetration]);
+            let output = ebp - 0x348;
+            let object = e.call(ACTOR_OUTPUT_931ED0, &args![this, output]).u32();
+            let value = e.call(OBJECT_ACCESSOR_4A3A20, &args![object]).u32();
+            let collision = e.vcall(this.addr(), ACTOR_SLOT_1D0, &args![]).u32();
             e.call(
-                PROCESS_LISTS_FINISH_MAGIC_SHADER_HIT_EFFECT,
-                &args![PROCESS_LISTS, this, shader],
+                PENETRATION_UTIL_WORKER,
+                &args![penetration, collision, value],
             );
         }
-    }
-    let beam = e.mem.u32(this.addr() + 0x1a0);
-    if beam != 0 {
-        e.call(CONTINUOUS_BEAM_PROJECTILE_SET_KILL, &args![beam, this]);
-    }
-    destroy_kill_sound_handles(e, handles);
+        let report = e
+            .call(SETTING_GET_BOOL_POINTER, &args![DEATH_REPORT_SETTING])
+            .u32();
+        if e.mem.u8(report) != 0 {
+            report_death(e, this, attacker);
+        }
+        let export = e.call(SETTING_TEST_454AF0, &args![EXPORT_SETTING]).bool();
+        if export && this.addr() == player_address {
+            e.set(this, Actor::pMyKiller, attacker.cast());
+            e.call(PLAYER_EXPORT_PROGRESS_DATA, &args![player_address, 1u32]);
+            e.set(this, Actor::pMyKiller, Ptr::NULL);
+        }
+        update_kill_counts(e, ebp, this, attacker, player_address);
+        if fn_0089f500(e, Ptr::new(player_address)) != 0 {
+            let holder = e.global::<u32>(MAGIC_SHADER_HOLDER);
+            let shader = fn_0089f4e0(e, Ptr::new(holder));
+            if shader != 0 {
+                e.call(
+                    PROCESS_LISTS_FINISH_MAGIC_SHADER_HIT_EFFECT,
+                    &args![PROCESS_LISTS, this, shader],
+                );
+            }
+        }
+        let beam = e.mem.u32(this.addr() + 0x1a0);
+        if beam != 0 {
+            e.call(CONTINUOUS_BEAM_PROJECTILE_SET_KILL, &args![beam, this]);
+        }
+        destroy_kill_sound_handles(e, handles);
+    });
 }
 /// Acquire object slot `0x128`: returns the actor it is acquiring from.
 const ACQUIRE_OBJECT_SLOT_128: u32 = 0x128;
@@ -13864,16 +13868,18 @@ pub fn actor_hit_me_ov2(
     offset_a: u32,
     offset_b: u32,
 ) {
-    let locals = e.mem.alloc(0x300);
-    hit_me_ov2_body(
-        e,
-        this,
-        source,
-        (percent, second_amount),
-        (offset_a, offset_b),
-        locals,
-    );
-    e.mem.free(locals);
+    // The exe aligns `EBP` to 16 bytes, with `SUB ESP,0x150` under it.
+    e.with_stack(0x150 + 0x10, |e, raw| {
+        let ebp = (raw.addr() + 0x150 + 0xf) & !0xf;
+        hit_me_ov2_body(
+            e,
+            this,
+            source,
+            (percent, second_amount),
+            (offset_a, offset_b),
+            ebp,
+        );
+    });
 }
 
 /// `fn_008a4af0` proper; `locals` is zeroed memory for the vectors and
@@ -13884,23 +13890,23 @@ fn hit_me_ov2_body(
     source: Ptr<Actor>,
     (mut percent, second_amount): (f32, f32),
     (offset_a, offset_b): (u32, u32),
-    locals: u32,
+    ebp: u32,
 ) {
-    let first_point = locals;
-    let second_point = locals + 0x20;
-    let direction = locals + 0x40;
-    let temp_a = locals + 0x60;
-    let temp_b = locals + 0x80;
-    let subtract_temp = locals + 0xa0;
-    let scaled = locals + 0xc0;
-    let color = locals + 0xe0;
-    let color_temp = locals + 0x100;
-    let small_temp = locals + 0x120;
-    let copy_a = locals + 0x140;
-    let ray = locals + 0x160;
-    let ray_vector = locals + 0x180;
-    let scaled_second = locals + 0x1a0;
-    let copy_b = locals + 0x1c0;
+    // The locals at their offsets under the exe's aligned `EBP`.
+    let first_point = ebp - 0x1c;
+    let second_point = ebp - 0x28;
+    let direction = ebp - 0x50;
+    let temp_a = ebp - 0x38;
+    let temp_b = ebp - 0x44;
+    let subtract_temp = ebp - 0x5c;
+    let scaled = ebp - 0xa8;
+    let color = ebp - 0xb8;
+    let small_temp = ebp - 0xe4;
+    let copy_a = ebp - 0x100;
+    let ray = ebp - 0x110;
+    let ray_vector = ebp - 0x120;
+    let scaled_second = ebp - 0x138;
+    let copy_b = ebp - 0x150;
     let collision = e.call(ACTOR_COLLISION_OBJECT, &args![this]).u32();
     if e.call(ACTOR_TEST_8ACE90, &args![this]).bool() {
         return;
@@ -13984,12 +13990,12 @@ fn hit_me_ov2_body(
             let made = if e.vcall(source.addr(), ACTOR_SLOT_360, &args![]).bool() {
                 e.call(
                     COLOR_CONSTRUCT,
-                    &args![color_temp, zero_f, zero_f, one_f, one_f],
+                    &args![ebp - 0xc8, zero_f, zero_f, one_f, one_f],
                 )
             } else {
                 e.call(
                     COLOR_CONSTRUCT,
-                    &args![color_temp, one_f, zero_f, zero_f, one_f],
+                    &args![ebp - 0xd8, one_f, zero_f, zero_f, one_f],
                 )
             }
             .u32();
@@ -19074,8 +19080,9 @@ mod tests {
         let constructed = calls_to(&e, SOUND_HANDLE_CONSTRUCT);
         assert_eq!(constructed.len(), 3);
         let handles = [constructed[0][0], constructed[1][0], constructed[2][0]];
-        assert_eq!(handles[1], handles[0] + 12);
-        assert_eq!(handles[2], handles[0] + 24);
+        // 0089d900 keeps them at EBP-0x24, EBP-0x30 and EBP-0x3c.
+        assert_eq!(handles[1], handles[0] - 12);
+        assert_eq!(handles[2], handles[0] - 24);
         // The extra data list is `this + 0x44` (accessor `005d43c0` is a
         // double returning 0 here).
         assert_eq!(
@@ -19124,7 +19131,15 @@ mod tests {
         let mut e = engine();
         let (victim, _, _, _) = kill_setup(&mut e);
         stub(&mut e, GET_SAVED_ACQUIRE_OBJECT, 0);
+        let frame = next_frame(&mut e, 0x374);
         actor_kill(&mut e, victim, Ptr::NULL, 1.0);
+        // 0089d900's aligned frame: the awake, idle and attack handles at EBP-0x3c, -0x30, -0x24.
+        let ebp = (frame + 0x364 + 0xf) & !0xf;
+        let handles: Vec<u32> = calls_to(&e, SOUND_HANDLE_DESTROY)
+            .iter()
+            .map(|c| c[0])
+            .collect();
+        assert_eq!(handles, vec![ebp - 0x3c, ebp - 0x30, ebp - 0x24]);
         assert_eq!(
             calls_to(&e, ACTOR_SET_LIFE_STATE),
             vec![vec![victim.addr(), 1]]
@@ -19309,7 +19324,11 @@ mod tests {
         e.map(MESSAGE_DURATION, 4);
         e.set_global(MESSAGE_DURATION, 2.0f32);
         e.mem.set_u32(victim.addr() + 0xb0, 0);
+        let frame = next_frame(&mut e, 0x374);
         actor_kill(&mut e, victim, Ptr::NULL, 1.0);
+        // The message buffer at EBP-0x170.
+        let ebp = (frame + 0x364 + 0xf) & !0xf;
+        assert_eq!(calls_to(&e, SHOW_MESSAGE)[0][0], ebp - 0x170);
         let down_timer = slot_target(&e, process, PROCESS_SLOT_E8);
         assert_eq!(
             calls_to(&e, down_timer),
@@ -19378,7 +19397,15 @@ mod tests {
         // The proxy velocity has a length: its direction is normalized.
         stub_float(&mut e, VECTOR_LENGTH_4586D0, 1.0);
         e.map(DEFAULT_DIRECTION, 12);
+        let frame = next_frame(&mut e, 0x374);
         actor_kill(&mut e, victim, Ptr::NULL, 1.0);
+        // The velocity at EBP-0x250, its transform at EBP-0x290, the direction at EBP-0x274.
+        let ebp = (frame + 0x364 + 0xf) & !0xf;
+        assert_eq!(
+            calls_to(&e, VECTOR_TRANSFORM_630B40)[0],
+            vec![ebp - 0x250, ebp - 0x290]
+        );
+        assert_eq!(calls_to(&e, TES_HAVOK_ADD_VELOCITY)[0][1], ebp - 0x274);
         let greeting = slot_target(&e, process, PROCESS_SLOT_4B4);
         assert_eq!(
             calls_to(&e, greeting),
@@ -19416,7 +19443,15 @@ mod tests {
         e.mem.set_f32(result, 0.5);
         stub(&mut e, VECTOR_MULTIPLY_4B4500, result);
         e.map(DEFAULT_DIRECTION, 12);
+        let frame = next_frame(&mut e, 0x374);
         actor_kill(&mut e, victim, Ptr::NULL, 1.0);
+        // The rotation at EBP-0x2b4, the rotated vector at EBP-0x2c0.
+        let ebp = (frame + 0x364 + 0xf) & !0xf;
+        assert_eq!(calls_to(&e, VECTOR_ROTATE_4A0C90)[0][0], ebp - 0x2b4);
+        assert_eq!(
+            calls_to(&e, VECTOR_MULTIPLY_4B4500)[0][..2],
+            [ebp - 0x2b4, ebp - 0x2c0]
+        );
         let rotate = calls_to(&e, VECTOR_ROTATE_4A0C90);
         assert_eq!(rotate.len(), 1);
         assert_eq!(rotate[0][1], 1.5f32.to_bits());
@@ -19444,7 +19479,12 @@ mod tests {
         e.set_global(UPWARD_COMPONENT, 5.0f32);
         let result = e.mem.alloc(12);
         stub(&mut e, VECTOR_MULTIPLY_4B4500, result);
+        let frame = next_frame(&mut e, 0x374);
         actor_kill(&mut e, victim, Ptr::NULL, 1.0);
+        // The rotation at EBP-0x314, the velocity at EBP-0x340.
+        let ebp = (frame + 0x364 + 0xf) & !0xf;
+        assert_eq!(calls_to(&e, VECTOR_ROTATE_4A0C90)[0][0], ebp - 0x314);
+        assert_eq!(calls_to(&e, TES_HAVOK_SET_VELOCITY)[0][1], ebp - 0x340);
         // Un-fixed twice: at the start (slot 0x234) and for the push.
         assert_eq!(
             calls_to(&e, BHK_RIGID_BODY_SET_FIXED),
@@ -19515,7 +19555,14 @@ mod tests {
         stub(&mut e, AUDIO_INSTANCE, 0x9c00);
         stub(&mut e, ACTOR_BASE_FORM, 0);
         stub(&mut e, RTTI_DYNAMIC_CAST, 0);
+        let frame = next_frame(&mut e, 0x374);
         actor_kill(&mut e, victim, Ptr::NULL, 1.0);
+        // The death sound handle at EBP-0x1f8.
+        let ebp = (frame + 0x364 + 0xf) & !0xf;
+        assert_eq!(
+            calls_to(&e, AUDIO_GET_SOUND_HANDLE_BY_NUMERIC_ID)[0][1],
+            ebp - 0x1f8
+        );
         assert_eq!(
             calls_to(&e, CREATURE_PICK_CREATURE_SOUND),
             vec![vec![0x9a00, 8]]
@@ -19554,7 +19601,14 @@ mod tests {
             player.addr() + ACTOR_VALUE_OWNER_OFFSET,
             &[(0x00, ret(100)), (0x0c, float_ret(30.0))],
         );
+        let frame = next_frame(&mut e, 0x374);
         actor_kill(&mut e, player, attacker, 1.0);
+        // The music handle at EBP-0x210.
+        let ebp = (frame + 0x364 + 0xf) & !0xf;
+        assert_eq!(
+            calls_to(&e, AUDIO_GET_SOUND_HANDLE_BY_NAME)[0][1],
+            ebp - 0x210
+        );
         assert_eq!(calls_to(&e, PIPBOY_RADIO_ENABLE), vec![vec![0]]);
         assert_eq!(calls_to(&e, SOUND_FADE_WORKER), vec![vec![0x3e8, 0]]);
         let music = calls_to(&e, AUDIO_GET_SOUND_HANDLE_BY_NAME);
@@ -19606,7 +19660,11 @@ mod tests {
         e.mem.set_f32(cells[&SLOW_MO_SETTING], 0.25);
         let attacker = big_actor(&mut e, &npc_slots());
         let attacker_address = attacker.addr();
+        let frame = next_frame(&mut e, 0x374);
         actor_kill(&mut e, victim, attacker, 1.0);
+        // The output word at EBP-0x348.
+        let ebp = (frame + 0x364 + 0xf) & !0xf;
+        assert_eq!(calls_to(&e, ACTOR_OUTPUT_931ED0)[0][1], ebp - 0x348);
         assert_eq!(
             calls_to(&e, ERROR_REPORT),
             vec![vec![KILLED_BY_FORMAT, 0x9e00, 0x55, 0x9e00, 0x55]]
@@ -19642,7 +19700,14 @@ mod tests {
         stub(&mut e, PLAYER_INT_5BE4D0, 0);
         stub(&mut e, ACTOR_IS_FLEEING, 0);
         // No combatants: the slow-motion camera is requested.
+        let frame = next_frame(&mut e, 0x374);
         actor_kill(&mut e, victim, player, 1.0);
+        // The count word at EBP-0x34c.
+        let ebp = (frame + 0x364 + 0xf) & !0xf;
+        assert_eq!(
+            calls_to(&e, COMBAT_MANAGER_GET_COMBATANT_COUNT)[0][2],
+            ebp - 0x34c
+        );
         let counted = calls_to(&e, COMBAT_MANAGER_GET_COMBATANT_COUNT);
         assert!(counted
             .iter()
@@ -22385,7 +22450,14 @@ mod tests {
         e.call_log = Some(vec![]);
         // A second amount above 75 clears the first one: only the second
         // section scales, by the cleared first amount.
+        let frame = next_frame(&mut e, 0x160);
         actor_hit_me_ov2(&mut e, this, source, 500.0, 100.0, 0x9000, 0x9100);
+        // 008a4af0's aligned frame: the points at EBP-0x1c and -0x28, the difference at EBP-0x5c.
+        let ebp = (frame + 0x150 + 0xf) & !0xf;
+        assert_eq!(
+            calls_to(&e, VECTOR_SUBTRACT)[0],
+            vec![ebp - 0x28, ebp - 0x5c, ebp - 0x1c]
+        );
         assert_eq!(
             calls_to(&e, BLEND_CONTROLLER_DO_HIT),
             vec![vec![0x7200, 0, 1]]
@@ -22403,7 +22475,17 @@ mod tests {
         // With a percentage the ray runs, the arrow is blue and the body
         // found by the ray is the object hit.
         e.call_log = Some(vec![]);
+        let frame = next_frame(&mut e, 0x160);
         actor_hit_me_ov2(&mut e, this, source, 500.0, 0.0, 0x9000, 0x9100);
+        // The colour at EBP-0xb8 (blue built at EBP-0xc8), the ray at EBP-0x110 with its vector at
+        // EBP-0x120.
+        let ebp = (frame + 0x150 + 0xf) & !0xf;
+        assert_eq!(calls_to(&e, COLOR_CONSTRUCT)[0][0], ebp - 0xb8);
+        assert_eq!(calls_to(&e, COLOR_CONSTRUCT)[1][0], ebp - 0xc8);
+        assert_eq!(
+            calls_to(&e, HIT_RAY_SET_VECTOR_8A50F0)[0],
+            vec![ebp - 0x110, ebp - 0x120]
+        );
         // The percentage is limited to 100: first = 100.
         let scales = calls_to(&e, VECTOR_SCALE);
         assert_eq!(scales[0][2], 100.0f32.to_bits());

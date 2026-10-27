@@ -134,10 +134,17 @@ fn add_object_with_flag(
     if object == 0 {
         return;
     }
-    let result = e.mem.alloc(4);
-    let at = e.call(CLASS_HAS_VTABLE, &args![class, result]).u32();
-    let has_vtable = e.mem.u8(at) != 0;
-    e.mem.free(result);
+    // Both exe functions (00cf6030, 00cf60d0) push two registers and hand `hasVtable` the
+    // `object` argument's own slot (`LEA EAX,[ESP+0x10]`): +0x10 of a frame that holds the two
+    // pushes, the return address and the four arguments.
+    let has_vtable = e.with_stack(0x1c, |e, frame| {
+        let frame = frame.addr();
+        for (slot, word) in [name, object, class, collector].into_iter().enumerate() {
+            e.mem.set_u32(frame + 0xc + slot as u32 * 4, word);
+        }
+        let at = e.call(CLASS_HAS_VTABLE, &args![class, frame + 0x10]).u32();
+        e.mem.u8(at) != 0
+    });
     if has_vtable {
         e.vcall(
             collector,
@@ -253,22 +260,25 @@ pub fn find_object_name(e: &mut Engine, class: u32, object: u32) -> u32 {
                 .u32()
                 == 0
             {
-                let accessor = e.mem.alloc(8);
-                e.call(ACCESSOR_CONSTRUCTOR, &args![accessor, object, member]);
-                let member_type = e.mem.u8(member + 0xc);
-                if member_type == MEMBER_CSTRING {
-                    let slot = e.call(ACCESSOR_AS_CSTRING, &args![accessor, 0u32]).u32();
-                    let name = e.mem.u32(slot);
-                    e.mem.free(accessor);
+                // The exe's frame (`SUB ESP,0x8`, three pushes): 0x14 bytes, the accessor at
+                // +0xc (00cf6249).
+                let found = e.with_stack(0x14, |e, frame| {
+                    let accessor = frame.addr() + 0xc;
+                    e.call(ACCESSOR_CONSTRUCTOR, &args![accessor, object, member]);
+                    let member_type = e.mem.u8(member + 0xc);
+                    if member_type == MEMBER_CSTRING {
+                        let slot = e.call(ACCESSOR_AS_CSTRING, &args![accessor, 0u32]).u32();
+                        return Some(e.mem.u32(slot));
+                    }
+                    if member_type == MEMBER_STRING_PTR {
+                        let slot = e.call(ACCESSOR_AS_STRING_PTR, &args![accessor, 0u32]).u32();
+                        return Some(e.mem.u32(slot) & 0xffff_fffe);
+                    }
+                    None
+                });
+                if let Some(name) = found {
                     return if name != 0 { name } else { UNNAMED };
                 }
-                if member_type == MEMBER_STRING_PTR {
-                    let slot = e.call(ACCESSOR_AS_STRING_PTR, &args![accessor, 0u32]).u32();
-                    let name = e.mem.u32(slot) & 0xffff_fffe;
-                    e.mem.free(accessor);
-                    return if name != 0 { name } else { UNNAMED };
-                }
-                e.mem.free(accessor);
             }
             index += 1;
             if index >= count {
@@ -308,26 +318,28 @@ pub fn fn_00cf62b0(e: &mut Engine, out: u32, member: u32) -> u32 {
 pub fn fn_00cf6330(e: &mut Engine, out: u32, class: u32) -> u32 {
     let count = e.call(CLASS_GET_NUM_DECLARED_MEMBERS, &args![class]).i32();
     let mut index: i32 = 0;
-    if count > 0 {
-        let scratch = e.mem.alloc(4);
-        loop {
-            let member = e
-                .call(CLASS_GET_DECLARED_MEMBER, &args![class, index])
-                .u32();
-            let at = fn_00cf62b0(e, scratch, member);
-            if e.mem.u8(at) == 0 {
-                e.mem.free(scratch);
-                e.mem.set_u8(out, 0);
-                return out;
-            }
-            index += 1;
-            if index >= count {
-                break;
+    // The exe's frame (`PUSH ECX`, three pushes): 0x10 bytes, the member result byte at +0xf
+    // (`LEA EAX,[ESP+0x13]` after a push, 00cf6350).
+    let simple = e.with_stack(0x10, |e, frame| {
+        let scratch = frame.addr() + 0xf;
+        if count > 0 {
+            loop {
+                let member = e
+                    .call(CLASS_GET_DECLARED_MEMBER, &args![class, index])
+                    .u32();
+                let at = fn_00cf62b0(e, scratch, member);
+                if e.mem.u8(at) == 0 {
+                    return false;
+                }
+                index += 1;
+                if index >= count {
+                    break;
+                }
             }
         }
-        e.mem.free(scratch);
-    }
-    e.mem.set_u8(out, 1);
+        true
+    });
+    e.mem.set_u8(out, u8::from(simple));
     out
 }
 
@@ -337,21 +349,26 @@ pub fn fn_00cf6330(e: &mut Engine, out: u32, class: u32) -> u32 {
 /// the result going to the stack slot that held `class`), else 0; answers `out`.
 pub fn hk_statistics_collector_util_is_class_simple(e: &mut Engine, out: u32, class: u32) -> u32 {
     let mut class = class;
-    let scratch = e.mem.alloc(4);
-    loop {
-        let at = fn_00cf6330(e, scratch, class);
-        if e.mem.u8(at) == 0 {
-            e.mem.free(scratch);
-            e.mem.set_u8(out, 0);
-            return out;
+    // The exe's frame (one push) taken with the arguments: the result goes to the `class`
+    // argument's own slot (`LEA EAX,[ESP+0xc]`, 00cf6385), +0xc past the push and the return
+    // address.
+    let simple = e.with_stack(0x10, |e, frame| {
+        let frame = frame.addr();
+        let scratch = frame + 0xc;
+        e.mem.set_u32(frame + 8, out);
+        e.mem.set_u32(scratch, class);
+        loop {
+            let at = fn_00cf6330(e, scratch, class);
+            if e.mem.u8(at) == 0 {
+                return false;
+            }
+            class = e.call(CLASS_GET_PARENT, &args![class]).u32();
+            if class == 0 {
+                return true;
+            }
         }
-        class = e.call(CLASS_GET_PARENT, &args![class]).u32();
-        if class == 0 {
-            break;
-        }
-    }
-    e.mem.free(scratch);
-    e.mem.set_u8(out, 1);
+    });
+    e.mem.set_u8(out, u8::from(simple));
     out
 }
 
@@ -372,16 +389,29 @@ pub fn hk_statistics_collector_util_add_homogeneous_array_contents(
     if count == 0 {
         return;
     }
-    let result = e.mem.alloc(4);
-    let at = hk_statistics_collector_util_is_class_simple(e, result, class);
-    if e.mem.u8(at) != 0 {
-        e.mem.free(result);
+    // The exe's frame (four pushes at most) taken with the arguments: both results go to the
+    // `count` argument's own slot (`LEA EAX,[ESP+0x18]` after two pushes, 00cf63d2; `LEA ECX,
+    // [ESP+0x20]` after four, 00cf63f2), +0x20 past the pushes and the return address.
+    let frame_result = e.with_stack(0x28, |e, frame| {
+        let frame = frame.addr();
+        let result = frame + 0x20;
+        for (slot, word) in [name, class, data, count as u32, collector]
+            .into_iter()
+            .enumerate()
+        {
+            e.mem.set_u32(frame + 0x14 + slot as u32 * 4, word);
+        }
+        let at = hk_statistics_collector_util_is_class_simple(e, result, class);
+        if e.mem.u8(at) != 0 {
+            return None;
+        }
+        let element_size = e.call(CLASS_GET_OBJECT_SIZE, &args![class]).u32();
+        let at = e.call(CLASS_HAS_VTABLE, &args![class, result]).u32();
+        Some((element_size, e.mem.u8(at) != 0))
+    });
+    let Some((element_size, has_vtable)) = frame_result else {
         return;
-    }
-    let element_size = e.call(CLASS_GET_OBJECT_SIZE, &args![class]).u32();
-    let at = e.call(CLASS_HAS_VTABLE, &args![class, result]).u32();
-    let has_vtable = e.mem.u8(at) != 0;
-    e.mem.free(result);
+    };
     let mut element = data;
     let slot = if has_vtable {
         SLOT_OBJECT_WITH_VTABLE
@@ -467,7 +497,14 @@ pub fn hk_statistics_collector_util_add_array_contents(
 }
 
 /// Reports one member of a class's declared members: the body of `addClassContents`' loop.
-fn add_member_contents(e: &mut Engine, object: u32, class: u32, collector: u32, index: i32) {
+fn add_member_contents(
+    e: &mut Engine,
+    frame: u32,
+    object: u32,
+    class: u32,
+    collector: u32,
+    index: i32,
+) {
     let member = e
         .call(CLASS_GET_DECLARED_MEMBER, &args![class, index])
         .u32();
@@ -514,7 +551,7 @@ fn add_member_contents(e: &mut Engine, object: u32, class: u32, collector: u32, 
             hk_statistics_collector_util_add_object(e, name, pointer, class_word, collector);
         }
         MEMBER_CSTRING => {
-            let accessor = e.mem.alloc(8);
+            let accessor = frame + 0x24;
             e.call(ACCESSOR_CONSTRUCTOR, &args![accessor, object, member]);
             let size = e.call(MEMBER_GET_CSTYLE_ARRAY_SIZE, &args![member]).i32();
             if size <= 1 {
@@ -528,10 +565,9 @@ fn add_member_contents(e: &mut Engine, object: u32, class: u32, collector: u32, 
                     hk_statistics_collector_util_add_cstring(e, member, string, collector);
                 }
             }
-            e.mem.free(accessor);
         }
         MEMBER_STRING_PTR => {
-            let accessor = e.mem.alloc(8);
+            let accessor = frame + 0x2c;
             e.call(ACCESSOR_CONSTRUCTOR, &args![accessor, object, member]);
             let size = e.call(MEMBER_GET_CSTYLE_ARRAY_SIZE, &args![member]).i32();
             if size <= 1 {
@@ -547,7 +583,6 @@ fn add_member_contents(e: &mut Engine, object: u32, class: u32, collector: u32, 
                     e.call(COLLECTOR_ADD_STRING_PTR, &args![collector, name, slot]);
                 }
             }
-            e.mem.free(accessor);
         }
         MEMBER_ARRAY => {
             let array = object.wrapping_add(u32::from(e.mem.u16(member + 0x12)));
@@ -590,14 +625,13 @@ fn add_member_contents(e: &mut Engine, object: u32, class: u32, collector: u32, 
             }
         }
         MEMBER_SIMPLE_ARRAY => {
-            let accessor = e.mem.alloc(8);
+            let accessor = frame + 0x3c;
             e.call(ACCESSOR_CONSTRUCTOR, &args![accessor, object, member]);
             let slot = e
                 .call(ACCESSOR_AS_SIMPLE_ARRAY, &args![accessor, 0u32])
                 .u32();
             let data = e.mem.u32(slot);
             let size = e.mem.i32(slot + 4);
-            e.mem.free(accessor);
             let element_size = hk_statistics_collector_util_get_array_element_size(e, member);
             if element_size < 0 {
                 return;
@@ -618,7 +652,7 @@ fn add_member_contents(e: &mut Engine, object: u32, class: u32, collector: u32, 
             e.vcall(collector, SLOT_END_GROUP, &args![]);
         }
         MEMBER_HOMOGENEOUS_ARRAY => {
-            let accessor = e.mem.alloc(8);
+            let accessor = frame + 0x44;
             e.call(ACCESSOR_CONSTRUCTOR, &args![accessor, object, member]);
             let slot = e
                 .call(ACCESSOR_AS_HOMOGENEOUS_ARRAY, &args![accessor, 0u32])
@@ -626,7 +660,6 @@ fn add_member_contents(e: &mut Engine, object: u32, class: u32, collector: u32, 
             let size = e.mem.i32(slot + 8);
             let class = e.mem.u32(slot);
             let data = e.mem.u32(slot + 4);
-            e.mem.free(accessor);
             if size <= 0 || class == 0 || data == 0 {
                 return;
             }
@@ -679,14 +712,21 @@ pub fn hk_statistics_collector_util_add_class_contents(
     if count <= 0 {
         return;
     }
-    let mut index: i32 = 0;
-    loop {
-        add_member_contents(e, object, class, collector, index);
-        index += 1;
-        if index >= count {
-            break;
+    // The exe's frame (`AND ESP,0xfffffff8`, `SUB ESP,0x4c`, three pushes): 0x58 bytes from an
+    // 8-byte boundary; each member type's accessor has its own place: a C string's at +0x24
+    // (00cf65ed), an `hkStringPtr`'s at +0x2c (00cf6655), a simple array's at +0x3c (00cf675f)
+    // and a homogeneous array's at +0x44 (00cf67d2).
+    e.with_stack(0x58 + 8, |e, raw| {
+        let frame = (raw.addr() + 7) & !7;
+        let mut index: i32 = 0;
+        loop {
+            add_member_contents(e, frame, object, class, collector, index);
+            index += 1;
+            if index >= count {
+                break;
+            }
         }
-    }
+    });
 }
 
 // Translated from 00cf6920 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -930,6 +970,83 @@ mod tests {
         // A null string reports nothing.
         e.call(0x00cf_5fe0, &args![member_record, 0u32, collector]);
         assert_eq!(slot_calls(&log, 0x14).len(), 1);
+    }
+
+    #[test]
+    fn locals_sit_at_the_exe_frame_offsets() {
+        let (mut e, _, collector) = world();
+        let next_frame = |e: &mut Engine, size: u32| {
+            let block = e.mem.alloc(size);
+            e.mem.free(block);
+            block
+        };
+        let seen: Rc<RefCell<Vec<u32>>> = Rc::default();
+        let s = Rc::clone(&seen);
+        e.register_double(CLASS_HAS_VTABLE, move |e, a| {
+            s.borrow_mut().push(a[1]);
+            e.mem.set_u8(a[1], 0);
+            answer(a[1])
+        });
+        let plain = class(&mut e, &[], 0, 8, false);
+        // 00cf6030 / 00cf60d0: `hasVtable` gets the `object` argument's slot, +0x10 of 0x1c.
+        let frame = next_frame(&mut e, 0x1c);
+        e.call(0x00cf_6030, &args![0xaau32, 0x1000u32, plain, collector]);
+        assert_eq!(seen.borrow()[0], frame + 0x10);
+        let frame = next_frame(&mut e, 0x1c);
+        e.call(0x00cf_60d0, &args![0xaau32, 0x1000u32, plain, collector]);
+        assert_eq!(seen.borrow()[1], frame + 0x10);
+        // 00cf63c0: the `count` argument's slot, +0x20 of 0x28.
+        let complex_member = member(
+            &mut e,
+            "c",
+            Member {
+                kind: 0x1d,
+                ..PLAIN
+            },
+        );
+        let complex = class(&mut e, &[complex_member], 0, 0x10, false);
+        let frame = next_frame(&mut e, 0x28);
+        e.call(
+            0x00cf_63c0,
+            &args![0xaau32, complex, 0x1000u32, 1i32, collector],
+        );
+        assert_eq!(seen.borrow()[2], frame + 0x20);
+        // 00cf6380: 00cf6330's answer lands in the `class` argument's slot, +0xc of 0x10.
+        let out = e.mem.alloc(4);
+        let frame = next_frame(&mut e, 0x10);
+        e.call(0x00cf_6380, &args![out, plain]);
+        assert_eq!(e.mem.u8(frame + 0xc), 1);
+        // 00cf6210: the accessor at +0xc of 0x14 (its first word the member's address).
+        let object = e.mem.alloc(0x40);
+        let name = member(
+            &mut e,
+            "name",
+            Member {
+                kind: 0x1d,
+                offset: 0x10,
+                ..PLAIN
+            },
+        );
+        let owner = class(&mut e, &[name], 0, 0x40, false);
+        let frame = next_frame(&mut e, 0x14);
+        e.call(0x00cf_6210, &args![owner, object]);
+        assert_eq!(e.mem.u32(frame + 0xc), object + 0x10);
+        // 00cf6580: a C string member's accessor at +0x24 of the 8-aligned 0x58 bytes.
+        let text_member = member(
+            &mut e,
+            "t",
+            Member {
+                kind: 0x1d,
+                offset: 0x20,
+                array_size: 1,
+                ..PLAIN
+            },
+        );
+        let owner = class(&mut e, &[text_member], 0, 0x60, false);
+        let object = e.mem.alloc(0x60);
+        let frame = (next_frame(&mut e, 0x60) + 7) & !7;
+        e.call(0x00cf_6580, &args![object, owner, collector]);
+        assert_eq!(e.mem.u32(frame + 0x24), object + 0x20);
     }
 
     #[test]

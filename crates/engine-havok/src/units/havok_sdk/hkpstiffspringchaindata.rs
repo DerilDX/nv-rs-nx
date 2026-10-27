@@ -323,8 +323,11 @@ pub fn hkp_stiff_spring_chain_data_build_jacobian(
 // Translated from 00e3b490 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Stores the byte 1 at `out` (no engine-map name; a virtual method, `this` unused; the
 /// constraint data's `isValid` slot).
-pub fn fn_00e3b490(e: &mut Engine, _this: Ptr, out: Ptr) {
+/// Answers `out`: the exe leaves it in `EAX` at every `RET` (the hkBool result returned
+/// through a pointer), and virtual call sites test the flag through `EAX` (e.g. 00d4c170).
+pub fn fn_00e3b490(e: &mut Engine, _this: Ptr, out: Ptr) -> Ptr {
     e.mem.set_u8(out.addr(), 1);
+    out
 }
 
 /// This unit's translated functions, by exe address.
@@ -346,7 +349,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00e3_b0f0,
             hkp_stiff_spring_chain_data_build_jacobian(Ptr, Ptr, Ptr)
         ),
-        entry!(0x00e3_b490, fn_00e3b490(Ptr, Ptr)),
+        entry!(0x00e3_b490, fn_00e3b490(Ptr, Ptr) -> Ptr),
         entry!(0x00e3_b4a0, deleting_destructor_00e3b4a0(Ptr, u8) -> Ptr),
     ]
 }
@@ -612,6 +615,17 @@ mod movement_tests {
         let out = e.mem.alloc(4);
         e.call(0x00e3_b490, &args![0x1000u32, out]);
         assert_eq!(e.mem.u8(out), 1);
+    }
+
+    #[test]
+    fn fn_00e3b490_answers_its_result_pointer() {
+        let mut e = Engine::new();
+        let out = e.mem.alloc(4);
+        // The exe leaves the result pointer in EAX at every RET; callers read through it.
+        assert_eq!(
+            e.call(0x00e3_b490, &args![0x1000u32, out]).u32(),
+            args![out][0]
+        );
     }
 
     struct Scene {

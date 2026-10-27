@@ -1245,23 +1245,25 @@ pub fn fn_00718ee0(
 /// 0.
 pub fn system_color_manager_find(e: &mut Engine, this: Ptr<SystemColorManager>, id: u32) -> u32 {
     let mut iterator = e.call(0x0055_9450, &args![this]).u32();
-    let slot = e.mem.alloc(4);
-    let mut found = 0;
-    while iterator != 0 {
-        e.mem.set_u32(slot, iterator);
-        let item_ref = e.call(0x0057_cbe0, &args![this, slot]).u32();
-        iterator = e.mem.u32(slot);
-        let color = e.mem.u32(item_ref);
-        if color != 0 {
-            let text = e.call(0x007f_a950, &args![color]).u32();
-            if e.call(0x00a0_1860, &args![text]).u32() == id {
-                found = color;
-                break;
+    // The exe's frame (`SUB ESP,0xc` under `EBP`): the iterator at `EBP-0x4` (+8).
+    e.with_stack(0xc, |e, frame| {
+        let slot = frame.addr() + 8;
+        let mut found = 0;
+        while iterator != 0 {
+            e.mem.set_u32(slot, iterator);
+            let item_ref = e.call(0x0057_cbe0, &args![this, slot]).u32();
+            iterator = e.mem.u32(slot);
+            let color = e.mem.u32(item_ref);
+            if color != 0 {
+                let text = e.call(0x007f_a950, &args![color]).u32();
+                if e.call(0x00a0_1860, &args![text]).u32() == id {
+                    found = color;
+                    break;
+                }
             }
         }
-    }
-    e.mem.free(slot);
-    found
+        found
+    })
 }
 
 /// `SystemColor`'s vtable, `HardSystemColor`'s and `SoftSystemColor`'s.
@@ -1598,24 +1600,27 @@ pub fn fn_00719390(e: &mut Engine, this: Ptr<SoftSystemColor>) {
 /// (each times the scale at `0102f0e4`) into the three floats at `color`.
 pub fn system_color_get_color(e: &mut Engine, this: Ptr<SystemColor>, color: Ptr) {
     let packed = e.vcall(this.addr(), 4, &args![]).u32();
-    let bytes = e.mem.alloc(16);
-    fn_00719440(
-        e,
-        packed,
-        Ptr::new(bytes),
-        Ptr::new(bytes + 4),
-        Ptr::new(bytes + 8),
-        Ptr::new(bytes + 12),
-    );
-    let scale: f32 = e.global(COLOR_BYTE_SCALE);
-    for channel in 0..3u32 {
-        let byte = e.mem.u32(bytes + 4 * channel);
-        e.mem.set_f32(
-            color.addr() + 4 * channel,
-            (byte as f64 * scale as f64) as f32,
+    // The exe's frame (`SUB ESP,0x2c` under `EBP`): the bytes at `EBP-0xc`, `EBP-0x10`, `EBP-0x8`
+    // and `EBP-0x4` (+0x20, +0x1c, +0x24, +0x28), the first three for red, green and blue.
+    e.with_stack(0x2c, |e, frame| {
+        let bytes = [0x20, 0x1c, 0x24, 0x28].map(|offset| frame.addr() + offset);
+        fn_00719440(
+            e,
+            packed,
+            Ptr::new(bytes[0]),
+            Ptr::new(bytes[1]),
+            Ptr::new(bytes[2]),
+            Ptr::new(bytes[3]),
         );
-    }
-    e.mem.free(bytes);
+        let scale: f32 = e.global(COLOR_BYTE_SCALE);
+        for channel in 0..3u32 {
+            let byte = e.mem.u32(bytes[channel as usize]);
+            e.mem.set_f32(
+                color.addr() + 4 * channel,
+                (byte as f64 * scale as f64) as f32,
+            );
+        }
+    });
 }
 
 // Translated from 00719440 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1663,15 +1668,17 @@ pub fn system_color_set_color(e: &mut Engine, this: Ptr<SystemColor>, color: Ptr
 pub fn fn_00719580(e: &mut Engine, tile: Ptr) {
     let children = tile.addr() + 4;
     let mut node = e.call(0x0055_9450, &args![children]).u32();
-    let slot = e.mem.alloc(4);
-    while node != 0 {
-        e.mem.set_u32(slot, node);
-        let item = e.call(0x0057_cbe0, &args![children, slot]).u32();
-        node = e.mem.u32(slot);
-        let child = e.mem.u32(item);
-        fn_00719580(e, Ptr::new(child));
-    }
-    e.mem.free(slot);
+    // The exe's frame (`SUB ESP,0x8` under `EBP`): the iterator at `EBP-0x8` (+0).
+    e.with_stack(0x8, |e, frame| {
+        let slot = frame.addr();
+        while node != 0 {
+            e.mem.set_u32(slot, node);
+            let item = e.call(0x0057_cbe0, &args![children, slot]).u32();
+            node = e.mem.u32(slot);
+            let child = e.mem.u32(item);
+            fn_00719580(e, Ptr::new(child));
+        }
+    });
 
     let name = e.call(TILE_NAME, &args![tile]).u32();
     let mut matches = e.call(COMPARE_STRINGS, &args![name, TILE_NAME_FIRST]).u32() == 0;
@@ -1720,20 +1727,22 @@ pub fn fn_00719630(e: &mut Engine, this: Ptr<InterfaceManagerFields>, _unused_1:
     } else {
         0
     };
-    let slot = e.mem.alloc(4);
-    while node != 0 {
-        e.mem.set_u32(slot, node);
-        let menus_root = e.mem.u32(this.addr() + 0x9C);
-        let item = e.call(0x0057_cbe0, &args![menus_root + 4, slot]).u32();
-        node = e.mem.u32(slot);
-        let child = e.mem.u32(item);
-        if child != 0 && e.call(TILE_GET_MENU, &args![child]).u32() != 0 {
-            let menu = e.call(TILE_GET_MENU, &args![child]).u32();
-            let ready = e.call(MANAGER_READY, &args![]).bool() as u32;
-            e.vcall(menu, 0x44, &args![ready]);
+    // The exe's frame (`SUB ESP,0x14` under `EBP`): the iterator at `EBP-0x4` (+0x10).
+    e.with_stack(0x14, |e, frame| {
+        let slot = frame.addr() + 0x10;
+        while node != 0 {
+            e.mem.set_u32(slot, node);
+            let menus_root = e.mem.u32(this.addr() + 0x9C);
+            let item = e.call(0x0057_cbe0, &args![menus_root + 4, slot]).u32();
+            node = e.mem.u32(slot);
+            let child = e.mem.u32(item);
+            if child != 0 && e.call(TILE_GET_MENU, &args![child]).u32() != 0 {
+                let menu = e.call(TILE_GET_MENU, &args![child]).u32();
+                let ready = e.call(MANAGER_READY, &args![]).bool() as u32;
+                e.vcall(menu, 0x44, &args![ready]);
+            }
         }
-    }
-    e.mem.free(slot);
+    });
     e.call(REFRESH_START_MENU, &args![]);
 }
 
@@ -4371,5 +4380,62 @@ mod tests {
         assert!(logged(&e, OPERATOR_DELETE).is_empty());
         e.call(0x0071_9bb0, &args![array, 1u32]);
         assert_eq!(logged(&e, OPERATOR_DELETE), vec![vec![array.addr()]]);
+    }
+
+    // ---- the exe's stack frames ----
+
+    /// The block the next `with_stack(size)` takes (the last freed block of that size), with
+    /// the call log switched on.
+    fn next_frame(e: &mut Engine, size: u32) -> u32 {
+        let frame = e.mem.alloc(size);
+        e.mem.free(frame);
+        e.call_log = Some(vec![]);
+        frame
+    }
+
+    #[test]
+    fn the_color_and_tile_walks_keep_their_locals_at_the_exe_offsets() {
+        // 00719580 (8 bytes): the iterator at +0; 00719630 (0x14 bytes): at +0x10.
+        let (mut e, this, _) = refresh_engine(1);
+        let menus_root = e.mem.u32(this.addr() + 0x9c);
+        let frame = next_frame(&mut e, 0x8);
+        e.call(0x0071_9580, &args![menus_root]);
+        assert_eq!(logged(&e, 0x0057_cbe0)[0], vec![menus_root + 4, frame]);
+        let frame = next_frame(&mut e, 0x14);
+        e.call(0x0071_9630, &args![this, 0u32]);
+        let steps = logged(&e, 0x0057_cbe0);
+        assert_eq!(steps[steps.len() - 1], vec![menus_root + 4, frame + 0x10]);
+        // 00718fb0 (0xc bytes): the iterator at +8.
+        let manager = e.new_object::<SystemColorManager>();
+        e.call_log = Some(vec![]);
+        e.call(0x0071_8fb0, &args![manager, 0x10a0u32]);
+        assert!(logged(&e, 0x0057_cbe0).is_empty());
+        let node = e.mem.alloc(12);
+        e.mem.set_u32(manager.addr(), node);
+        e.register(0x007f_a950, |_, _| ret(0));
+        e.register(0x00a0_1860, |_, _| ret(0));
+        let frame = next_frame(&mut e, 0xc);
+        e.call(0x0071_8fb0, &args![manager, 0x10a0u32]);
+        assert_eq!(
+            logged(&e, 0x0057_cbe0),
+            vec![vec![manager.addr(), frame + 8]]
+        );
+        // 007193b0 (0x2c bytes): red, green, blue and the fourth byte at +0x20, +0x1c, +0x24
+        // and +0x28.
+        let color_object = e.mem.alloc(8);
+        e.put_vtable(0x6000_0200, &[0; 4]);
+        e.mem.set_u32(0x6000_0200 + 4, 0x5000_0104);
+        e.mem.set_u32(color_object, 0x6000_0200);
+        e.register_double(0x5000_0104, |_, _| ret(0x1122_3344));
+        e.map(COLOR_BYTE_SCALE & !0xfff, 0x1000);
+        e.set_global(COLOR_BYTE_SCALE, 1.0f64);
+        let out = e.mem.alloc(12);
+        let frame = next_frame(&mut e, 0x2c);
+        e.call(0x0071_93b0, &args![color_object, out]);
+        let bytes: Vec<u32> = [0x20, 0x1c, 0x24, 0x28]
+            .iter()
+            .map(|o| e.mem.u32(frame + o))
+            .collect();
+        assert_eq!(bytes, vec![0x11, 0x22, 0x33, 0x44]);
     }
 }

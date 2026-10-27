@@ -214,13 +214,15 @@ const FREE: u32 = 0x0040_1030;
 /// `010ce304`, `+4` the float at `input + 0x10`, `+8` the found flag cleared, `+0xC` the
 /// `input` pointer) and casts `ray` through `castRayInternal` with extra word 0, flag 0 and
 /// fraction `0.0`. The found flag of the collector is then stored in the byte at `found`.
+/// Answers `found`: the exe leaves it in `EAX` at every `RET` (the hkBool/hkResult result
+/// returned through a pointer, which callers read through `EAX`).
 pub fn hk_sampled_height_field_shape_cast_ray_impl(
     e: &mut Engine,
     this: Ptr,
     found: Ptr,
     ray: Ptr,
     input: Ptr,
-) {
+) -> Ptr {
     let fraction = x87_quiet_bits(e.mem.u32(input.addr() + 0x10));
     let hit = e.with_stack(0x10, |e, collector| {
         let collector = collector.addr();
@@ -235,6 +237,7 @@ pub fn hk_sampled_height_field_shape_cast_ray_impl(
         e.mem.u8(collector + 8)
     });
     e.mem.set_u8(found.addr(), hit);
+    found
 }
 
 // Translated from 00d260d0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2401,7 +2404,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x00d2_6080,
-            hk_sampled_height_field_shape_cast_ray_impl(Ptr, Ptr, Ptr, Ptr)
+            hk_sampled_height_field_shape_cast_ray_impl(Ptr, Ptr, Ptr, Ptr) -> Ptr
         ),
         entry!(
             0x00d2_60d0,
@@ -2766,6 +2769,19 @@ mod tests {
             assert_eq!(call[9], input);
             assert_eq!(e.mem.u32(out), 0xcdcd_cd00 | u32::from(found));
         }
+    }
+
+    #[test]
+    fn fn_00d26080_answers_its_result_pointer() {
+        let mut e = engine();
+        cast_double(&mut e, 0, 4, 1);
+        let input = e.mem.alloc(0x20);
+        let out = e.mem.alloc(4);
+        // EAX is `out` at the RET (the hkBool result pointer the callers read through).
+        let answered = e
+            .call(0x00d2_6080, &args![0x5000u32, out, 0x6000u32, input])
+            .u32();
+        assert_eq!(answered, out);
     }
 
     #[test]

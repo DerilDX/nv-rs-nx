@@ -47,7 +47,7 @@ fn assign_from(e: &mut Engine, slot: u32, source: u32) {
 /// reads no register or stack word and answers 0), a body the linker shares with other
 /// classes' methods, so the name is not checked. No parameters: callers pass `this` or
 /// nothing, and neither is read.
-pub fn fn_00e7cd40(_e: &mut Engine) -> u32 {
+pub fn fn_00e7cd40(_e: &mut Engine, _this: Ptr) -> u32 {
     0
 }
 
@@ -1060,7 +1060,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00e8_eb80,
             ni_d3d_gpu_program_cache_generate_program(Ptr, u32, u32, u32) -> u32
         ),
-        entry!(0x00e7_cd40, fn_00e7cd40() -> u32),
+        entry!(0x00e7_cd40, fn_00e7cd40(Ptr) -> u32),
         entry!(0x00e8_e3a0, ni_t_set_material_resource_realloc(Ptr, u32)),
         entry!(0x00e8_ea60, ni_t_set_material_resource_add(Ptr, u32)),
     ]
@@ -1130,7 +1130,7 @@ mod tests {
     #[test]
     fn fn_00e7cd40_answers_zero() {
         let mut e = Engine::new();
-        assert_eq!(e.call(0x00e7_cd40, &args![]).u32(), 0);
+        assert_eq!(e.call(0x00e7_cd40, &args![0u32]).u32(), 0);
         assert_eq!(e.call(0x00e7_cd40, &args![0x1234u32]).u32(), 0);
     }
 

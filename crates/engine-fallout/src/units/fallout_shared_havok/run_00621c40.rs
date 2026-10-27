@@ -66,11 +66,13 @@ pub fn fn_00621c90(e: &mut Engine, this: Ptr, allocator: Ptr) {
 /// `004a4840` for the allocator of `this` and releases the array `this` through it
 /// (`00621c90`).
 pub fn fn_00621c60(e: &mut Engine, this: Ptr) {
-    let byte = e.mem.alloc(1);
-    e.mem.set_u8(byte, 0);
-    let allocator = e.call(BYTE_HOLDER_OF, &args![byte, this]).u32();
-    fn_00621c90(e, this, Ptr::new(allocator));
-    e.mem.free(byte);
+    // The byte at `EBP-1` of the exe's 8-byte frame (`SUB ESP,8`).
+    e.with_stack(8, |e, frame| {
+        let byte = frame.addr() + 7;
+        e.mem.set_u8(byte, 0);
+        let allocator = e.call(BYTE_HOLDER_OF, &args![byte, this]).u32();
+        fn_00621c90(e, this, Ptr::new(allocator));
+    });
 }
 
 // Translated from 00621d10 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -227,5 +229,20 @@ mod tests {
             vec![vec![this + 8, 0, 1]]
         );
         assert_eq!(e.global::<u32>(CELL_MOPP_INSTANCE_COUNT), 8);
+    }
+
+    #[test]
+    fn at_00621c60_hands_over_the_byte_at_frame_offset_7() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        let allocator = allocator(&mut e);
+        e.register_double(BYTE_HOLDER_OF, move |_, _| allocator.into_ret());
+        e.register(ARRAY_CLEAR, |_, _| Ret::default());
+        e.register(ARRAY_RESERVED, |_, _| 1u32.into_ret());
+        let this = e.mem.alloc(0x10);
+        let frame = e.mem.alloc(8);
+        e.mem.free(frame);
+        e.call(0x0062_1c60, &args![this]);
+        assert_eq!(calls(&e, BYTE_HOLDER_OF), vec![vec![frame + 7, this]]);
     }
 }

@@ -1369,289 +1369,296 @@ pub fn race_sex_menu_create_contents(e: &mut Engine, this: Ptr<RaceSexMenu>, mod
 
     // Four temporary strings (`BSStringT`, 8 bytes each) with the captions
     // of the first four lists.
-    let numbered = e.mem.alloc(0x20);
-    e.call(
-        EH_VECTOR_CONSTRUCTOR_ITERATOR,
-        &args![numbered, 8u32, 4u32, STRING_CONSTRUCT, STRING_DESTROY],
-    );
-    if (2..=3).contains(&mode) {
-        for (index, setting) in NUMBERED_SETTINGS.iter().enumerate() {
-            let text = e.call(SETTING_VALUE, &args![*setting]).u32();
-            e.call(STRING_SET, &args![numbered + 8 * index as u32, text, 0u32]);
-        }
-    } else {
-        for (index, setting) in NUMBERED_SETTINGS.iter().enumerate() {
-            let text = e.call(SETTING_VALUE, &args![*setting]).u32();
-            e.call(
-                STRING_FORMAT,
-                &args![numbered + 8 * index as u32, NUMBERED_FORMATS[index], text],
-            );
-        }
-    }
-    // The captions of the 20 lists: the four numbered strings, then the
-    // values of 16 settings.
-    let mut captions = [0u32; 0x14];
-    for (index, caption) in captions.iter_mut().take(4).enumerate() {
-        *caption = e
-            .call(STRING_C_STR, &args![numbered + 8 * index as u32])
-            .u32();
-    }
-    for (index, setting) in LIST_CAPTION_SETTINGS.iter().enumerate() {
-        captions[4 + index] = e.call(SETTING_VALUE, &args![*setting]).u32();
-    }
-    for index in 0..0x14u32 {
-        let block = e.call(ALLOCATE, &args![0x24u32]).u32();
-        let list = if block != 0 {
-            menu_option_list_menu_option_list(e, Ptr::new(block), index, captions[index as usize])
-                .addr()
-        } else {
-            0
-        };
-        e.mem.set_u32(base + 0x28 + 4 * index, list);
-    }
-    for (slot, callback) in [
-        (0x28u32, 0x007a_d940u32),
-        (0x2c, 0x007a_d7f0),
-        (0x3c, 0x007a_d860),
-        (0x48, 0x007a_d8d0),
-        (0x44, 0x007a_d9c0),
-    ] {
-        let list = e.mem.u32(base + slot);
-        e.call(OPTION_LIST_SET_CALLBACK, &args![list, callback]);
-    }
-    // Two entries of the first list (ids 0x15 and 0x16).
-    for (setting, id) in [(SETTING_ENTRY_15, 0x15u32), (SETTING_ENTRY_16, 0x16)] {
-        let text = e.call(SETTING_TEXT, &args![setting]).u32();
-        let list = e.mem.u32(base + 0x28);
-        e.call(OPTION_LIST_ADD_OPTION, &args![list, text, id]);
-    }
-
-    // Entries for the marker list (id 0x17, list at +0x2c): every node of
-    // the first form list whose item passes the check at `0059f610`.
-    let owner: u32 = e.global(MARKER_OWNER);
-    let mut node = e.call(MARKER_LIST_HEAD, &args![owner]).u32();
-    while node != 0 {
-        let item_slot = e.call(EMPTY_MEMBER_RETURNS_THIS, &args![node]).u32();
-        if e.mem.u32(item_slot) == 0 {
-            break;
-        }
-        let item_slot = e.call(EMPTY_MEMBER_RETURNS_THIS, &args![node]).u32();
-        let item = e.mem.u32(item_slot);
-        if e.call(MARKER_CHECK, &args![item]).u8() != 0 {
-            let item_slot = e.call(EMPTY_MEMBER_RETURNS_THIS, &args![node]).u32();
-            let item = e.mem.u32(item_slot);
-            let item_slot = e.call(EMPTY_MEMBER_RETURNS_THIS, &args![node]).u32();
-            let named = e.mem.u32(item_slot);
-            let name = e.call(MARKER_NAME, &args![named + 0x18]).u32();
-            let list = e.mem.u32(base + 0x2c);
-            let option = e
-                .call(OPTION_LIST_ADD_OPTION, &args![list, name, 0x17u32])
-                .u32();
-            e.call(OPTION_SET_DATA, &args![option, item]);
-        }
-        node = word_at_four(e, node);
-    }
-
-    let step = x87_copy_f32(e, SLIDER_STEP_QUARTER);
-    let value = e.call(SETTING_TEXT, &args![SETTING_SLIDER_18]).u32();
-    let list = e.mem.u32(base + 0x30);
-    e.call(
-        OPTION_LIST_ADD_SLIDER,
-        &args![list, value, 0x18u32, 1u32, 0x14u32, 0x8000_0001u32, step],
-    );
-    add_sub_list(e, base, 0x30, SETTING_36E4, 0x38);
-    let text = e.call(SETTING_TEXT, &args![SETTING_ENTRY_19]).u32();
-    let list = e.mem.u32(base + 0x30);
-    e.call(OPTION_LIST_ADD_OPTION, &args![list, text, 0x19u32]);
-    let step = x87_copy_f32(e, SLIDER_STEP_QUARTER);
-    let value = e.call(SETTING_TEXT, &args![SETTING_SLIDER_1A]).u32();
-    let list = e.mem.u32(base + 0x30);
-    let option = e
-        .call(
-            OPTION_LIST_ADD_SLIDER,
-            &args![list, value, 0x1au32, 1u32, 0xau32, 0x8000_0001u32, step],
-        )
-        .u32();
-    fn_007b3810(e, Ptr::new(option), SPACE_STRING);
-    add_sub_list(e, base, 0x34, SETTING_22D4, 0x3c);
-    add_sub_list(e, base, 0x34, SETTING_4A74, 0x40);
-    let player_base = e.mem.u32(base + 0xd8);
-    if e.call(GET_SEX, &args![player_base]).u32() == 0 {
-        add_sub_list(e, base, 0x34, SETTING_23A0, 0x44);
-    } else {
-        let list = e.mem.u32(base + 0x44);
-        e.call(LIST_SET_BACK_TARGET, &args![list, 3u32]);
-    }
-    add_sub_list(e, base, 0x38, SETTING_26D0, 0x4c);
-    add_sub_list(e, base, 0x38, SETTING_2250, 0x74);
-    add_sub_list(e, base, 0x38, SETTING_31C8, 0x48);
-
-    // The hair colour sliders (ids 0x1d to 0x20, list at +0x40).
-    let player_base = e.mem.u32(base + 0xd8);
-    let color = e.call(HAIR_COLOR_GETTER, &args![player_base]).u32();
-    let text = e.call(SETTING_VALUE, &args![SETTING_3528]).u32();
-    let step = x87_copy_f32(e, SLIDER_STEP_QUARTER);
-    let value = e.call(SETTING_TEXT, &args![SETTING_SLIDER_1D]).u32();
-    let list = e.mem.u32(base + 0x40);
-    let option = e
-        .call(
-            OPTION_LIST_ADD_SLIDER,
-            &args![list, value, 0x1du32, 0u32, 0xfu32, 0x8000_0001u32, step],
-        )
-        .u32();
-    fn_007b3810(e, Ptr::new(option), text);
-    for (setting, id, channel) in [
-        (SETTING_SLIDER_1E, 0x1eu32, color & 0xff),
-        (SETTING_SLIDER_1F, 0x1f, (color & 0xffff) >> 8),
-        (SETTING_SLIDER_20, 0x20, (color >> 16) & 0xff),
-    ] {
-        let step = x87_copy_f32(e, SLIDER_STEP_EIGHTH);
-        let value = e.call(SETTING_TEXT, &args![setting]).u32();
-        let list = e.mem.u32(base + 0x40);
+    // The exe's frame (`SUB ESP,0xac` under the exception record, then the record link): the
+    // four numbered captions at `EBP-0x7c` (+0x40), the projector text at `EBP-0x90` (+0x2c).
+    e.with_stack(0xbc, |e, frame| {
+        let numbered = frame.addr() + 0x40;
         e.call(
-            OPTION_LIST_ADD_SLIDER,
-            &args![list, value, id, 0u32, 0xffu32, channel, step],
+            EH_VECTOR_CONSTRUCTOR_ITERATOR,
+            &args![numbered, 8u32, 4u32, STRING_CONSTRUCT, STRING_DESTROY],
         );
-    }
-
-    // Entries for the second marker list (id 0x1c, list at +0x44).
-    let owner: u32 = e.global(MARKER_OWNER);
-    let mut node = e.call(MARKER_LIST_HEAD_2, &args![owner]).u32();
-    while node != 0 {
-        let item_slot = e.call(EMPTY_MEMBER_RETURNS_THIS, &args![node]).u32();
-        if e.mem.u32(item_slot) == 0 {
-            break;
-        }
-        let item_slot = e.call(EMPTY_MEMBER_RETURNS_THIS, &args![node]).u32();
-        let item = e.mem.u32(item_slot);
-        if e.call(MARKER_CHECK_2, &args![item]).u8() != 0 {
-            let item_slot = e.call(EMPTY_MEMBER_RETURNS_THIS, &args![node]).u32();
-            let item = e.mem.u32(item_slot);
-            let item_slot = e.call(EMPTY_MEMBER_RETURNS_THIS, &args![node]).u32();
-            let named = e.mem.u32(item_slot);
-            let name = e.call(MARKER_NAME, &args![named + 0x18]).u32();
-            let list = e.mem.u32(base + 0x44);
-            let option = e
-                .call(OPTION_LIST_ADD_OPTION, &args![list, name, 0x1cu32])
-                .u32();
-            e.call(OPTION_SET_DATA, &args![option, item]);
-        }
-        node = word_at_four(e, node);
-    }
-
-    // The sub-lists 10 to 18 hang below the list at +0x4c, captioned like
-    // the lists themselves.
-    for index in 10..0x13u32 {
-        let sub_list = e.mem.u32(base + 0x28 + 4 * index);
-        let list = e.mem.u32(base + 0x4c);
-        e.call(
-            OPTION_LIST_ADD_SUB_LIST,
-            &args![list, captions[index as usize], sub_list],
-        );
-    }
-    race_sex_menu_add_face_sliders(e, this);
-
-    let projector = e.mem.alloc(8);
-    e.call(STRING_CONSTRUCT, &args![projector]);
-    let active_list: i32 = match mode {
-        2 => {
-            e.call(STRING_SET, &args![base + 0x90, PROJECTOR_BARBER, 0u32]);
-            let text = e.call(SETTING_VALUE, &args![SETTING_43D8]).u32();
-            e.call(STRING_SET, &args![projector, text, 0u32]);
-            e.mem.set_u32(base + 0x120, 3);
-            set_zoom_bounds(
-                e,
-                base,
-                [
-                    0x0107_5aa8,
-                    0x0101_e33c,
-                    0x0107_5aa4,
-                    0x0107_5aa0,
-                    0x0105_10fc,
-                    0x0107_5a9c,
-                ],
-            );
-            3
-        }
-        3 => {
-            e.call(STRING_SET, &args![base + 0x90, PROJECTOR_SURGERY, 0u32]);
-            let text = e.call(SETTING_VALUE, &args![SETTING_2058]).u32();
-            e.call(STRING_SET, &args![projector, text, 0u32]);
-            e.mem.set_u32(base + 0x120, 2);
-            set_zoom_bounds(
-                e,
-                base,
-                [
-                    0x0107_5a70,
-                    0x0102_edc0,
-                    0x0107_5aa4,
-                    0x0107_5aa0,
-                    0x0105_10fc,
-                    0x0107_5a6c,
-                ],
-            );
-            race_sex_menu_make_preset_head_list(e, this);
-            2
-        }
-        _ => {
-            e.call(STRING_SET, &args![base + 0x90, PROJECTOR_REFLECTRON, 0u32]);
-            let text = e.call(SETTING_VALUE, &args![SETTING_454C]).u32();
-            e.call(STRING_SET, &args![projector, text, 0u32]);
-            for (target, source) in [(0x28u32, 0x2cu32), (0x2c, 0x30), (0x30, 0x34)] {
-                let target_list = e.mem.u32(base + target);
-                let source_list = e.mem.u32(base + source);
-                e.call(OPTION_LIST_LINK, &args![target_list, source_list]);
+        if (2..=3).contains(&mode) {
+            for (index, setting) in NUMBERED_SETTINGS.iter().enumerate() {
+                let text = e.call(SETTING_VALUE, &args![*setting]).u32();
+                e.call(STRING_SET, &args![numbered + 8 * index as u32, text, 0u32]);
             }
-            e.mem.set_u32(base + 0x120, 3);
-            set_zoom_bounds(
-                e,
-                base,
-                [
-                    0x0107_5a48,
-                    0x0102_edc0,
-                    0x0107_5aa4,
-                    0x0107_5a44,
-                    0x0105_10fc,
-                    0x0107_5a9c,
-                ],
-            );
-            race_sex_menu_make_preset_head_list(e, this);
-            0
+        } else {
+            for (index, setting) in NUMBERED_SETTINGS.iter().enumerate() {
+                let text = e.call(SETTING_VALUE, &args![*setting]).u32();
+                e.call(
+                    STRING_FORMAT,
+                    &args![numbered + 8 * index as u32, NUMBERED_FORMATS[index], text],
+                );
+            }
         }
-    };
-    if e.call(GET_CURRENT_TEX_LANGUAGE, &args![]).i32() != 1 {
-        e.call(STRING_UPPER_CASE, &args![projector]);
-    }
-    let name = e.call(STRING_C_STR, &args![projector]).u32();
-    let label = e.call(SETTING_VALUE, &args![SETTING_4108]).u32();
-    e.call(
-        STRING_FORMAT,
-        &args![base + 0x98, CONFIRMATION_FORMAT, label, name],
-    );
-    let pointer = e
-        .call(SETTING_FLOAT_POINTER, &args![SETTING_STARTING_ZOOM])
-        .u32();
-    let starting_zoom = x87_copy_f32(e, pointer);
-    let limited = e.call(FLOAT_MIN, &args![1.0f32, starting_zoom]).f32();
-    let clamped = e.call(FLOAT_MAX, &args![0.0f32, limited]).f32();
-    e.mem.set_f32(base + 0xd0, clamped);
-    let copied = quiet_f32(e.mem.f32(base + 0xd0));
-    e.mem.set_f32(base + 0xc8, copied);
-    for slot in [0x28u32, 0x2c, 0x44] {
-        let list = e.mem.u32(base + slot);
-        e.call(OPTION_LIST_UPDATE_CURRENT_SELECTION, &args![list]);
-    }
-    e.call(SOUND_HANDLE_PLAY, &args![base + 0xf0, 0u32]);
-    e.call(SOUND_HANDLE_PLAY, &args![base + 0xfc, 0u32]);
-    race_sex_menu_set_active_list(e, this, active_list);
-    e.call(MENU_PREP_FOR_VISIBILITY, &args![this, 0u32]);
-    e.call(STRING_DESTROY, &args![projector]);
-    e.mem.free(projector);
-    e.call(
-        EH_VECTOR_DESTRUCTOR_ITERATOR,
-        &args![numbered, 8u32, 4u32, STRING_DESTROY],
-    );
-    e.mem.free(numbered);
+        // The captions of the 20 lists: the four numbered strings, then the
+        // values of 16 settings.
+        let mut captions = [0u32; 0x14];
+        for (index, caption) in captions.iter_mut().take(4).enumerate() {
+            *caption = e
+                .call(STRING_C_STR, &args![numbered + 8 * index as u32])
+                .u32();
+        }
+        for (index, setting) in LIST_CAPTION_SETTINGS.iter().enumerate() {
+            captions[4 + index] = e.call(SETTING_VALUE, &args![*setting]).u32();
+        }
+        for index in 0..0x14u32 {
+            let block = e.call(ALLOCATE, &args![0x24u32]).u32();
+            let list = if block != 0 {
+                menu_option_list_menu_option_list(
+                    e,
+                    Ptr::new(block),
+                    index,
+                    captions[index as usize],
+                )
+                .addr()
+            } else {
+                0
+            };
+            e.mem.set_u32(base + 0x28 + 4 * index, list);
+        }
+        for (slot, callback) in [
+            (0x28u32, 0x007a_d940u32),
+            (0x2c, 0x007a_d7f0),
+            (0x3c, 0x007a_d860),
+            (0x48, 0x007a_d8d0),
+            (0x44, 0x007a_d9c0),
+        ] {
+            let list = e.mem.u32(base + slot);
+            e.call(OPTION_LIST_SET_CALLBACK, &args![list, callback]);
+        }
+        // Two entries of the first list (ids 0x15 and 0x16).
+        for (setting, id) in [(SETTING_ENTRY_15, 0x15u32), (SETTING_ENTRY_16, 0x16)] {
+            let text = e.call(SETTING_TEXT, &args![setting]).u32();
+            let list = e.mem.u32(base + 0x28);
+            e.call(OPTION_LIST_ADD_OPTION, &args![list, text, id]);
+        }
+
+        // Entries for the marker list (id 0x17, list at +0x2c): every node of
+        // the first form list whose item passes the check at `0059f610`.
+        let owner: u32 = e.global(MARKER_OWNER);
+        let mut node = e.call(MARKER_LIST_HEAD, &args![owner]).u32();
+        while node != 0 {
+            let item_slot = e.call(EMPTY_MEMBER_RETURNS_THIS, &args![node]).u32();
+            if e.mem.u32(item_slot) == 0 {
+                break;
+            }
+            let item_slot = e.call(EMPTY_MEMBER_RETURNS_THIS, &args![node]).u32();
+            let item = e.mem.u32(item_slot);
+            if e.call(MARKER_CHECK, &args![item]).u8() != 0 {
+                let item_slot = e.call(EMPTY_MEMBER_RETURNS_THIS, &args![node]).u32();
+                let item = e.mem.u32(item_slot);
+                let item_slot = e.call(EMPTY_MEMBER_RETURNS_THIS, &args![node]).u32();
+                let named = e.mem.u32(item_slot);
+                let name = e.call(MARKER_NAME, &args![named + 0x18]).u32();
+                let list = e.mem.u32(base + 0x2c);
+                let option = e
+                    .call(OPTION_LIST_ADD_OPTION, &args![list, name, 0x17u32])
+                    .u32();
+                e.call(OPTION_SET_DATA, &args![option, item]);
+            }
+            node = word_at_four(e, node);
+        }
+
+        let step = x87_copy_f32(e, SLIDER_STEP_QUARTER);
+        let value = e.call(SETTING_TEXT, &args![SETTING_SLIDER_18]).u32();
+        let list = e.mem.u32(base + 0x30);
+        e.call(
+            OPTION_LIST_ADD_SLIDER,
+            &args![list, value, 0x18u32, 1u32, 0x14u32, 0x8000_0001u32, step],
+        );
+        add_sub_list(e, base, 0x30, SETTING_36E4, 0x38);
+        let text = e.call(SETTING_TEXT, &args![SETTING_ENTRY_19]).u32();
+        let list = e.mem.u32(base + 0x30);
+        e.call(OPTION_LIST_ADD_OPTION, &args![list, text, 0x19u32]);
+        let step = x87_copy_f32(e, SLIDER_STEP_QUARTER);
+        let value = e.call(SETTING_TEXT, &args![SETTING_SLIDER_1A]).u32();
+        let list = e.mem.u32(base + 0x30);
+        let option = e
+            .call(
+                OPTION_LIST_ADD_SLIDER,
+                &args![list, value, 0x1au32, 1u32, 0xau32, 0x8000_0001u32, step],
+            )
+            .u32();
+        fn_007b3810(e, Ptr::new(option), SPACE_STRING);
+        add_sub_list(e, base, 0x34, SETTING_22D4, 0x3c);
+        add_sub_list(e, base, 0x34, SETTING_4A74, 0x40);
+        let player_base = e.mem.u32(base + 0xd8);
+        if e.call(GET_SEX, &args![player_base]).u32() == 0 {
+            add_sub_list(e, base, 0x34, SETTING_23A0, 0x44);
+        } else {
+            let list = e.mem.u32(base + 0x44);
+            e.call(LIST_SET_BACK_TARGET, &args![list, 3u32]);
+        }
+        add_sub_list(e, base, 0x38, SETTING_26D0, 0x4c);
+        add_sub_list(e, base, 0x38, SETTING_2250, 0x74);
+        add_sub_list(e, base, 0x38, SETTING_31C8, 0x48);
+
+        // The hair colour sliders (ids 0x1d to 0x20, list at +0x40).
+        let player_base = e.mem.u32(base + 0xd8);
+        let color = e.call(HAIR_COLOR_GETTER, &args![player_base]).u32();
+        let text = e.call(SETTING_VALUE, &args![SETTING_3528]).u32();
+        let step = x87_copy_f32(e, SLIDER_STEP_QUARTER);
+        let value = e.call(SETTING_TEXT, &args![SETTING_SLIDER_1D]).u32();
+        let list = e.mem.u32(base + 0x40);
+        let option = e
+            .call(
+                OPTION_LIST_ADD_SLIDER,
+                &args![list, value, 0x1du32, 0u32, 0xfu32, 0x8000_0001u32, step],
+            )
+            .u32();
+        fn_007b3810(e, Ptr::new(option), text);
+        for (setting, id, channel) in [
+            (SETTING_SLIDER_1E, 0x1eu32, color & 0xff),
+            (SETTING_SLIDER_1F, 0x1f, (color & 0xffff) >> 8),
+            (SETTING_SLIDER_20, 0x20, (color >> 16) & 0xff),
+        ] {
+            let step = x87_copy_f32(e, SLIDER_STEP_EIGHTH);
+            let value = e.call(SETTING_TEXT, &args![setting]).u32();
+            let list = e.mem.u32(base + 0x40);
+            e.call(
+                OPTION_LIST_ADD_SLIDER,
+                &args![list, value, id, 0u32, 0xffu32, channel, step],
+            );
+        }
+
+        // Entries for the second marker list (id 0x1c, list at +0x44).
+        let owner: u32 = e.global(MARKER_OWNER);
+        let mut node = e.call(MARKER_LIST_HEAD_2, &args![owner]).u32();
+        while node != 0 {
+            let item_slot = e.call(EMPTY_MEMBER_RETURNS_THIS, &args![node]).u32();
+            if e.mem.u32(item_slot) == 0 {
+                break;
+            }
+            let item_slot = e.call(EMPTY_MEMBER_RETURNS_THIS, &args![node]).u32();
+            let item = e.mem.u32(item_slot);
+            if e.call(MARKER_CHECK_2, &args![item]).u8() != 0 {
+                let item_slot = e.call(EMPTY_MEMBER_RETURNS_THIS, &args![node]).u32();
+                let item = e.mem.u32(item_slot);
+                let item_slot = e.call(EMPTY_MEMBER_RETURNS_THIS, &args![node]).u32();
+                let named = e.mem.u32(item_slot);
+                let name = e.call(MARKER_NAME, &args![named + 0x18]).u32();
+                let list = e.mem.u32(base + 0x44);
+                let option = e
+                    .call(OPTION_LIST_ADD_OPTION, &args![list, name, 0x1cu32])
+                    .u32();
+                e.call(OPTION_SET_DATA, &args![option, item]);
+            }
+            node = word_at_four(e, node);
+        }
+
+        // The sub-lists 10 to 18 hang below the list at +0x4c, captioned like
+        // the lists themselves.
+        for index in 10..0x13u32 {
+            let sub_list = e.mem.u32(base + 0x28 + 4 * index);
+            let list = e.mem.u32(base + 0x4c);
+            e.call(
+                OPTION_LIST_ADD_SUB_LIST,
+                &args![list, captions[index as usize], sub_list],
+            );
+        }
+        race_sex_menu_add_face_sliders(e, this);
+
+        let projector = frame.addr() + 0x2c;
+        e.call(STRING_CONSTRUCT, &args![projector]);
+        let active_list: i32 = match mode {
+            2 => {
+                e.call(STRING_SET, &args![base + 0x90, PROJECTOR_BARBER, 0u32]);
+                let text = e.call(SETTING_VALUE, &args![SETTING_43D8]).u32();
+                e.call(STRING_SET, &args![projector, text, 0u32]);
+                e.mem.set_u32(base + 0x120, 3);
+                set_zoom_bounds(
+                    e,
+                    base,
+                    [
+                        0x0107_5aa8,
+                        0x0101_e33c,
+                        0x0107_5aa4,
+                        0x0107_5aa0,
+                        0x0105_10fc,
+                        0x0107_5a9c,
+                    ],
+                );
+                3
+            }
+            3 => {
+                e.call(STRING_SET, &args![base + 0x90, PROJECTOR_SURGERY, 0u32]);
+                let text = e.call(SETTING_VALUE, &args![SETTING_2058]).u32();
+                e.call(STRING_SET, &args![projector, text, 0u32]);
+                e.mem.set_u32(base + 0x120, 2);
+                set_zoom_bounds(
+                    e,
+                    base,
+                    [
+                        0x0107_5a70,
+                        0x0102_edc0,
+                        0x0107_5aa4,
+                        0x0107_5aa0,
+                        0x0105_10fc,
+                        0x0107_5a6c,
+                    ],
+                );
+                race_sex_menu_make_preset_head_list(e, this);
+                2
+            }
+            _ => {
+                e.call(STRING_SET, &args![base + 0x90, PROJECTOR_REFLECTRON, 0u32]);
+                let text = e.call(SETTING_VALUE, &args![SETTING_454C]).u32();
+                e.call(STRING_SET, &args![projector, text, 0u32]);
+                for (target, source) in [(0x28u32, 0x2cu32), (0x2c, 0x30), (0x30, 0x34)] {
+                    let target_list = e.mem.u32(base + target);
+                    let source_list = e.mem.u32(base + source);
+                    e.call(OPTION_LIST_LINK, &args![target_list, source_list]);
+                }
+                e.mem.set_u32(base + 0x120, 3);
+                set_zoom_bounds(
+                    e,
+                    base,
+                    [
+                        0x0107_5a48,
+                        0x0102_edc0,
+                        0x0107_5aa4,
+                        0x0107_5a44,
+                        0x0105_10fc,
+                        0x0107_5a9c,
+                    ],
+                );
+                race_sex_menu_make_preset_head_list(e, this);
+                0
+            }
+        };
+        if e.call(GET_CURRENT_TEX_LANGUAGE, &args![]).i32() != 1 {
+            e.call(STRING_UPPER_CASE, &args![projector]);
+        }
+        let name = e.call(STRING_C_STR, &args![projector]).u32();
+        let label = e.call(SETTING_VALUE, &args![SETTING_4108]).u32();
+        e.call(
+            STRING_FORMAT,
+            &args![base + 0x98, CONFIRMATION_FORMAT, label, name],
+        );
+        let pointer = e
+            .call(SETTING_FLOAT_POINTER, &args![SETTING_STARTING_ZOOM])
+            .u32();
+        let starting_zoom = x87_copy_f32(e, pointer);
+        let limited = e.call(FLOAT_MIN, &args![1.0f32, starting_zoom]).f32();
+        let clamped = e.call(FLOAT_MAX, &args![0.0f32, limited]).f32();
+        e.mem.set_f32(base + 0xd0, clamped);
+        let copied = quiet_f32(e.mem.f32(base + 0xd0));
+        e.mem.set_f32(base + 0xc8, copied);
+        for slot in [0x28u32, 0x2c, 0x44] {
+            let list = e.mem.u32(base + slot);
+            e.call(OPTION_LIST_UPDATE_CURRENT_SELECTION, &args![list]);
+        }
+        e.call(SOUND_HANDLE_PLAY, &args![base + 0xf0, 0u32]);
+        e.call(SOUND_HANDLE_PLAY, &args![base + 0xfc, 0u32]);
+        race_sex_menu_set_active_list(e, this, active_list);
+        e.call(MENU_PREP_FOR_VISIBILITY, &args![this, 0u32]);
+        e.call(STRING_DESTROY, &args![projector]);
+        e.call(
+            EH_VECTOR_DESTRUCTOR_ITERATOR,
+            &args![numbered, 8u32, 4u32, STRING_DESTROY],
+        );
+    });
 }
 /// The shared shape of `007ad7f0`, `007ad860` and `007ad8d0`: with a non-null
 /// option whose object (`0044ddc0`) is non-null and the menu and its player
@@ -2678,21 +2685,24 @@ pub fn race_sex_menu_validate_hair_option_list(e: &mut Engine, this: Ptr<RaceSex
     let player_base = e.mem.u32(base + 0xd8);
     let male = e.call(GET_SEX, &args![player_base]).u32() == 0;
     if male && !has_entry {
-        let text = e.mem.alloc(8);
-        e.call(STRING_CONSTRUCT, &args![text]);
-        let caption = e.call(SETTING_VALUE, &args![SETTING_23A0]).u32();
-        e.call(
-            STRING_FORMAT,
-            &args![text, CAPTION_FORMAT, caption, 0x3eu32],
-        );
-        let name = e.call(STRING_C_STR, &args![text]).u32();
-        let list = e.mem.u32(base + 0x34);
-        e.call(
-            OPTION_LIST_INSERT_OPTION,
-            &args![list, 2u32, name, LIST_ITEM_TEMPLATE, 7u32],
-        );
-        e.call(STRING_DESTROY, &args![text]);
-        e.mem.free(text);
+        // The exe's frame (`SUB ESP,0x10` under the exception record, then the record link):
+        // the caption at `EBP-0x18` (+8).
+        e.with_stack(0x20, |e, frame| {
+            let text = frame.addr() + 8;
+            e.call(STRING_CONSTRUCT, &args![text]);
+            let caption = e.call(SETTING_VALUE, &args![SETTING_23A0]).u32();
+            e.call(
+                STRING_FORMAT,
+                &args![text, CAPTION_FORMAT, caption, 0x3eu32],
+            );
+            let name = e.call(STRING_C_STR, &args![text]).u32();
+            let list = e.mem.u32(base + 0x34);
+            e.call(
+                OPTION_LIST_INSERT_OPTION,
+                &args![list, 2u32, name, LIST_ITEM_TEMPLATE, 7u32],
+            );
+            e.call(STRING_DESTROY, &args![text]);
+        });
     } else if has_entry && !male {
         let list = e.mem.u32(base + 0x34);
         e.call(OPTION_LIST_REMOVE_OPTION, &args![list, 7u32]);
@@ -2774,46 +2784,49 @@ pub fn race_sex_menu_update_scroll_arrows(e: &mut Engine, this: Ptr<RaceSexMenu>
 // Translation incomplete: 007af770 - the C++ exception-unwinding frame (FS:[0]) that destroys the temporary matrices is not translated
 pub fn race_sex_menu_on_face_slider_change(e: &mut Engine, this: Ptr<RaceSexMenu>, option: u32) {
     let base = this.addr();
-    let coords = e.mem.alloc(0x80);
-    e.call(
-        EH_VECTOR_CONSTRUCTOR_ITERATOR,
-        &args![
-            coords,
-            0x20u32,
-            4u32,
-            FACE_COORD_CONSTRUCT,
-            FACE_COORD_DESTRUCT
-        ],
-    );
-    let player_base = e.mem.u32(base + 0xd8);
-    e.call(GET_FACE_COORD, &args![player_base, coords]);
-    let value = menu_option_get_value(e, Ptr::new(option));
-    let scaled = (value as f64 / e.global::<f64>(TENTH_DIVISOR)) as f32;
-    let word = e.call(WORD_AT_EIGHT, &args![option]).u32();
-    let id = word_at_four(e, option);
-    e.call(
-        APPLY_FACE_SLIDER,
-        &args![coords, id != 0x22, 0u32, word, scaled],
-    );
-    let player_base = e.mem.u32(base + 0xd8);
-    e.call(GET_FACE_COORD, &args![player_base, base + 0x124]);
-    let player_base = e.mem.u32(base + 0xd8);
-    let first = e.call(FACE_VALUE_601800, &args![player_base]).u32();
-    let player_base = e.mem.u32(base + 0xd8);
-    let sex = e.call(GET_SEX, &args![player_base]).u32();
-    let player_base = e.mem.u32(base + 0xd8);
-    let race_word = word_at_four(e, player_base + 0x10c);
-    let race = e.call(FACE_VALUE_5D9FB0, &args![race_word, sex]).u32();
-    e.call(REGENERATE_FACE, &args![race, coords, first, 0u32]);
-    race_sex_menu_set_flag(e, this, 8, true);
-    if word_at_four(e, option) == 0x23 {
-        race_sex_menu_set_flag(e, this, 9, true);
-    }
-    e.call(
-        EH_VECTOR_DESTRUCTOR_ITERATOR,
-        &args![coords, 0x20u32, 4u32, FACE_COORD_DESTRUCT],
-    );
-    e.mem.free(coords);
+    // The exe's frame (`SUB ESP,0x8c` under the exception record, then the record link): the
+    // four face coordinate blocks at `EBP-0x8c` (+0x10).
+    e.with_stack(0x9c, |e, frame| {
+        let coords = frame.addr() + 0x10;
+        e.call(
+            EH_VECTOR_CONSTRUCTOR_ITERATOR,
+            &args![
+                coords,
+                0x20u32,
+                4u32,
+                FACE_COORD_CONSTRUCT,
+                FACE_COORD_DESTRUCT
+            ],
+        );
+        let player_base = e.mem.u32(base + 0xd8);
+        e.call(GET_FACE_COORD, &args![player_base, coords]);
+        let value = menu_option_get_value(e, Ptr::new(option));
+        let scaled = (value as f64 / e.global::<f64>(TENTH_DIVISOR)) as f32;
+        let word = e.call(WORD_AT_EIGHT, &args![option]).u32();
+        let id = word_at_four(e, option);
+        e.call(
+            APPLY_FACE_SLIDER,
+            &args![coords, id != 0x22, 0u32, word, scaled],
+        );
+        let player_base = e.mem.u32(base + 0xd8);
+        e.call(GET_FACE_COORD, &args![player_base, base + 0x124]);
+        let player_base = e.mem.u32(base + 0xd8);
+        let first = e.call(FACE_VALUE_601800, &args![player_base]).u32();
+        let player_base = e.mem.u32(base + 0xd8);
+        let sex = e.call(GET_SEX, &args![player_base]).u32();
+        let player_base = e.mem.u32(base + 0xd8);
+        let race_word = word_at_four(e, player_base + 0x10c);
+        let race = e.call(FACE_VALUE_5D9FB0, &args![race_word, sex]).u32();
+        e.call(REGENERATE_FACE, &args![race, coords, first, 0u32]);
+        race_sex_menu_set_flag(e, this, 8, true);
+        if word_at_four(e, option) == 0x23 {
+            race_sex_menu_set_flag(e, this, 9, true);
+        }
+        e.call(
+            EH_VECTOR_DESTRUCTOR_ITERATOR,
+            &args![coords, 0x20u32, 4u32, FACE_COORD_DESTRUCT],
+        );
+    });
 }
 
 // Translated from 007af900 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2837,30 +2850,34 @@ pub fn race_sex_menu_on_hair_color_slider_change(
         return;
     }
     if word_at_four(e, option) == 0x1d {
-        let text = e.mem.alloc(8);
-        let (color_setting, name_setting) = e.with_stack(8, |e, found| {
-            e.mem.set_u32(found.addr(), 0);
-            e.mem.set_u32(found.addr() + 4, 0);
-            e.call(STRING_CONSTRUCT, &args![text]);
-            let value = menu_option_get_value(e, Ptr::new(option));
-            e.call(STRING_FORMAT, &args![text, FORMAT_HAIR_COLOR_INT, value]);
-            let name = e.call(STRING_C_STR, &args![text]).u32();
-            let settings = e.call(SETTINGS_COLLECTION, &args![]).u32();
-            e.call(SETTINGS_FIND, &args![settings, name, found.addr() + 4]);
-            let value = menu_option_get_value(e, Ptr::new(option));
-            e.call(STRING_FORMAT, &args![text, FORMAT_HAIR_COLOR_NAME, value]);
-            let name = e.call(STRING_C_STR, &args![text]).u32();
-            let settings = e.call(SETTINGS_COLLECTION, &args![]).u32();
-            e.call(SETTINGS_FIND, &args![settings, name, found.addr()]);
-            (e.mem.u32(found.addr() + 4), e.mem.u32(found.addr()))
+        // The exe's frame (`SUB ESP,0x18` under the exception record, then the record link): the
+        // text at `EBP-0x20` (+8), the two found settings at `EBP-0x18` and `EBP-0x14` (+0x10).
+        e.with_stack(0x28, |e, frame| {
+            let text = frame.addr() + 8;
+            let found = Ptr::<()>::new(frame.addr() + 0x10);
+            let (color_setting, name_setting) = {
+                e.mem.set_u32(found.addr(), 0);
+                e.mem.set_u32(found.addr() + 4, 0);
+                e.call(STRING_CONSTRUCT, &args![text]);
+                let value = menu_option_get_value(e, Ptr::new(option));
+                e.call(STRING_FORMAT, &args![text, FORMAT_HAIR_COLOR_INT, value]);
+                let name = e.call(STRING_C_STR, &args![text]).u32();
+                let settings = e.call(SETTINGS_COLLECTION, &args![]).u32();
+                e.call(SETTINGS_FIND, &args![settings, name, found.addr() + 4]);
+                let value = menu_option_get_value(e, Ptr::new(option));
+                e.call(STRING_FORMAT, &args![text, FORMAT_HAIR_COLOR_NAME, value]);
+                let name = e.call(STRING_C_STR, &args![text]).u32();
+                let settings = e.call(SETTINGS_COLLECTION, &args![]).u32();
+                e.call(SETTINGS_FIND, &args![settings, name, found.addr()]);
+                (e.mem.u32(found.addr() + 4), e.mem.u32(found.addr()))
+            };
+            let caption = e.call(SETTING_VALUE, &args![name_setting]).u32();
+            fn_007b3810(e, Ptr::new(option), caption);
+            let slot = e.call(SETTING_INT_POINTER, &args![color_setting]).u32();
+            let color = e.mem.u32(slot);
+            race_sex_menu_set_hair_color_sliders(e, this, color);
+            e.call(STRING_DESTROY, &args![text]);
         });
-        let caption = e.call(SETTING_VALUE, &args![name_setting]).u32();
-        fn_007b3810(e, Ptr::new(option), caption);
-        let slot = e.call(SETTING_INT_POINTER, &args![color_setting]).u32();
-        let color = e.mem.u32(slot);
-        race_sex_menu_set_hair_color_sliders(e, this, color);
-        e.call(STRING_DESTROY, &args![text]);
-        e.mem.free(text);
     } else {
         let caption = e.call(SETTING_VALUE, &args![SETTING_3528]).u32();
         let list = e.mem.u32(base + 0x40);
@@ -3306,83 +3323,85 @@ fn add_face_slider(
 /// The compiler's exception-unwinding frame is not translated.
 // Translation incomplete: 007afaf0 - the C++ exception-unwinding frame (FS:[0]) that destroys the coordinate array is not translated
 pub fn race_sex_menu_add_face_sliders(e: &mut Engine, this: Ptr<RaceSexMenu>) {
-    // `frame + 0x84 + 16 * slot` is slot `slot` of the table, `frame + 0x3f4`
-    // the coordinate array (the game's `EBP - 0x5fc` and `EBP - 0x28c`).
-    let frame = e.mem.alloc(0x700);
-    let slot_address = |slot: usize| frame + 0x84 + 16 * slot as u32;
-    for (index, (list, text, lower, upper)) in SHAPE_ROWS.iter().enumerate() {
-        let slot = if index < 55 { index } else { index + 8 };
-        let entry = slot_address(slot);
-        e.mem.set_u32(entry, *list);
-        let caption = if *text != 0 {
-            e.call(SETTING_VALUE, &args![*text]).u32()
-        } else {
-            0
-        };
-        e.mem.set_u32(entry + 4, caption);
-        let value = shape_bound(e, *lower);
-        e.mem.set_f32(entry + 8, value);
-        let value = shape_bound(e, *upper);
-        e.mem.set_f32(entry + 0xc, value);
-    }
-    let coords = frame + 0x3f4;
-    e.call(
-        EH_VECTOR_CONSTRUCTOR_ITERATOR,
-        &args![
-            coords,
-            0x20u32,
-            4u32,
-            FACE_COORD_CONSTRUCT,
-            FACE_COORD_DESTRUCT
-        ],
-    );
-    let player_base = e.mem.u32(this.addr() + 0xd8);
-    let first = e.call(FACE_VALUE_601800, &args![player_base]).u32();
-    let player_base = e.mem.u32(this.addr() + 0xd8);
-    let sex = e.call(GET_SEX, &args![player_base]).u32();
-    let player_base = e.mem.u32(this.addr() + 0xd8);
-    let race_word = word_at_four(e, player_base + 0x10c);
-    let race = e.call(FACE_VALUE_5D9FB0, &args![race_word, sex]).u32();
-    e.call(FACE_FILL_COORDS, &args![race, first, coords, 0u32, 0.0f32]);
-    let mut shape = 0i32;
-    loop {
-        e.call(FACE_GEN_MANAGER_INSTANCE, &args![]);
-        let count = e.call(SHAPE_COUNT, &args![0u32, 0u32]).i32();
-        if shape >= count {
-            break;
+    // The exe's frame (`SUB ESP,0x660` under the exception record, then the record link):
+    // `frame + 0x74 + 16 * slot` is slot `slot` of the table, `frame + 0x3e4` the coordinate
+    // array (the game's `EBP - 0x5fc` and `EBP - 0x28c`).
+    e.with_stack(0x670, |e, frame| {
+        let frame = frame.addr();
+        let slot_address = |slot: usize| frame + 0x74 + 16 * slot as u32;
+        for (index, (list, text, lower, upper)) in SHAPE_ROWS.iter().enumerate() {
+            let slot = if index < 55 { index } else { index + 8 };
+            let entry = slot_address(slot);
+            e.mem.set_u32(entry, *list);
+            let caption = if *text != 0 {
+                e.call(SETTING_VALUE, &args![*text]).u32()
+            } else {
+                0
+            };
+            e.mem.set_u32(entry + 4, caption);
+            let value = shape_bound(e, *lower);
+            e.mem.set_f32(entry + 8, value);
+            let value = shape_bound(e, *upper);
+            e.mem.set_f32(entry + 0xc, value);
         }
-        let entry = frame
-            .wrapping_add(0x84)
-            .wrapping_add((shape as u32).wrapping_mul(16));
-        if (e.mem.i32(entry)) < 0x14 && e.mem.u32(entry + 4) != 0 {
+        let coords = frame + 0x3e4;
+        e.call(
+            EH_VECTOR_CONSTRUCTOR_ITERATOR,
+            &args![
+                coords,
+                0x20u32,
+                4u32,
+                FACE_COORD_CONSTRUCT,
+                FACE_COORD_DESTRUCT
+            ],
+        );
+        let player_base = e.mem.u32(this.addr() + 0xd8);
+        let first = e.call(FACE_VALUE_601800, &args![player_base]).u32();
+        let player_base = e.mem.u32(this.addr() + 0xd8);
+        let sex = e.call(GET_SEX, &args![player_base]).u32();
+        let player_base = e.mem.u32(this.addr() + 0xd8);
+        let race_word = word_at_four(e, player_base + 0x10c);
+        let race = e.call(FACE_VALUE_5D9FB0, &args![race_word, sex]).u32();
+        e.call(FACE_FILL_COORDS, &args![race, first, coords, 0u32, 0.0f32]);
+        let mut shape = 0i32;
+        loop {
+            e.call(FACE_GEN_MANAGER_INSTANCE, &args![]);
+            let count = e.call(SHAPE_COUNT, &args![0u32, 0u32]).i32();
+            if shape >= count {
+                break;
+            }
+            let entry = frame
+                .wrapping_add(0x74)
+                .wrapping_add((shape as u32).wrapping_mul(16));
+            if (e.mem.i32(entry)) < 0x14 && e.mem.u32(entry + 4) != 0 {
+                let value = e
+                    .call(FACE_SHAPE_VALUE, &args![coords, 0u32, 0u32, shape])
+                    .f32();
+                add_face_slider(e, this, entry, value, 0x22, shape as u32);
+            }
+            shape += 1;
+        }
+        for (selector, slot) in EXTRA_SLIDERS {
             let value = e
-                .call(FACE_SHAPE_VALUE, &args![coords, 0u32, 0u32, shape])
+                .call(FACE_SHAPE_VALUE, &args![coords, 1u32, 0u32, selector])
                 .f32();
-            add_face_slider(e, this, entry, value, 0x22, shape as u32);
+            add_face_slider(e, this, slot_address(slot), value, 0x23, selector);
         }
-        shape += 1;
-    }
-    for (selector, slot) in EXTRA_SLIDERS {
-        let value = e
-            .call(FACE_SHAPE_VALUE, &args![coords, 1u32, 0u32, selector])
-            .f32();
-        add_face_slider(e, this, slot_address(slot), value, 0x23, selector);
-    }
-    fn_007b18f0(e, this, 0x22);
-    fn_007b18f0(e, this, 0x23);
-    if race_sex_menu_get_flag(e, this, 8) {
-        fn_007b1e70(e, this, true, true, false);
-        race_sex_menu_set_flag(e, this, 8, false);
-    }
-    if race_sex_menu_get_flag(e, this, 9) {
-        fn_007b25a0(e, this);
-        race_sex_menu_set_flag(e, this, 9, false);
-    }
-    e.call(
-        EH_VECTOR_DESTRUCTOR_ITERATOR,
-        &args![coords, 0x20u32, 4u32, FACE_COORD_DESTRUCT],
-    );
-    e.mem.free(frame);
+        fn_007b18f0(e, this, 0x22);
+        fn_007b18f0(e, this, 0x23);
+        if race_sex_menu_get_flag(e, this, 8) {
+            fn_007b1e70(e, this, true, true, false);
+            race_sex_menu_set_flag(e, this, 8, false);
+        }
+        if race_sex_menu_get_flag(e, this, 9) {
+            fn_007b25a0(e, this);
+            race_sex_menu_set_flag(e, this, 9, false);
+        }
+        e.call(
+            EH_VECTOR_DESTRUCTOR_ITERATOR,
+            &args![coords, 0x20u32, 4u32, FACE_COORD_DESTRUCT],
+        );
+    });
 }
 // Translated from 007b16d0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Re-reads the face shape slider options (ids `0x22` and `0x23`) of the
@@ -3402,71 +3421,77 @@ pub fn fn_007b16d0(
     selector: u32,
 ) -> bool {
     let base = this.addr();
-    let mut changed = false;
-    let mut list_index = from;
-    while list_index < to {
-        let list = option_list(e, base, list_index as u32);
-        let mut cursor = e.call(STRING_C_STR, &args![list]).u32();
-        while cursor != 0 {
-            let option = e.with_stack(4, |e, slot| {
-                e.mem.set_u32(slot.addr(), cursor);
-                let found = e.call(LIST_ADVANCE, &args![list, slot]).u32();
-                cursor = e.mem.u32(slot.addr());
-                e.mem.u32(found)
-            });
-            if option == 0 {
-                continue;
+    // The exe's frame (`SUB ESP,0xa0` under the exception record, then the record link): the
+    // list cursor at `EBP-0x18` (+0x98), the four face coordinate blocks at `EBP-0x9c` (+0x14),
+    // the slider range at `EBP-0xa4` and `EBP-0xa0` (+0xc).
+    e.with_stack(0xb0, |e, frame| {
+        let mut changed = false;
+        let mut list_index = from;
+        while list_index < to {
+            let list = option_list(e, base, list_index as u32);
+            let mut cursor = e.call(STRING_C_STR, &args![list]).u32();
+            while cursor != 0 {
+                let option = {
+                    let slot = frame.addr() + 0x98;
+                    e.mem.set_u32(slot, cursor);
+                    let found = e.call(LIST_ADVANCE, &args![list, slot]).u32();
+                    cursor = e.mem.u32(slot);
+                    e.mem.u32(found)
+                };
+                if option == 0 {
+                    continue;
+                }
+                if word_at_four(e, option) != 0x22 && word_at_four(e, option) != 0x23 {
+                    continue;
+                }
+                let coords = frame.addr() + 0x14;
+                e.call(
+                    EH_VECTOR_CONSTRUCTOR_ITERATOR,
+                    &args![
+                        coords,
+                        0x20u32,
+                        4u32,
+                        FACE_COORD_CONSTRUCT,
+                        FACE_COORD_DESTRUCT
+                    ],
+                );
+                let player_base = e.mem.u32(base + 0xd8);
+                let first = e.call(FACE_VALUE_601800, &args![player_base]).u32();
+                let player_base = e.mem.u32(base + 0xd8);
+                let sex = e.call(GET_SEX, &args![player_base]).u32();
+                let player_base = e.mem.u32(base + 0xd8);
+                let race_word = word_at_four(e, player_base + 0x10c);
+                let race = e.call(FACE_VALUE_5D9FB0, &args![race_word, sex]).u32();
+                e.call(FACE_FILL_COORDS, &args![race, first, coords, 0u32, 0.0f32]);
+                let shape = e.call(WORD_AT_EIGHT, &args![option]).u32();
+                let value = e
+                    .call(FACE_SHAPE_VALUE, &args![coords, selector, 0u32, shape])
+                    .f32();
+                let ten: f64 = e.global(TENTH_DIVISOR);
+                let value = e.call(FTOL, &args![value as f64 * ten]).i32();
+                let (min, max) = {
+                    let range = frame.addr() + 0xc;
+                    fn_007b3840(e, Ptr::new(option), range, range + 4);
+                    (e.mem.i32(range), e.mem.i32(range + 4))
+                };
+                if value < min {
+                    menu_option_set_value(e, Ptr::new(option), min);
+                    changed = true;
+                } else if value > max {
+                    menu_option_set_value(e, Ptr::new(option), max);
+                    changed = true;
+                } else if option != e.mem.u32(base + 0xc4) {
+                    menu_option_set_value(e, Ptr::new(option), value);
+                }
+                e.call(
+                    EH_VECTOR_DESTRUCTOR_ITERATOR,
+                    &args![coords, 0x20u32, 4u32, FACE_COORD_DESTRUCT],
+                );
             }
-            if word_at_four(e, option) != 0x22 && word_at_four(e, option) != 0x23 {
-                continue;
-            }
-            let coords = e.mem.alloc(0x80);
-            e.call(
-                EH_VECTOR_CONSTRUCTOR_ITERATOR,
-                &args![
-                    coords,
-                    0x20u32,
-                    4u32,
-                    FACE_COORD_CONSTRUCT,
-                    FACE_COORD_DESTRUCT
-                ],
-            );
-            let player_base = e.mem.u32(base + 0xd8);
-            let first = e.call(FACE_VALUE_601800, &args![player_base]).u32();
-            let player_base = e.mem.u32(base + 0xd8);
-            let sex = e.call(GET_SEX, &args![player_base]).u32();
-            let player_base = e.mem.u32(base + 0xd8);
-            let race_word = word_at_four(e, player_base + 0x10c);
-            let race = e.call(FACE_VALUE_5D9FB0, &args![race_word, sex]).u32();
-            e.call(FACE_FILL_COORDS, &args![race, first, coords, 0u32, 0.0f32]);
-            let shape = e.call(WORD_AT_EIGHT, &args![option]).u32();
-            let value = e
-                .call(FACE_SHAPE_VALUE, &args![coords, selector, 0u32, shape])
-                .f32();
-            let ten: f64 = e.global(TENTH_DIVISOR);
-            let value = e.call(FTOL, &args![value as f64 * ten]).i32();
-            let (min, max) = e.with_stack(8, |e, range| {
-                fn_007b3840(e, Ptr::new(option), range.addr(), range.addr() + 4);
-                (e.mem.i32(range.addr()), e.mem.i32(range.addr() + 4))
-            });
-            if value < min {
-                menu_option_set_value(e, Ptr::new(option), min);
-                changed = true;
-            } else if value > max {
-                menu_option_set_value(e, Ptr::new(option), max);
-                changed = true;
-            } else if option != e.mem.u32(base + 0xc4) {
-                menu_option_set_value(e, Ptr::new(option), value);
-            }
-            e.call(
-                EH_VECTOR_DESTRUCTOR_ITERATOR,
-                &args![coords, 0x20u32, 4u32, FACE_COORD_DESTRUCT],
-            );
-            e.mem.free(coords);
+            list_index += 1;
         }
-        list_index += 1;
-    }
-    changed
+        changed
+    })
 }
 
 // Translated from 007b18f0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -3509,52 +3534,52 @@ pub fn race_sex_menu_rotate_player(
     let base = this.addr();
     let node = e.call(STRING_C_STR, &args![base + 0xd4]).u32();
     let rotation = e.call(GET_ROTATE, &args![node]).u32();
-    let matrix = e.mem.alloc(0x24);
-    let scale = e.mem.alloc(0x24);
-    let product = e.mem.alloc(0x24);
-    let angles = e.mem.alloc(0xc);
-    copy_words(e, rotation, matrix, 9);
-    e.call(
-        TO_EULER_ANGLES,
-        &args![matrix, angles, angles + 4, angles + 8],
-    );
-    let current = e.mem.f32(angles + 8);
-    let two_pi: f64 = e.global(TWO_PI_DOUBLE);
-    let zero: f64 = e.global(ZERO_DOUBLE);
-    let mut wrapped = (current as f64 - angle as f64) as f32;
-    if (wrapped as f64) < zero {
-        wrapped = (wrapped as f64 + two_pi) as f32;
-    } else if wrapped as f64 > two_pi {
-        wrapped = (wrapped as f64 - two_pi) as f32;
-    }
-    let result = if current == wrapped && force as u8 == 0 {
-        0
-    } else {
-        e.call(MATRIX_SET_ROTATION, &args![matrix, wrapped]);
-        copy_words(e, IDENTITY_MATRIX, scale, 9);
-        for (row, getter) in [
-            (0u32, PLAYER_BASE_WEIGHT),
-            (1, PLAYER_BASE_WEIGHT),
-            (2, PLAYER_BASE_HEIGHT),
-        ] {
-            let player_base = e.mem.u32(base + 0xd8);
-            let value = e.call(getter, &args![player_base]).f32();
-            e.call(MATRIX_SET_ELEMENT, &args![scale, row, row, value]);
+    // The exe's frame (`SUB ESP,0x80` under `EBP`, then `ESI` and `EDI`): the matrix at
+    // `EBP-0x24` (+0x64), the scale at `EBP-0x58` (+0x30), the product at `EBP-0x7c` (+0xc) and
+    // the three angles at `EBP-0x34`, `EBP-0x2c` and `EBP-0x30` (+0x54, +0x5c, +0x58).
+    e.with_stack(0x88, |e, frame| {
+        let matrix = frame.addr() + 0x64;
+        let scale = frame.addr() + 0x30;
+        let product = frame.addr() + 0xc;
+        let angles = [0x54, 0x5c, 0x58].map(|offset| frame.addr() + offset);
+        copy_words(e, rotation, matrix, 9);
+        e.call(
+            TO_EULER_ANGLES,
+            &args![matrix, angles[0], angles[1], angles[2]],
+        );
+        let current = e.mem.f32(angles[2]);
+        let two_pi: f64 = e.global(TWO_PI_DOUBLE);
+        let zero: f64 = e.global(ZERO_DOUBLE);
+        let mut wrapped = (current as f64 - angle as f64) as f32;
+        if (wrapped as f64) < zero {
+            wrapped = (wrapped as f64 + two_pi) as f32;
+        } else if wrapped as f64 > two_pi {
+            wrapped = (wrapped as f64 - two_pi) as f32;
         }
-        let multiplied = e
-            .call(MATRIX_MULTIPLY, &args![matrix, product, scale])
-            .u32();
-        copy_words(e, multiplied, matrix, 9);
-        let node = e.call(STRING_C_STR, &args![base + 0xd4]).u32();
-        e.call(SET_ROTATE, &args![node, matrix]);
-        fn_007b1ae0(e, this);
-        1
-    };
-    e.mem.free(matrix);
-    e.mem.free(scale);
-    e.mem.free(product);
-    e.mem.free(angles);
-    result
+        if current == wrapped && force as u8 == 0 {
+            0
+        } else {
+            e.call(MATRIX_SET_ROTATION, &args![matrix, wrapped]);
+            copy_words(e, IDENTITY_MATRIX, scale, 9);
+            for (row, getter) in [
+                (0u32, PLAYER_BASE_WEIGHT),
+                (1, PLAYER_BASE_WEIGHT),
+                (2, PLAYER_BASE_HEIGHT),
+            ] {
+                let player_base = e.mem.u32(base + 0xd8);
+                let value = e.call(getter, &args![player_base]).f32();
+                e.call(MATRIX_SET_ELEMENT, &args![scale, row, row, value]);
+            }
+            let multiplied = e
+                .call(MATRIX_MULTIPLY, &args![matrix, product, scale])
+                .u32();
+            copy_words(e, multiplied, matrix, 9);
+            let node = e.call(STRING_C_STR, &args![base + 0xd4]).u32();
+            e.call(SET_ROTATE, &args![node, matrix]);
+            fn_007b1ae0(e, this);
+            1
+        }
+    })
 }
 
 // Translated from 007b1ae0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -3570,11 +3595,13 @@ pub fn fn_007b1ae0(e: &mut Engine, _this: Ptr<RaceSexMenu>) {
     // 007b1b05: of the two 0s pushed first, `00950bb0` (RET 4) takes one; the other is
     // the last word of `00b5d9f0` (RET 8).
     e.call(UPDATE_OBJECT_LIGHTING, &args![scene, object, 0u32]);
-    let point = e.mem.alloc(0xc);
-    e.call(POINT_CONSTRUCT, &args![point, 0.0f32, 0u32, 0u32]);
-    let scene = e.call(SCENE_NODE_GETTER, &args![3u32]).u32();
-    e.call(SET_TRANSLATE_POINT, &args![scene, point]);
-    e.mem.free(point);
+    // The exe's frame (`SUB ESP,0x10` under `EBP`): the point at `EBP-0xc` (+4).
+    e.with_stack(0x10, |e, frame| {
+        let point = frame.addr() + 4;
+        e.call(POINT_CONSTRUCT, &args![point, 0.0f32, 0u32, 0u32]);
+        let scene = e.call(SCENE_NODE_GETTER, &args![3u32]).u32();
+        e.call(SET_TRANSLATE_POINT, &args![scene, point]);
+    });
     let interface = e.call(INTERFACE_SINGLETON, &args![]).u32();
     if e.call(RENDERED_MENU_GETTER, &args![interface]).u32() != 0 {
         let interface = e.call(INTERFACE_SINGLETON, &args![]).u32();
@@ -3736,159 +3763,163 @@ pub fn fn_007b1e70(
     }
     let player_base = e.mem.u32(base + 0xd8);
     e.vcall(player_base, 0x48, &args![0x800u32]);
-    if reset {
-        let root = e.call(PLAYER_NODE_GETTER, &args![player, 0u32]).u32();
-        let object = if root != 0 {
-            e.vcall(root, 0xc, &args![]).u32()
-        } else {
-            0
-        };
-        if object != 0 {
-            let mut palette = 0u32;
-            let animation = e.call(PLAYER_ANIMATION, &args![player, 0u32]).u32();
-            if animation != 0 {
+    // The exe's frame (`SUB ESP,0x17c` under the exception record, then the record link): the
+    // head pair at `EBP-0x1c` (+0x170) and `EBP-0x10` (+0x17c), the face coordinates at
+    // `EBP-0x12c` (+0x60) and the applied ones at `EBP-0xac` (+0xe0), the texture pointer at
+    // `EBP-0x154` (+0x38).
+    e.with_stack(0x18c, |e, frame| {
+        if reset {
+            let root = e.call(PLAYER_NODE_GETTER, &args![player, 0u32]).u32();
+            let object = if root != 0 {
+                e.vcall(root, 0xc, &args![]).u32()
+            } else {
+                0
+            };
+            if object != 0 {
+                let mut palette = 0u32;
                 let animation = e.call(PLAYER_ANIMATION, &args![player, 0u32]).u32();
-                let held = e.call(ANIMATION_OBJECT, &args![animation]).u32();
-                if held != 0 {
+                if animation != 0 {
                     let animation = e.call(PLAYER_ANIMATION, &args![player, 0u32]).u32();
                     let held = e.call(ANIMATION_OBJECT, &args![animation]).u32();
-                    palette = e.call(PALETTE_OF, &args![held]).u32();
+                    if held != 0 {
+                        let animation = e.call(PLAYER_ANIMATION, &args![player, 0u32]).u32();
+                        let held = e.call(ANIMATION_OBJECT, &args![animation]).u32();
+                        palette = e.call(PALETTE_OF, &args![held]).u32();
+                    }
+                }
+                let third = e.vcall(player, 0x1b0, &args![0u32]).u32();
+                if third != 0 && e.call(OBJECT_9611E0, &args![third]).u32() != 0 {
+                    e.call(REMOVE_FROM_PALETTE, &args![third, palette]);
+                    let saved = e.call(SAVED_OBJECT, &args![player]).u32();
+                    e.vcall(saved, 0x79c, &args![0u32]);
+                    let owner = e.call(OBJECT_9611E0, &args![third]).u32();
+                    e.vcall(owner, 0xe8, &args![third]);
+                }
+                let first = e.vcall(player, 0x1ac, &args![0u32]).u32();
+                if first != 0 && e.call(OBJECT_9611E0, &args![first]).u32() != 0 {
+                    e.call(REMOVE_FROM_PALETTE, &args![first, palette]);
+                    let saved = e.call(SAVED_OBJECT, &args![player]).u32();
+                    e.vcall(saved, 0x794, &args![0u32]);
+                    let saved = e.call(SAVED_OBJECT, &args![player]).u32();
+                    e.vcall(saved, 0x7a4, &args![0u32]);
+                    let owner = e.call(OBJECT_9611E0, &args![first]).u32();
+                    e.vcall(owner, 0xe8, &args![first]);
                 }
             }
-            let third = e.vcall(player, 0x1b0, &args![0u32]).u32();
-            if third != 0 && e.call(OBJECT_9611E0, &args![third]).u32() != 0 {
-                e.call(REMOVE_FROM_PALETTE, &args![third, palette]);
+            if e.call(SAVED_OBJECT, &args![player]).u32() != 0 {
                 let saved = e.call(SAVED_OBJECT, &args![player]).u32();
-                e.vcall(saved, 0x79c, &args![0u32]);
-                let owner = e.call(OBJECT_9611E0, &args![third]).u32();
-                e.vcall(owner, 0xe8, &args![third]);
+                e.vcall(saved, 0x58, &args![]);
             }
-            let first = e.vcall(player, 0x1ac, &args![0u32]).u32();
-            if first != 0 && e.call(OBJECT_9611E0, &args![first]).u32() != 0 {
-                e.call(REMOVE_FROM_PALETTE, &args![first, palette]);
-                let saved = e.call(SAVED_OBJECT, &args![player]).u32();
-                e.vcall(saved, 0x794, &args![0u32]);
-                let saved = e.call(SAVED_OBJECT, &args![player]).u32();
-                e.vcall(saved, 0x7a4, &args![0u32]);
-                let owner = e.call(OBJECT_9611E0, &args![first]).u32();
-                e.vcall(owner, 0xe8, &args![first]);
-            }
-        }
-        if e.call(SAVED_OBJECT, &args![player]).u32() != 0 {
-            let saved = e.call(SAVED_OBJECT, &args![player]).u32();
-            e.vcall(saved, 0x58, &args![]);
-        }
-        let player_base = e.mem.u32(base + 0xd8);
-        e.call(CLEAR_HEAD, &args![player_base]);
-        let (first, second) = e.with_stack(8, |e, pair| {
-            e.mem.set_u32(pair.addr(), 0);
-            e.mem.set_u32(pair.addr() + 4, 0);
             let player_base = e.mem.u32(base + 0xd8);
-            e.call(INIT_HEAD, &args![player_base, pair.addr(), pair.addr() + 4]);
-            (e.mem.u32(pair.addr()), e.mem.u32(pair.addr() + 4))
-        });
-        let biped = e.call(PLAYER_BIPED, &args![player, 0u32]).u32();
-        let player_base = e.mem.u32(base + 0xd8);
-        e.call(
-            HEAD_BUILD,
-            &args![player_base, player, biped, first, second],
-        );
-    } else {
-        let coords = e.mem.alloc(0x80);
-        let applied = e.mem.alloc(0x80);
-        e.call(
-            EH_VECTOR_CONSTRUCTOR_ITERATOR,
-            &args![
-                coords,
-                0x20u32,
-                4u32,
-                FACE_COORD_CONSTRUCT,
-                FACE_COORD_DESTRUCT
-            ],
-        );
-        e.call(
-            EH_VECTOR_CONSTRUCTOR_ITERATOR,
-            &args![
-                applied,
-                0x20u32,
-                4u32,
-                FACE_COORD_CONSTRUCT,
-                FACE_COORD_DESTRUCT
-            ],
-        );
-        let player_base = e.mem.u32(base + 0xd8);
-        e.call(GET_FACE_COORD, &args![player_base, coords]);
-        if apply {
-            e.call(REGENERATE_FACE, &args![base + 0x124, coords, applied, 0u32]);
-        }
-        let mut root = e.vcall(player, 0x1ac, &args![0u32]).u32();
-        for _ in 0..2 {
+            e.call(CLEAR_HEAD, &args![player_base]);
+            let (first, second) = {
+                let (first_at, second_at) = (frame.addr() + 0x170, frame.addr() + 0x17c);
+                e.mem.set_u32(second_at, 0);
+                e.mem.set_u32(first_at, 0);
+                let player_base = e.mem.u32(base + 0xd8);
+                e.call(INIT_HEAD, &args![player_base, first_at, second_at]);
+                (e.mem.u32(first_at), e.mem.u32(second_at))
+            };
+            let biped = e.call(PLAYER_BIPED, &args![player, 0u32]).u32();
+            let player_base = e.mem.u32(base + 0xd8);
+            e.call(
+                HEAD_BUILD,
+                &args![player_base, player, biped, first, second],
+            );
+        } else {
+            let coords = frame.addr() + 0x60;
+            let applied = frame.addr() + 0xe0;
+            e.call(
+                EH_VECTOR_CONSTRUCTOR_ITERATOR,
+                &args![
+                    coords,
+                    0x20u32,
+                    4u32,
+                    FACE_COORD_CONSTRUCT,
+                    FACE_COORD_DESTRUCT
+                ],
+            );
+            e.call(
+                EH_VECTOR_CONSTRUCTOR_ITERATOR,
+                &args![
+                    applied,
+                    0x20u32,
+                    4u32,
+                    FACE_COORD_CONSTRUCT,
+                    FACE_COORD_DESTRUCT
+                ],
+            );
+            let player_base = e.mem.u32(base + 0xd8);
+            e.call(GET_FACE_COORD, &args![player_base, coords]);
             if apply {
-                fn_007b2550(e, root, 1);
+                e.call(REGENERATE_FACE, &args![base + 0x124, coords, applied, 0u32]);
             }
-            let count = e.call(CHILD_COUNT, &args![root]).u32();
-            for index in 0..count {
-                let child = e.call(CHILD_AT, &args![root, index]).u32();
-                let object = if child != 0 {
-                    e.vcall(child, 0x1c, &args![]).u32()
-                } else {
-                    0
-                };
-                if object == 0 {
-                    continue;
-                }
-                let cast = e.call(CAST_607310, &args![object]).u32();
-                let head = if cast != 0 {
-                    e.vcall(cast, 0x94, &args![]).u32()
-                } else {
-                    0
-                };
-                if head == 0 {
-                    continue;
-                }
+            let mut root = e.vcall(player, 0x1ac, &args![0u32]).u32();
+            for _ in 0..2 {
                 if apply {
-                    e.call(APPLY_COORDS, &args![head, applied, object, 0u32]);
+                    fn_007b2550(e, root, 1);
                 }
-                if retexture {
-                    let length = e.call(STRLEN, &args![FACE_GEN_FACE]).u32();
-                    let name = e.call(OBJECT_NAME, &args![object]).u32();
-                    let hash = e.call(NAME_HASH, &args![name]).u32();
-                    if e.call(FIND_BY_NAME, &args![hash, FACE_GEN_FACE, length])
-                        .u32()
-                        != 0
-                    {
+                let count = e.call(CHILD_COUNT, &args![root]).u32();
+                for index in 0..count {
+                    let child = e.call(CHILD_AT, &args![root, index]).u32();
+                    let object = if child != 0 {
+                        e.vcall(child, 0x1c, &args![]).u32()
+                    } else {
+                        0
+                    };
+                    if object == 0 {
                         continue;
                     }
-                    let property = property_in_world_range(e, child, 8, 12);
-                    if property == 0 {
+                    let cast = e.call(CAST_607310, &args![object]).u32();
+                    let head = if cast != 0 {
+                        e.vcall(cast, 0x94, &args![]).u32()
+                    } else {
+                        0
+                    };
+                    if head == 0 {
                         continue;
                     }
-                    let texture = e.mem.alloc(4);
-                    e.call(NI_POINTER_CONSTRUCT, &args![texture, 0u32]);
-                    if fn_007b2570(e, head) == 0 {
-                        e.call(HEAD_REFRESH, &args![head]);
+                    if apply {
+                        e.call(APPLY_COORDS, &args![head, applied, object, 0u32]);
                     }
-                    let language = e.call(APPLY_TEXTURING_ARG, &args![]).u32();
-                    e.call(APPLY_TEXTURING, &args![head, coords, texture, language]);
-                    let image = e.call(STRING_C_STR, &args![texture]).u32();
-                    e.vcall(property, 0xfc, &args![1u32, image]);
-                    e.call(NI_POINTER_DESTRUCT, &args![texture]);
-                    e.mem.free(texture);
+                    if retexture {
+                        let length = e.call(STRLEN, &args![FACE_GEN_FACE]).u32();
+                        let name = e.call(OBJECT_NAME, &args![object]).u32();
+                        let hash = e.call(NAME_HASH, &args![name]).u32();
+                        if e.call(FIND_BY_NAME, &args![hash, FACE_GEN_FACE, length])
+                            .u32()
+                            != 0
+                        {
+                            continue;
+                        }
+                        let property = property_in_world_range(e, child, 8, 12);
+                        if property == 0 {
+                            continue;
+                        }
+                        let texture = frame.addr() + 0x38;
+                        e.call(NI_POINTER_CONSTRUCT, &args![texture, 0u32]);
+                        if fn_007b2570(e, head) == 0 {
+                            e.call(HEAD_REFRESH, &args![head]);
+                        }
+                        let language = e.call(APPLY_TEXTURING_ARG, &args![]).u32();
+                        e.call(APPLY_TEXTURING, &args![head, coords, texture, language]);
+                        let image = e.call(STRING_C_STR, &args![texture]).u32();
+                        e.vcall(property, 0xfc, &args![1u32, image]);
+                        e.call(NI_POINTER_DESTRUCT, &args![texture]);
+                    }
                 }
+                root = e.vcall(player, 0x1b0, &args![0u32]).u32();
             }
-            root = e.vcall(player, 0x1b0, &args![0u32]).u32();
+            e.call(
+                EH_VECTOR_DESTRUCTOR_ITERATOR,
+                &args![applied, 0x20u32, 4u32, FACE_COORD_DESTRUCT],
+            );
+            e.call(
+                EH_VECTOR_DESTRUCTOR_ITERATOR,
+                &args![coords, 0x20u32, 4u32, FACE_COORD_DESTRUCT],
+            );
         }
-        e.call(
-            EH_VECTOR_DESTRUCTOR_ITERATOR,
-            &args![applied, 0x20u32, 4u32, FACE_COORD_DESTRUCT],
-        );
-        e.call(
-            EH_VECTOR_DESTRUCTOR_ITERATOR,
-            &args![coords, 0x20u32, 4u32, FACE_COORD_DESTRUCT],
-        );
-        e.mem.free(applied);
-        e.mem.free(coords);
-    }
+    });
     fn_007b1ae0(e, this);
 }
 
@@ -3933,28 +3964,32 @@ pub fn fn_007b25a0(e: &mut Engine, this: Ptr<RaceSexMenu>) {
     if e.vcall(player, 0x1b0, &args![0u32]).u32() == 0
         && e.vcall(player, 0x1ac, &args![0u32]).u32() == 0
     {
-        let queued = e.mem.alloc(0x40);
-        let player_base = e.mem.u32(base + 0xd8);
-        e.call(QUEUED_HEAD_CONSTRUCT, &args![queued, player_base, 0u32]);
-        e.call(QUEUED_HEAD_RUN, &args![queued]);
-        e.call(QUEUED_HEAD_FINISH, &args![queued]);
-        let biped = e.call(PLAYER_BIPED, &args![player, 0u32]).u32();
-        e.call(QUEUED_HEAD_APPLY, &args![queued, player, biped]);
-        e.call(QUEUED_HEAD_DESTRUCT, &args![queued]);
-        e.mem.free(queued);
+        // The exe's frame (`SUB ESP,0xa4` under the exception record, then `ESI`, `EDI` and the
+        // record link): the queued head at `EBP-0x74` (+0x48).
+        e.with_stack(0xbc, |e, frame| {
+            let queued = frame.addr() + 0x48;
+            let player_base = e.mem.u32(base + 0xd8);
+            e.call(QUEUED_HEAD_CONSTRUCT, &args![queued, player_base, 0u32]);
+            e.call(QUEUED_HEAD_RUN, &args![queued]);
+            e.call(QUEUED_HEAD_FINISH, &args![queued]);
+            let biped = e.call(PLAYER_BIPED, &args![player, 0u32]).u32();
+            e.call(QUEUED_HEAD_APPLY, &args![queued, player, biped]);
+            e.call(QUEUED_HEAD_DESTRUCT, &args![queued]);
+        });
     }
     e.mem.set_u8(FACE_REBUILD_FLAG, 0);
     let root = e.call(PLAYER_NODE_GETTER, &args![player, 1u32]).u32();
     let child = e.call(CHILD_AT, &args![root, 0u32]).u32();
-    let identity = e.mem.alloc(0x24);
-    let rotated = e.mem.alloc(0x24);
-    copy_words(e, ROTATION_MATRIX, identity, 9);
-    let matrix = e
-        .call(MULTIPLE_MATRIX_BY_RACE, &args![player, rotated, identity])
-        .u32();
-    e.call(SET_ROTATE, &args![child, matrix]);
-    e.mem.free(identity);
-    e.mem.free(rotated);
+    // The same frame: the matrix at `EBP-0x30` (+0x8c), the rotated one at `EBP-0x98` (+0x24).
+    e.with_stack(0xbc, |e, frame| {
+        let identity = frame.addr() + 0x8c;
+        let rotated = frame.addr() + 0x24;
+        copy_words(e, ROTATION_MATRIX, identity, 9);
+        let matrix = e
+            .call(MULTIPLE_MATRIX_BY_RACE, &args![player, rotated, identity])
+            .u32();
+        e.call(SET_ROTATE, &args![child, matrix]);
+    });
     let loader: u32 = e.global(IO_MANAGER);
     e.call(LOAD_QUEUED_PRIORITY, &args![loader]);
     fn_007b1ae0(e, this);
@@ -3984,18 +4019,16 @@ fn property_in_world_range(e: &mut Engine, object: u32, low: i32, high: i32) -> 
 /// Sets the 4-float colour at `+0x84` of `property` from the packed colour
 /// `color` (red in the low byte, green, blue; each over 255.0, alpha 1.0)
 /// through the `NiColorA` constructor `00414430`.
-fn set_property_color(e: &mut Engine, property: u32, color: u32) {
+fn set_property_color(e: &mut Engine, scratch: u32, property: u32, color: u32) {
     let divisor: f64 = e.global(COLOR_DIVISOR);
     let channel = |value: u32| (value as f64 / divisor) as f32;
     let red = channel(color & 0xff);
     let green = channel((color & 0xffff) >> 8 & 0xff);
     let blue = channel(color >> 16 & 0xff);
-    let scratch = e.mem.alloc(0x10);
     let made = e
         .call(COLOR_A_CONSTRUCT, &args![scratch, red, green, blue, 1.0f32])
         .u32();
     copy_words(e, made, property + 0x84, 4);
-    e.mem.free(scratch);
 }
 
 // Translated from 007b27c0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -4012,88 +4045,85 @@ fn set_property_color(e: &mut Engine, property: u32, color: u32) {
 pub fn fn_007b27c0(e: &mut Engine, this: Ptr<RaceSexMenu>) -> bool {
     let base = this.addr();
     let player: u32 = e.global(PLAYER);
-    let left = e.mem.alloc(4);
-    let right = e.mem.alloc(4);
-    e.call(NI_POINTER_CONSTRUCT, &args![left, 0u32]);
-    e.call(NI_POINTER_CONSTRUCT, &args![right, 0u32]);
-    let result = if e.vcall(player, 0x1ac, &args![0u32]).u32() == 0 {
-        false
-    } else {
-        let player_base = e.mem.u32(base + 0xd8);
-        e.vcall(player_base, 0x48, &args![0x800u32]);
-        let root = e.vcall(player, 0x1ac, &args![0u32]).u32();
-        let count = e.call(CHILD_COUNT, &args![root]).u32();
-        for index in 0..count {
-            let root = e.vcall(player, 0x1ac, &args![0u32]).u32();
-            let child = e.call(CHILD_AT, &args![root, index]).u32();
-            for (name, slot) in [(FACE_GEN_EYE_LEFT, left), (FACE_GEN_EYE_RIGHT, right)] {
-                let found = e.call(OBJECT_NAME, &args![child]).u32();
-                let hash = e.call(NAME_HASH, &args![found]).u32();
-                if e.call(NAME_COMPARE, &args![hash, name]).u32() == 0 {
-                    let object = e.vcall(child, 0x1c, &args![]).u32();
-                    e.call(NI_POINTER_ASSIGN, &args![slot, object]);
-                }
-            }
-        }
-        if e.call(STRING_C_STR, &args![left]).u32() != 0
-            && e.call(STRING_C_STR, &args![right]).u32() != 0
-        {
-            let path = e.mem.alloc(8);
-            e.call(STRING_CONSTRUCT, &args![path]);
+    // The exe's frame (`SUB ESP,0x40` under the exception record, then the record link): the
+    // eye pointers at `EBP-0x14` (+0x3c) and `EBP-0x10` (+0x40), the path at `EBP-0x2c`
+    // (+0x24), the texture pointer at `EBP-0x24` (+0x2c).
+    e.with_stack(0x50, |e, frame| {
+        let left = frame.addr() + 0x3c;
+        let right = frame.addr() + 0x40;
+        e.call(NI_POINTER_CONSTRUCT, &args![left, 0u32]);
+        e.call(NI_POINTER_CONSTRUCT, &args![right, 0u32]);
+        let result = if e.vcall(player, 0x1ac, &args![0u32]).u32() == 0 {
+            false
+        } else {
             let player_base = e.mem.u32(base + 0xd8);
-            let eyes = e.call(BASE_VALUE_602150, &args![player_base]).u32();
-            if eyes != 0 {
-                let player_base = e.mem.u32(base + 0xd8);
-                let eyes = e.call(BASE_VALUE_602150, &args![player_base]).u32();
-                let name = e.call(MARKER_NAME, &args![eyes + 0x24]).u32();
-                e.call(STRING_FORMAT, &args![path, TEXTURE_PATH_FORMAT, name]);
-            } else {
-                e.call(STRING_FORMAT, &args![path, DEFAULT_EYE_TEXTURE]);
-            }
-            let texture = e.mem.alloc(4);
-            e.call(NI_POINTER_CONSTRUCT, &args![texture, 0u32]);
-            let text = e.call(STRING_C_STR, &args![path]).u32();
-            let renderer: u32 = e.global(TEXTURE_LOADER);
-            e.call(
-                CREATE_TEXTURE_IMAGE,
-                &args![renderer, text, texture, 0u32, 0u32],
-            );
-            if e.call(STRING_C_STR, &args![texture]).u32() != 0 {
-                for slot in [left, right] {
-                    let object = e.call(STRING_C_STR, &args![slot]).u32();
-                    let property = property_in_world_range(e, object, 8, 12);
-                    if property != 0 {
-                        let image = e.call(STRING_C_STR, &args![texture]).u32();
-                        e.vcall(property, 0xf0, &args![0u32, 0u32, image]);
+            e.vcall(player_base, 0x48, &args![0x800u32]);
+            let root = e.vcall(player, 0x1ac, &args![0u32]).u32();
+            let count = e.call(CHILD_COUNT, &args![root]).u32();
+            for index in 0..count {
+                let root = e.vcall(player, 0x1ac, &args![0u32]).u32();
+                let child = e.call(CHILD_AT, &args![root, index]).u32();
+                for (name, slot) in [(FACE_GEN_EYE_LEFT, left), (FACE_GEN_EYE_RIGHT, right)] {
+                    let found = e.call(OBJECT_NAME, &args![child]).u32();
+                    let hash = e.call(NAME_HASH, &args![found]).u32();
+                    if e.call(NAME_COMPARE, &args![hash, name]).u32() == 0 {
+                        let object = e.vcall(child, 0x1c, &args![]).u32();
+                        e.call(NI_POINTER_ASSIGN, &args![slot, object]);
                     }
                 }
             }
-            e.call(NI_POINTER_DESTRUCT, &args![texture]);
-            e.mem.free(texture);
-            e.call(STRING_DESTROY, &args![path]);
-            e.mem.free(path);
-        }
-        fn_007b1ae0(e, this);
-        true
-    };
-    e.call(NI_POINTER_DESTRUCT, &args![right]);
-    e.call(NI_POINTER_DESTRUCT, &args![left]);
-    e.mem.free(right);
-    e.mem.free(left);
-    result
+            if e.call(STRING_C_STR, &args![left]).u32() != 0
+                && e.call(STRING_C_STR, &args![right]).u32() != 0
+            {
+                let path = frame.addr() + 0x24;
+                e.call(STRING_CONSTRUCT, &args![path]);
+                let player_base = e.mem.u32(base + 0xd8);
+                let eyes = e.call(BASE_VALUE_602150, &args![player_base]).u32();
+                if eyes != 0 {
+                    let player_base = e.mem.u32(base + 0xd8);
+                    let eyes = e.call(BASE_VALUE_602150, &args![player_base]).u32();
+                    let name = e.call(MARKER_NAME, &args![eyes + 0x24]).u32();
+                    e.call(STRING_FORMAT, &args![path, TEXTURE_PATH_FORMAT, name]);
+                } else {
+                    e.call(STRING_FORMAT, &args![path, DEFAULT_EYE_TEXTURE]);
+                }
+                let texture = frame.addr() + 0x2c;
+                e.call(NI_POINTER_CONSTRUCT, &args![texture, 0u32]);
+                let text = e.call(STRING_C_STR, &args![path]).u32();
+                let renderer: u32 = e.global(TEXTURE_LOADER);
+                e.call(
+                    CREATE_TEXTURE_IMAGE,
+                    &args![renderer, text, texture, 0u32, 0u32],
+                );
+                if e.call(STRING_C_STR, &args![texture]).u32() != 0 {
+                    for slot in [left, right] {
+                        let object = e.call(STRING_C_STR, &args![slot]).u32();
+                        let property = property_in_world_range(e, object, 8, 12);
+                        if property != 0 {
+                            let image = e.call(STRING_C_STR, &args![texture]).u32();
+                            e.vcall(property, 0xf0, &args![0u32, 0u32, image]);
+                        }
+                    }
+                }
+                e.call(NI_POINTER_DESTRUCT, &args![texture]);
+                e.call(STRING_DESTROY, &args![path]);
+            }
+            fn_007b1ae0(e, this);
+            true
+        };
+        e.call(NI_POINTER_DESTRUCT, &args![right]);
+        e.call(NI_POINTER_DESTRUCT, &args![left]);
+        result
+    })
 }
 
 /// Finds the child of `node` named by `index` (`00657820` gives the name,
 /// made a fixed string by `00438170`; the node's slot `+0x9c` finds it).
-fn named_child(e: &mut Engine, node: u32, index: u32) -> u32 {
-    let scratch = e.mem.alloc(0x20);
+fn named_child(e: &mut Engine, scratch: u32, fixed: u32, node: u32, index: u32) -> u32 {
     let text = e.call(FACE_PART_NAME, &args![scratch, index]).u32();
-    let fixed = e.mem.alloc(4);
     let name = e.call(FIXED_STRING_FROM, &args![fixed, text]).u32();
     let found = e.vcall(node, 0x9c, &args![name]).u32();
     e.call(FIXED_STRING_DESTRUCT, &args![fixed]);
-    e.mem.free(fixed);
-    e.mem.free(scratch);
     found
 }
 
@@ -4133,70 +4163,129 @@ fn child_named(e: &mut Engine, child: u32, name: u32) -> bool {
 pub fn fn_007b2b50(e: &mut Engine, this: Ptr<RaceSexMenu>, rebuild: bool) -> bool {
     let base = this.addr();
     let player: u32 = e.global(PLAYER);
-    let unused_pointer = e.mem.alloc(4);
-    let held_pointer = e.mem.alloc(4);
-    e.call(NI_POINTER_CONSTRUCT, &args![unused_pointer, 0u32]);
-    e.call(NI_POINTER_CONSTRUCT, &args![held_pointer, 0u32]);
-    let strings = e.mem.alloc(0x28);
-    // Constructed in the order +0x00, +0x08, +0x10, +0x18, +0x20 and
-    // destroyed in reverse; none is used.
-    for index in 0..5u32 {
-        e.call(STRING_CONSTRUCT, &args![strings + 8 * index]);
-    }
-    let result = if e.vcall(player, 0x1ac, &args![0u32]).u32() == 0 {
-        false
-    } else {
-        let player_base = e.mem.u32(base + 0xd8);
-        e.vcall(player_base, 0x48, &args![0x800u32]);
-        if rebuild {
-            let face_data = e.mem.alloc(0x100);
-            e.call(FACE_DATA_CONSTRUCT, &args![face_data]);
-            let value = e.call(PLAYER_VALUE_87F4C0, &args![player]).u32();
-            let form = e.call(PLAYER_BASE_FORM, &args![player]).u32();
-            let race = e.vcall(player, 0x37c, &args![]).u32();
-            e.call(
-                GET_FACE_GEN_DATA,
-                &args![race, form, face_data, value, 0u32],
-            );
-            let nodes = e.mem.alloc(8);
-            let first = e.vcall(player, 0x1ac, &args![0u32]).u32();
-            e.mem.set_u32(nodes, first);
-            let second = e.vcall(player, 0x1b0, &args![0u32]).u32();
-            e.mem.set_u32(nodes + 4, second);
-            for index in 0..2u32 {
-                let found = named_child(e, first, index);
-                if found != 0 {
-                    e.vcall(first, 0xe8, &args![found]);
+    // The exe's frame (`SUB ESP,0x28c` under the exception record, then the record link): the
+    // pointers at `EBP-0x50` (+0x24c, unused) and `EBP-0x18` (+0x284), the five unused strings
+    // at `EBP-0x4c`, `-0x14`, `-0x20`, `-0x28` and `-0x34`, the face data at `EBP-0x174`
+    // (+0x128), the two heads at `EBP-0x7c` (+0x220) and `EBP-0x178` (+0x124), the part name at
+    // `EBP-0x78` (+0x224) with its fixed strings at `EBP-0x1c4` and `EBP-0x1c8`, the colours at
+    // `EBP-0x1d8`, `-0x1e8`, `-0x1f8` and `-0x208`, the point at `EBP-0x44` (+0x258).
+    e.with_stack(0x29c, |e, frame| {
+        let local = |offset: u32| frame.addr() + offset;
+        let unused_pointer = local(0x24c);
+        let held_pointer = local(0x284);
+        e.call(NI_POINTER_CONSTRUCT, &args![unused_pointer, 0u32]);
+        e.call(NI_POINTER_CONSTRUCT, &args![held_pointer, 0u32]);
+        // Constructed in this order and destroyed in reverse; none is used.
+        let strings = [0x250, 0x288, 0x27c, 0x274, 0x268].map(local);
+        for string in strings {
+            e.call(STRING_CONSTRUCT, &args![string]);
+        }
+        let result = if e.vcall(player, 0x1ac, &args![0u32]).u32() == 0 {
+            false
+        } else {
+            let player_base = e.mem.u32(base + 0xd8);
+            e.vcall(player_base, 0x48, &args![0x800u32]);
+            if rebuild {
+                let face_data = local(0x128);
+                e.call(FACE_DATA_CONSTRUCT, &args![face_data]);
+                let value = e.call(PLAYER_VALUE_87F4C0, &args![player]).u32();
+                let form = e.call(PLAYER_BASE_FORM, &args![player]).u32();
+                let race = e.vcall(player, 0x37c, &args![]).u32();
+                e.call(
+                    GET_FACE_GEN_DATA,
+                    &args![race, form, face_data, value, 0u32],
+                );
+                let (first_slot, second_slot) = (local(0x220), local(0x124));
+                let first = e.vcall(player, 0x1ac, &args![0u32]).u32();
+                e.mem.set_u32(first_slot, first);
+                let second = e.vcall(player, 0x1b0, &args![0u32]).u32();
+                e.mem.set_u32(second_slot, second);
+                for index in 0..2u32 {
+                    let found = named_child(e, local(0x224), local(0xd8), first, index);
+                    if found != 0 {
+                        e.vcall(first, 0xe8, &args![found]);
+                    }
                 }
-            }
-            e.call(FACE_BUILD, &args![nodes, nodes + 4, face_data, 0u32]);
-            let first = e.mem.u32(nodes);
-            let animation = e.call(PLAYER_ANIMATION, &args![player, 0u32]).u32();
-            let held = e.call(ANIMATION_OBJECT, &args![animation]).u32();
-            let palette = e.call(PALETTE_OF, &args![held]).u32();
-            if palette != 0 {
-                let entry = e.call(PALETTE_FIND, &args![PALETTE_TABLE, palette]).u32();
-                if entry != 0 {
-                    e.call(PALETTE_ENTRY_RELEASE, &args![entry]);
+                e.call(FACE_BUILD, &args![first_slot, second_slot, face_data, 0u32]);
+                let first = e.mem.u32(first_slot);
+                let animation = e.call(PLAYER_ANIMATION, &args![player, 0u32]).u32();
+                let held = e.call(ANIMATION_OBJECT, &args![animation]).u32();
+                let palette = e.call(PALETTE_OF, &args![held]).u32();
+                if palette != 0 {
+                    let entry = e.call(PALETTE_FIND, &args![PALETTE_TABLE, palette]).u32();
+                    if entry != 0 {
+                        e.call(PALETTE_ENTRY_RELEASE, &args![entry]);
+                    }
                 }
-            }
-            let form = e.call(PLAYER_BASE_FORM, &args![player]).u32();
-            e.call(FORM_UPDATE_6062E0, &args![form, player, 0u32]);
-            for index in 0..2u32 {
-                let found = named_child(e, first, index);
-                if found != 0 {
-                    e.call(PREPARE_OBJECT, &args![found, 0u32, 0u32]);
-                    let property = e.call(GET_PROPERTY, &args![found, 3u32]).u32();
+                let form = e.call(PLAYER_BASE_FORM, &args![player]).u32();
+                e.call(FORM_UPDATE_6062E0, &args![form, player, 0u32]);
+                for index in 0..2u32 {
+                    let found = named_child(e, local(0x224), local(0xd4), first, index);
+                    if found != 0 {
+                        e.call(PREPARE_OBJECT, &args![found, 0u32, 0u32]);
+                        let property = e.call(GET_PROPERTY, &args![found, 3u32]).u32();
+                        let eight = if property != 0
+                            && e.call(PROPERTY_KIND, &args![property]).i32() == 8
+                        {
+                            property
+                        } else {
+                            0
+                        };
+                        let player_base = e.mem.u32(base + 0xd8);
+                        let color = e.call(HAIR_COLOR_GETTER, &args![player_base]).u32();
+                        if eight != 0 {
+                            set_property_color(e, local(0xc4), eight, color);
+                        } else {
+                            let twelve = if property != 0
+                                && e.call(PROPERTY_KIND, &args![property]).i32() == 0xc
+                            {
+                                property
+                            } else {
+                                0
+                            };
+                            if twelve != 0 {
+                                set_property_color(e, local(0xb4), twelve, color);
+                            }
+                        }
+                    }
+                }
+                e.call(UPDATE_PROPERTIES, &args![first]);
+                e.call(FACE_DATA_DESTRUCT, &args![face_data]);
+            } else {
+                let root = e.vcall(player, 0x1ac, &args![0u32]).u32();
+                let count = e.call(CHILD_COUNT, &args![root]).u32();
+                for index in 0..count {
+                    let root = e.vcall(player, 0x1ac, &args![0u32]).u32();
+                    let child = e.call(CHILD_AT, &args![root, index]).u32();
+                    let hair = child != 0 && child_named(e, child, FACE_GEN_HAIR);
+                    let accessory =
+                        !hair && child != 0 && child_named(e, child, FACE_GEN_ACCESSORY);
+                    if !(hair || accessory) {
+                        continue;
+                    }
+                    let object = e.vcall(child, 0x1c, &args![]).u32();
+                    e.call(NI_POINTER_ASSIGN, &args![held_pointer, object]);
+                    if e.call(STRING_C_STR, &args![held_pointer]).u32() == 0 {
+                        continue;
+                    }
+                    if hair {
+                        let player_base = e.mem.u32(base + 0xd8);
+                        let value = e.call(HAIR_VALUE_602130, &args![player_base]).f32();
+                        let held = e.call(STRING_C_STR, &args![held_pointer]).u32();
+                        e.call(APPLY_HAIR_VALUE, &args![held, value]);
+                    }
+                    let held = e.call(STRING_C_STR, &args![held_pointer]).u32();
+                    let property = e.call(GET_PROPERTY, &args![held, 3u32]).u32();
                     let eight =
                         if property != 0 && e.call(PROPERTY_KIND, &args![property]).i32() == 8 {
                             property
                         } else {
                             0
                         };
-                    let player_base = e.mem.u32(base + 0xd8);
-                    let color = e.call(HAIR_COLOR_GETTER, &args![player_base]).u32();
                     if eight != 0 {
-                        set_property_color(e, eight, color);
+                        let player_base = e.mem.u32(base + 0xd8);
+                        let color = e.call(HAIR_COLOR_GETTER, &args![player_base]).u32();
+                        set_property_color(e, local(0xa4), eight, color);
                     } else {
                         let twelve = if property != 0
                             && e.call(PROPERTY_KIND, &args![property]).i32() == 0xc
@@ -4206,80 +4295,28 @@ pub fn fn_007b2b50(e: &mut Engine, this: Ptr<RaceSexMenu>, rebuild: bool) -> boo
                             0
                         };
                         if twelve != 0 {
-                            set_property_color(e, twelve, color);
+                            let player_base = e.mem.u32(base + 0xd8);
+                            let color = e.call(HAIR_COLOR_GETTER, &args![player_base]).u32();
+                            set_property_color(e, local(0x94), twelve, color);
                         }
                     }
                 }
             }
-            e.call(UPDATE_PROPERTIES, &args![first]);
-            e.call(FACE_DATA_DESTRUCT, &args![face_data]);
-            e.mem.free(face_data);
-            e.mem.free(nodes);
-        } else {
+            let point = local(0x258);
+            e.call(POINT_CONSTRUCT, &args![point, 0.0f32, 0u32, 0u32]);
             let root = e.vcall(player, 0x1ac, &args![0u32]).u32();
-            let count = e.call(CHILD_COUNT, &args![root]).u32();
-            for index in 0..count {
-                let root = e.vcall(player, 0x1ac, &args![0u32]).u32();
-                let child = e.call(CHILD_AT, &args![root, index]).u32();
-                let hair = child != 0 && child_named(e, child, FACE_GEN_HAIR);
-                let accessory = !hair && child != 0 && child_named(e, child, FACE_GEN_ACCESSORY);
-                if !(hair || accessory) {
-                    continue;
-                }
-                let object = e.vcall(child, 0x1c, &args![]).u32();
-                e.call(NI_POINTER_ASSIGN, &args![held_pointer, object]);
-                if e.call(STRING_C_STR, &args![held_pointer]).u32() == 0 {
-                    continue;
-                }
-                if hair {
-                    let player_base = e.mem.u32(base + 0xd8);
-                    let value = e.call(HAIR_VALUE_602130, &args![player_base]).f32();
-                    let held = e.call(STRING_C_STR, &args![held_pointer]).u32();
-                    e.call(APPLY_HAIR_VALUE, &args![held, value]);
-                }
-                let held = e.call(STRING_C_STR, &args![held_pointer]).u32();
-                let property = e.call(GET_PROPERTY, &args![held, 3u32]).u32();
-                let eight = if property != 0 && e.call(PROPERTY_KIND, &args![property]).i32() == 8 {
-                    property
-                } else {
-                    0
-                };
-                if eight != 0 {
-                    let player_base = e.mem.u32(base + 0xd8);
-                    let color = e.call(HAIR_COLOR_GETTER, &args![player_base]).u32();
-                    set_property_color(e, eight, color);
-                } else {
-                    let twelve =
-                        if property != 0 && e.call(PROPERTY_KIND, &args![property]).i32() == 0xc {
-                            property
-                        } else {
-                            0
-                        };
-                    if twelve != 0 {
-                        let player_base = e.mem.u32(base + 0xd8);
-                        let color = e.call(HAIR_COLOR_GETTER, &args![player_base]).u32();
-                        set_property_color(e, twelve, color);
-                    }
-                }
-            }
+            e.call(SET_TRANSLATE_POINT, &args![root, point]);
+            fn_007b1ae0(e, this);
+            true
+        };
+        for string in strings.into_iter().rev() {
+            e.call(STRING_DESTROY, &args![string]);
         }
-        let point = e.mem.alloc(0xc);
-        e.call(POINT_CONSTRUCT, &args![point, 0.0f32, 0u32, 0u32]);
-        let root = e.vcall(player, 0x1ac, &args![0u32]).u32();
-        e.call(SET_TRANSLATE_POINT, &args![root, point]);
-        e.mem.free(point);
-        fn_007b1ae0(e, this);
-        true
-    };
-    for index in (0..5u32).rev() {
-        e.call(STRING_DESTROY, &args![strings + 8 * index]);
-    }
-    e.call(NI_POINTER_DESTRUCT, &args![unused_pointer]);
-    e.call(NI_POINTER_DESTRUCT, &args![held_pointer]);
-    e.mem.free(strings);
-    e.mem.free(unused_pointer);
-    e.mem.free(held_pointer);
-    result
+        // 007b3627: the held pointer (`EBP-0x18`) is destroyed before the unused one.
+        e.call(NI_POINTER_DESTRUCT, &args![held_pointer]);
+        e.call(NI_POINTER_DESTRUCT, &args![unused_pointer]);
+        result
+    })
 }
 // Translated from 007b3660 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Reads the values of the options with id `0x1e`, `0x1f` and `0x20` of the
@@ -5693,6 +5730,13 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
 mod tests {
     use super::*;
 
+    /// The block the next `with_stack(size)` takes (the last freed block of that size).
+    fn next_frame(e: &mut Engine, size: u32) -> u32 {
+        let frame = e.mem.alloc(size);
+        e.mem.free(frame);
+        frame
+    }
+
     fn word(value: u32) -> Ret {
         Ret {
             eax: value,
@@ -6454,7 +6498,14 @@ mod tests {
         e.register(GET_MAXIMUM_DEPTH, |_, _| float(7.5));
         e.set_global(KIND_ONE_DOUBLE, 6006.0f64);
         let tile = e.mem.u32(menu.addr() + 4);
+        let frame = next_frame(&mut e, 0xbc);
         e.call(0x007a_cb60, &args![menu, 0i32]);
+        // The 0xbc-byte frame: the numbered captions at +0x40, the projector text at +0x2c.
+        assert_eq!(
+            calls(&e, EH_VECTOR_CONSTRUCTOR_ITERATOR)[0][0],
+            frame + 0x40
+        );
+        assert!(calls(&e, STRING_CONSTRUCT).contains(&vec![frame + 0x2c]));
         // The stacking type 6006 gives the tile the maximum depth.
         assert_eq!(
             calls(&e, SET_FLOAT_TRAIT)[0],
@@ -7451,7 +7502,10 @@ mod tests {
         let target = e.mem.u32(menu.addr() + 0x34);
         e.register(GET_SEX, |_, _| word(0));
         e.register(OPTION_LIST_FIND, |_, _| word(0));
+        let frame = next_frame(&mut e, 0x20);
         e.call(0x007a_f520, &args![menu]);
+        // The 0x20-byte frame: the caption at +8.
+        assert_eq!(calls(&e, STRING_CONSTRUCT)[0][0], frame + 8);
         assert_eq!(
             calls(&e, STRING_FORMAT),
             vec![vec![
@@ -7561,7 +7615,10 @@ mod tests {
         e.set_global(TENTH_DIVISOR, 10.0f64);
         let slider = make_option(&mut e, 0x55, 0x22, 9);
         e.register(GET_FLOAT_TRAIT, |_, _| float(25.0));
+        let frame = next_frame(&mut e, 0x9c);
         e.call(0x007a_f770, &args![menu, slider]);
+        // The 0x9c-byte frame: the coordinates at +0x10.
+        assert_eq!(calls(&e, GET_FACE_COORD)[0][1], frame + 0x10);
         let base = e.mem.u32(menu.addr() + 0xd8);
         let coords = calls(&e, GET_FACE_COORD)[0][1];
         assert_eq!(
@@ -7603,7 +7660,12 @@ mod tests {
             assert_eq!(a, [0x600]);
             word(color_word)
         });
+        let frame = next_frame(&mut e, 0x28);
         e.call(0x007a_f900, &args![menu, colour_option]);
+        // The 0x28-byte frame: the text at +8, the found settings at +0x14 and +0x10.
+        assert_eq!(calls(&e, STRING_CONSTRUCT)[0][0], frame + 8);
+        let found: Vec<u32> = calls(&e, SETTINGS_FIND).iter().map(|w| w[2]).collect();
+        assert_eq!(found, vec![frame + 0x14, frame + 0x10]);
         let formats = calls(&e, STRING_FORMAT);
         assert_eq!(formats[0][1..], [FORMAT_HAIR_COLOR_INT, 3]);
         assert_eq!(formats[1][1..], [FORMAT_HAIR_COLOR_NAME, 3]);
@@ -7674,7 +7736,13 @@ mod tests {
         e.register(FLOAT_SETTING_GETTER, |_, a| {
             float(if a[0] == 0x011d_a6a4 { -2.0 } else { 2.0 })
         });
+        let frame = next_frame(&mut e, 0x670);
         e.call(0x007a_faf0, &args![menu]);
+        // The 0x670-byte frame: the coordinate array at +0x3e4.
+        assert_eq!(
+            calls(&e, EH_VECTOR_CONSTRUCTOR_ITERATOR)[0][0],
+            frame + 0x3e4
+        );
         let sliders = calls(&e, OPTION_LIST_ADD_SLIDER);
         // Two shapes from the table and twelve extras.
         assert_eq!(sliders.len(), 14);
@@ -7761,7 +7829,14 @@ mod tests {
         let option = shape_option(&mut e, menu, 10, 0x22);
         e.register(FACE_SHAPE_VALUE, |_, _| float(3.0));
         // 3.0 * 10 = 30 is above the range 0 to 20: the option gets 20.
+        let frame = next_frame(&mut e, 0xb0);
         assert!(e.call(0x007b_16d0, &args![menu, 10i32, 11i32, 0u32]).bool());
+        // The 0xb0-byte frame: the cursor at +0x98, the coordinates at +0x14.
+        assert_eq!(calls(&e, LIST_ADVANCE)[0][1], frame + 0x98);
+        assert_eq!(
+            calls(&e, EH_VECTOR_CONSTRUCTOR_ITERATOR)[0][0],
+            frame + 0x14
+        );
         assert_eq!(calls(&e, SET_TRAIT_FROM_INT), vec![vec![0x55, 0x1005, 20]]);
         assert_eq!(calls(&e, WORD_AT_EIGHT)[0], vec![option]);
         // In range and not the dragged option: set to the value.
@@ -7834,7 +7909,13 @@ mod tests {
         e.register(PLAYER_BASE_WEIGHT, |_, _| float(1.5));
         e.register(PLAYER_BASE_HEIGHT, |_, _| float(2.5));
         euler_z(&mut e, 1.0);
+        let frame = next_frame(&mut e, 0x88);
         assert_eq!(e.call(0x007b_1970, &args![menu, 0.25f32, 0u32]).u8(), 1);
+        // The 0x88-byte frame: the matrix at +0x64 and the angles at +0x54, +0x5c, +0x58.
+        assert_eq!(
+            calls(&e, TO_EULER_ANGLES)[0],
+            vec![frame + 0x64, frame + 0x54, frame + 0x5c, frame + 0x58]
+        );
         let rotation = calls(&e, MATRIX_SET_ROTATION);
         assert_eq!(f32::from_bits(rotation[0][1]), 0.75);
         let elements = calls(&e, MATRIX_SET_ELEMENT);
@@ -7878,7 +7959,10 @@ mod tests {
         let (mut e, menu) = world();
         e.register(PLAYER_NODE_GETTER, |_, _| word(0xbb));
         e.register(SCENE_NODE_GETTER, |_, _| word(0xaa));
+        let frame = next_frame(&mut e, 0x10);
         e.call(0x007b_1ae0, &args![menu]);
+        // The 0x10-byte frame: the point at +4.
+        assert_eq!(calls(&e, POINT_CONSTRUCT)[0][0], frame + 4);
         assert_eq!(calls(&e, UPDATE_OBJECT_LIGHTING), vec![vec![0xaa, 0xbb, 0]]);
         let point = calls(&e, POINT_CONSTRUCT)[0][0];
         assert_eq!(calls(&e, SET_TRANSLATE_POINT), vec![vec![0xaa, point]]);
@@ -8052,7 +8136,14 @@ mod tests {
             assert_eq!(a, [object]);
             word(cast)
         });
+        let frame = next_frame(&mut e, 0x18c);
         e.call(0x007b_1e70, &args![menu, false, true, false]);
+        // The 0x18c-byte frame: the coordinates at +0x60, the applied ones at +0xe0.
+        assert_eq!(calls(&e, GET_FACE_COORD)[0][1], frame + 0x60);
+        assert_eq!(
+            calls(&e, EH_VECTOR_CONSTRUCTOR_ITERATOR)[1][0],
+            frame + 0xe0
+        );
         // The coordinates of the base form are read, regenerated and applied.
         let base = e.mem.u32(menu.addr() + 0xd8);
         assert_eq!(calls(&e, GET_FACE_COORD)[0][0], base);
@@ -8122,7 +8213,10 @@ mod tests {
             Ret::default()
         });
         e.register(PLAYER_BIPED, |_, _| word(0xcc));
+        let frame = next_frame(&mut e, 0x18c);
         e.call(0x007b_1e70, &args![menu, true, false, false]);
+        // The 0x18c-byte frame: the head pair at +0x170 and +0x17c.
+        assert_eq!(calls(&e, INIT_HEAD)[0][1..], [frame + 0x170, frame + 0x17c]);
         assert_eq!(calls(&e, CLEAR_HEAD), vec![vec![base]]);
         assert_eq!(
             calls(&e, HEAD_BUILD),
@@ -8141,7 +8235,14 @@ mod tests {
         let base = e.mem.u32(menu.addr() + 0xd8);
         e.register(PLAYER_BASE_FORM, |_, _| word(0x6100));
         e.register(PLAYER_BIPED, |_, _| word(0x6200));
+        let frame = next_frame(&mut e, 0xbc);
         e.call(0x007b_25a0, &args![menu]);
+        // The 0xbc-byte frame: the queued head at +0x48, the matrices at +0x8c and +0x24.
+        assert_eq!(calls(&e, QUEUED_HEAD_CONSTRUCT)[0][0], frame + 0x48);
+        assert_eq!(
+            calls(&e, MULTIPLE_MATRIX_BY_RACE)[0][1..],
+            [frame + 0x24, frame + 0x8c]
+        );
         assert_eq!(calls(&e, CLEAR_BODY_TEXTURES), vec![vec![0x6100]]);
         // The player has no 3D: the head is rebuilt through the temporary.
         let queued = calls(&e, QUEUED_HEAD_CONSTRUCT);
@@ -8200,7 +8301,14 @@ mod tests {
         });
         e.register_double(GET_PROPERTY, move |_, _| word(property));
         e.register(PROPERTY_KIND, |_, _| word(10));
+        let frame = next_frame(&mut e, 0x50);
         assert!(e.call(0x007b_27c0, &args![menu]).bool());
+        // The 0x50-byte frame: the eye pointers at +0x3c and +0x40, the path at +0x24.
+        assert_eq!(
+            calls(&e, NI_POINTER_CONSTRUCT)[0..2],
+            [vec![frame + 0x3c, 0], vec![frame + 0x40, 0]]
+        );
+        assert_eq!(calls(&e, STRING_CONSTRUCT)[0][0], frame + 0x24);
         // No eye texture on the base form: the default path.
         assert_eq!(calls(&e, STRING_FORMAT)[0][1], DEFAULT_EYE_TEXTURE);
         assert_eq!(calls(&e, CREATE_TEXTURE_IMAGE).len(), 1);
@@ -8256,7 +8364,14 @@ mod tests {
             e.mem.set_u32(made + 4 * index as u32, *value);
         }
         e.register_double(COLOR_A_CONSTRUCT, move |_, _| word(made));
+        let frame = next_frame(&mut e, 0x29c);
         assert!(e.call(0x007b_2b50, &args![menu, false]).bool());
+        // The 0x29c-byte frame: the pointers at +0x24c and +0x284, the colour at +0xa4.
+        assert_eq!(
+            calls(&e, NI_POINTER_CONSTRUCT)[0..2],
+            [vec![frame + 0x24c, 0], vec![frame + 0x284, 0]]
+        );
+        assert_eq!(calls(&e, COLOR_A_CONSTRUCT)[0][0], frame + 0xa4);
         // The hair value is applied to the object.
         assert_eq!(
             calls(&e, APPLY_HAIR_VALUE),
@@ -8288,7 +8403,14 @@ mod tests {
         e.register(FIXED_STRING_FROM, |_, a| word(a[0]));
         e.register(GET_PROPERTY, |_, _| word(0));
         let _ = root;
+        let frame = next_frame(&mut e, 0x29c);
         assert!(e.call(0x007b_2b50, &args![menu, true]).bool());
+        // The 0x29c-byte frame: the heads at +0x220 and +0x124, the face data at +0x128.
+        assert_eq!(
+            calls(&e, FACE_BUILD)[0][..3],
+            [frame + 0x220, frame + 0x124, frame + 0x128]
+        );
+        assert_eq!(calls(&e, FACE_PART_NAME)[0][0], frame + 0x224);
         let race_call = calls(&e, GET_FACE_GEN_DATA);
         assert_eq!(race_call.len(), 1);
         assert_eq!(race_call[0][1], 0x6100);

@@ -122,6 +122,8 @@ pub fn fn_00d66cd0(e: &mut Engine, this: Ptr) {
 /// `(setTransformedInversePos(entity + 0xF0, position), position, 0.5, 0.3, 0.95, entity, 0)`,
 /// stored at `this + 0x2C`, given `[this + 0x30]` as its maximum relative force and added to
 /// the world. The byte `result` is 1 on every other path. The third word is not used.
+/// Answers `result`: the exe leaves it in `EAX` at every `RET` (the hkBool/hkResult result
+/// returned through a pointer, which callers read through `EAX`).
 pub fn hkp_mouse_picking_viewer_pick_object(
     e: &mut Engine,
     this: Ptr,
@@ -129,14 +131,14 @@ pub fn hkp_mouse_picking_viewer_pick_object(
     handle: u32,
     _unused_0: u32,
     position: Ptr,
-) {
+) -> Ptr {
     let viewer = this.addr();
     let handle = match handle & 3 {
         3 => handle & !3,
         0 => handle,
         _ => {
             e.mem.set_u8(result.addr(), 0);
-            return;
+            return result;
         }
     };
     if e.mem.u8(handle + 0x18) == 1 {
@@ -176,6 +178,7 @@ pub fn hkp_mouse_picking_viewer_pick_object(
         }
     }
     e.mem.set_u8(result.addr(), 1);
+    result
 }
 
 // Translated from 00d66e10 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -261,7 +264,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00d6_6cd0, fn_00d66cd0(Ptr)),
         entry!(
             0x00d6_6d00,
-            hkp_mouse_picking_viewer_pick_object(Ptr, Ptr, u32, u32, Ptr)
+            hkp_mouse_picking_viewer_pick_object(Ptr, Ptr, u32, u32, Ptr) -> Ptr
         ),
         entry!(
             0x00d6_6e10,
@@ -506,6 +509,21 @@ mod tests {
             vec![vec![spring, 100.0f32.to_bits()]]
         );
         assert_eq!(calls_to(&log, ADD_ACTION), vec![vec![0x7777, spring]]);
+    }
+
+    #[test]
+    fn fn_00d66d00_answers_its_result_pointer() {
+        let (mut e, _log, viewer, handle, _entity, position) = pick_setup();
+        let result = e.mem.alloc(4);
+        // The exe leaves the result pointer in EAX at every RET; callers read through it.
+        assert_eq!(
+            e.call(
+                0x00d6_6d00,
+                &args![viewer, result, handle, 0xdeadu32, position],
+            )
+            .u32(),
+            args![result][0]
+        );
     }
 
     #[test]

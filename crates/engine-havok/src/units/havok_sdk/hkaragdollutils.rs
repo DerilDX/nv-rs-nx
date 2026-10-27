@@ -130,6 +130,22 @@ fn xorps(a: Vec4, mask: [u32; 4]) -> Vec4 {
     std::array::from_fn(|lane| f32::from_bits(a[lane].to_bits() ^ mask[lane]))
 }
 
+/// Runs `f` on an exe-shaped frame: a function that aligns `ESP` (`AND ESP,0xfffffff0`) and
+/// then reserves `below` bytes (its `SUB ESP` and pushes) has its frame `below` bytes under a
+/// 16-byte boundary; `f` gets the frame's lowest address.
+fn with_aligned_frame<R>(e: &mut Engine, below: u32, f: impl FnOnce(&mut Engine, u32) -> R) -> R {
+    e.with_stack(below + 0x10, |e, raw| {
+        let boundary = (raw.addr() + below + 0xf) & !0xf;
+        f(e, boundary - below)
+    })
+}
+
+/// The frame base [`with_aligned_frame`] picks for a block at `raw` (tests).
+#[cfg(test)]
+fn aligned_frame_at(raw: u32, below: u32) -> u32 {
+    ((raw + below + 0xf) & !0xf) - below
+}
+
 /// `ANDPS` with a bit mask.
 fn andps(a: Vec4, mask: [u32; 4]) -> Vec4 {
     std::array::from_fn(|lane| f32::from_bits(a[lane].to_bits() & mask[lane]))
@@ -279,74 +295,76 @@ pub fn fn_00ce9cf0(e: &mut Engine, constraint: Ptr) -> u32 {
 pub fn fn_00ce9880(e: &mut Engine, transform: Ptr, body: Ptr) -> u32 {
     let x = transform.addr();
     let b = body.addr();
-    let p = e.mem.alloc(0x130);
-    let tolerance = x87_quiet_bits(e.mem.u32(TOLERANCE));
-    e.mem.set_u32(p, tolerance);
-    let result = e
-        .call(
-            IS_APPROXIMATELY_EQUAL,
-            &args![x, p + 0xf, IDENTITY_TRANSFORM, tolerance],
-        )
-        .u32();
-    if e.mem.u8(result) == 0 {
-        e.call(SET_FROM_TRANSFORM_NO_SCALE, &args![p + 0x50, b + 0xf0]);
-        let half = load_vec(e, HALF_NEGATIVE);
-        let q_body = load_vec(e, p + 0x60);
-        let t = load_vec(e, x);
-        let spun = rotation(q_body, t, half, false);
-        let t_body = load_vec(e, p + 0x50);
-        let new_translation = addps(addps(spun, spun), t_body);
-        store_vec(e, p + 0x30, t);
-        store_vec(e, p + 0xb0, new_translation);
-        e.call(QUATERNION_SET_MUL, &args![p + 0xc0, p + 0x60, x + 0x10]);
-        let new_scale = mulps(load_vec(e, p + 0x70), load_vec(e, x + 0x20));
-        let t = load_vec(e, p + 0x30);
-        store_vec(e, p + 0xd0, new_scale);
-        let q = load_vec(e, x + 0x10);
-        let half = load_vec(e, HALF_NEGATIVE);
-        let spun_back = rotation(q, t, half, true);
-        let inverse_translation = xorps(addps(spun_back, spun_back), load_bits(e, SIGN_MASK));
-        store_vec(e, p + 0x80, inverse_translation);
-        let conjugate = xorps(load_vec(e, x + 0x10), load_bits(e, XYZ_SIGN_MASK));
-        store_vec(e, p + 0x90, conjugate);
-        let inverse = inverse_scale(e, load_vec(e, x + 0x20));
-        for lane in 0..4 {
-            let word = e.mem.u32(b + 0x140 + 4 * lane);
-            e.mem.set_u32(p + 0x20 + 4 * lane, word);
-        }
-        store_vec(e, p + 0xa0, inverse);
-        let sink = e.mem.u32(SINK);
-        e.vcall(sink, 0x14, &args![p + 0xc, SILENCED_ID]);
-        let sink = e.mem.u32(SINK);
-        e.vcall(sink, 0x10, &args![SILENCED_ID, sink & 0xffff_ff00]);
-        let shape = e.mem.u32(b + 0x10);
-        e.call(QS_TO_TRANSFORM, &args![p + 0x80, p + 0xe0]);
-        let router = e.call(MEMORY_ROUTER, &args![]).u32();
-        let allocator = e.mem.u32(router + 0x10);
-        let block = e.vcall(allocator, 4, &args![0x70u32]).u32();
-        e.mem.set_u16(block + 4, 0x70);
-        let new_shape = e
-            .call(TRANSFORM_SHAPE_CONSTRUCT, &args![block, shape, p + 0xe0])
+    // The exe aligns ESP (`AND ESP,0xfffffff0`), then `SUB ESP,0x118` and three pushes: P is
+    // 0x124 bytes under the 16-byte boundary (00ce9883..00ce9894).
+    with_aligned_frame(e, 0x124, |e, p| {
+        let tolerance = x87_quiet_bits(e.mem.u32(TOLERANCE));
+        e.mem.set_u32(p, tolerance);
+        let result = e
+            .call(
+                IS_APPROXIMATELY_EQUAL,
+                &args![x, p + 0xf, IDENTITY_TRANSFORM, tolerance],
+            )
             .u32();
-        e.vcall(b, 0xc, &args![new_shape]);
-        e.call(REMOVE_REFERENCE, &args![new_shape]);
-        e.call(OPTIONS_INIT_FIRST, &args![p + 0x30]);
-        e.call(OPTIONS_INIT_SECOND, &args![p + 0x10]);
-        e.call(COLLAPSE_TRANSFORMS, &args![b, p + 0x30, p + 0x10]);
-        let sink = e.mem.u32(SINK);
-        let enabled = e.mem.u32(p + 0xc);
-        e.vcall(sink, 0x10, &args![SILENCED_ID, enabled]);
-        e.call(QS_TO_TRANSFORM, &args![p + 0xb0, p + 0xe0]);
-        e.call(SET_TRANSFORM, &args![b, p + 0xe0]);
-        if e.mem.u8(b + 0xe8) != 5 {
-            e.call(
-                SET_TRANSFORMED_INVERSE_POS,
-                &args![p + 0x10, p + 0xe0, p + 0x20],
-            );
-            e.call(SET_CENTER_OF_MASS_LOCAL, &args![b, p + 0x10]);
+        if e.mem.u8(result) == 0 {
+            e.call(SET_FROM_TRANSFORM_NO_SCALE, &args![p + 0x50, b + 0xf0]);
+            let half = load_vec(e, HALF_NEGATIVE);
+            let q_body = load_vec(e, p + 0x60);
+            let t = load_vec(e, x);
+            let spun = rotation(q_body, t, half, false);
+            let t_body = load_vec(e, p + 0x50);
+            let new_translation = addps(addps(spun, spun), t_body);
+            store_vec(e, p + 0x30, t);
+            store_vec(e, p + 0xb0, new_translation);
+            e.call(QUATERNION_SET_MUL, &args![p + 0xc0, p + 0x60, x + 0x10]);
+            let new_scale = mulps(load_vec(e, p + 0x70), load_vec(e, x + 0x20));
+            let t = load_vec(e, p + 0x30);
+            store_vec(e, p + 0xd0, new_scale);
+            let q = load_vec(e, x + 0x10);
+            let half = load_vec(e, HALF_NEGATIVE);
+            let spun_back = rotation(q, t, half, true);
+            let inverse_translation = xorps(addps(spun_back, spun_back), load_bits(e, SIGN_MASK));
+            store_vec(e, p + 0x80, inverse_translation);
+            let conjugate = xorps(load_vec(e, x + 0x10), load_bits(e, XYZ_SIGN_MASK));
+            store_vec(e, p + 0x90, conjugate);
+            let inverse = inverse_scale(e, load_vec(e, x + 0x20));
+            for lane in 0..4 {
+                let word = e.mem.u32(b + 0x140 + 4 * lane);
+                e.mem.set_u32(p + 0x20 + 4 * lane, word);
+            }
+            store_vec(e, p + 0xa0, inverse);
+            let sink = e.mem.u32(SINK);
+            e.vcall(sink, 0x14, &args![p + 0xc, SILENCED_ID]);
+            let sink = e.mem.u32(SINK);
+            e.vcall(sink, 0x10, &args![SILENCED_ID, sink & 0xffff_ff00]);
+            let shape = e.mem.u32(b + 0x10);
+            e.call(QS_TO_TRANSFORM, &args![p + 0x80, p + 0xe0]);
+            let router = e.call(MEMORY_ROUTER, &args![]).u32();
+            let allocator = e.mem.u32(router + 0x10);
+            let block = e.vcall(allocator, 4, &args![0x70u32]).u32();
+            e.mem.set_u16(block + 4, 0x70);
+            let new_shape = e
+                .call(TRANSFORM_SHAPE_CONSTRUCT, &args![block, shape, p + 0xe0])
+                .u32();
+            e.vcall(b, 0xc, &args![new_shape]);
+            e.call(REMOVE_REFERENCE, &args![new_shape]);
+            e.call(OPTIONS_INIT_FIRST, &args![p + 0x30]);
+            e.call(OPTIONS_INIT_SECOND, &args![p + 0x10]);
+            e.call(COLLAPSE_TRANSFORMS, &args![b, p + 0x30, p + 0x10]);
+            let sink = e.mem.u32(SINK);
+            let enabled = e.mem.u32(p + 0xc);
+            e.vcall(sink, 0x10, &args![SILENCED_ID, enabled]);
+            e.call(QS_TO_TRANSFORM, &args![p + 0xb0, p + 0xe0]);
+            e.call(SET_TRANSFORM, &args![b, p + 0xe0]);
+            if e.mem.u8(b + 0xe8) != 5 {
+                e.call(
+                    SET_TRANSFORMED_INVERSE_POS,
+                    &args![p + 0x10, p + 0xe0, p + 0x20],
+                );
+                e.call(SET_CENTER_OF_MASS_LOCAL, &args![b, p + 0x10]);
+            }
         }
-    }
-    e.mem.free(p);
+    });
     0
 }
 
@@ -360,47 +378,49 @@ pub fn fn_00ce9880(e: &mut Engine, transform: Ptr, body: Ptr) -> u32 {
 /// (`+0x14`) is moved by it (`moveRigidBodyPivot`, `00ce9880`). Answers 1 when a constraint is not
 /// supported or a move answers non-zero, else 0.
 pub fn fn_00ce9db0(e: &mut Engine, constraints: Ptr) -> u32 {
-    let list = constraints.addr();
-    let size = e.mem.i32(list + 4);
-    let mut answer = 0;
-    let mut index: i32 = 0;
-    if size > 0 {
-        loop {
-            let data = e.mem.u32(list);
-            let constraint = e.mem.u32(data.wrapping_add((index as u32).wrapping_mul(4)));
-            if !fn_00ce9ba0(e, Ptr::new(constraint), 1) {
-                answer = 1;
-            } else {
-                let pivot = fn_00ce9c40(e, Ptr::new(constraint));
-                let frame = e.mem.alloc(0x60);
-                for lane in 0..4 {
-                    let word = e.mem.u32(pivot + 4 * lane);
-                    e.mem.set_u32(frame + 0x20 + 4 * lane, word);
-                    e.mem.set_u32(frame + 0x30 + 4 * lane, word);
-                    let rotation_word = e.mem.u32(IDENTITY_ROTATION + 4 * lane);
-                    e.mem.set_u32(frame + 0x40 + 4 * lane, rotation_word);
-                    let one = e.mem.u32(ONE);
-                    e.mem.set_u32(frame + 0x50 + 4 * lane, one);
-                }
-                let body = e.mem.u32(constraint + 0x14);
-                let squared = mulps(load_vec(e, frame + 0x30), load_vec(e, frame + 0x30));
-                let length = sum3(squared);
-                let threshold = f64::from(x87_quiet(e.mem.f32(PIVOT_THRESHOLD)));
-                if threshold < f64::from(length) {
-                    let moved = fn_00ce9880(e, Ptr::new(frame + 0x30), Ptr::new(body));
-                    if moved != 0 {
-                        answer = 1;
+    // The exe aligns ESP, then `SUB ESP,0x54` and three pushes: a 0x60-byte frame under the
+    // boundary, the pivot transform at +0x30 (00ce9e6a).
+    with_aligned_frame(e, 0x60, |e, frame| {
+        let list = constraints.addr();
+        let size = e.mem.i32(list + 4);
+        let mut answer = 0;
+        let mut index: i32 = 0;
+        if size > 0 {
+            loop {
+                let data = e.mem.u32(list);
+                let constraint = e.mem.u32(data.wrapping_add((index as u32).wrapping_mul(4)));
+                if !fn_00ce9ba0(e, Ptr::new(constraint), 1) {
+                    answer = 1;
+                } else {
+                    let pivot = fn_00ce9c40(e, Ptr::new(constraint));
+                    for lane in 0..4 {
+                        let word = e.mem.u32(pivot + 4 * lane);
+                        e.mem.set_u32(frame + 0x20 + 4 * lane, word);
+                        e.mem.set_u32(frame + 0x30 + 4 * lane, word);
+                        let rotation_word = e.mem.u32(IDENTITY_ROTATION + 4 * lane);
+                        e.mem.set_u32(frame + 0x40 + 4 * lane, rotation_word);
+                        let one = e.mem.u32(ONE);
+                        e.mem.set_u32(frame + 0x50 + 4 * lane, one);
+                    }
+                    let body = e.mem.u32(constraint + 0x14);
+                    let squared = mulps(load_vec(e, frame + 0x30), load_vec(e, frame + 0x30));
+                    let length = sum3(squared);
+                    let threshold = f64::from(x87_quiet(e.mem.f32(PIVOT_THRESHOLD)));
+                    if threshold < f64::from(length) {
+                        let moved = fn_00ce9880(e, Ptr::new(frame + 0x30), Ptr::new(body));
+                        if moved != 0 {
+                            answer = 1;
+                        }
                     }
                 }
-                e.mem.free(frame);
-            }
-            index += 1;
-            if index >= size {
-                break;
+                index += 1;
+                if index >= size {
+                    break;
+                }
             }
         }
-    }
-    answer
+        answer
+    })
 }
 
 // Translated from 00ce9e90 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -412,46 +432,49 @@ pub fn fn_00ce9db0(e: &mut Engine, constraints: Ptr) -> u32 {
 /// support, a constraint whose type is 8 reports "Unusual : Aligning constraint spaces of a stiff
 /// spring." (level 1, id `0xabba876d`, line `0x134`). Answers 0.
 pub fn fn_00ce9e90(e: &mut Engine, constraints: Ptr) -> u32 {
-    let list = constraints.addr();
-    let size = e.mem.i32(list + 4);
-    let mut index: i32 = 0;
-    if size > 0 {
-        loop {
-            let data = e.mem.u32(list);
-            let constraint = e.mem.u32(data.wrapping_add((index as u32).wrapping_mul(4)));
-            if fn_00ce9ba0(e, Ptr::new(constraint), 1) {
-                let body_a = e.mem.u32(constraint + 0x14);
-                let local = e.mem.alloc(0x10);
-                for lane in 0..4 {
-                    let word = e.mem.u32(body_a + 0x120 + 4 * lane);
-                    e.mem.set_u32(local + 4 * lane, word);
+    // The exe aligns ESP, then `SUB ESP,0x224` and three pushes: a 0x230-byte frame under the
+    // boundary, the body vector at +0x10 (00ce9f0d).
+    with_aligned_frame(e, 0x230, |e, frame| {
+        let list = constraints.addr();
+        let size = e.mem.i32(list + 4);
+        let mut index: i32 = 0;
+        if size > 0 {
+            loop {
+                let data = e.mem.u32(list);
+                let constraint = e.mem.u32(data.wrapping_add((index as u32).wrapping_mul(4)));
+                if fn_00ce9ba0(e, Ptr::new(constraint), 1) {
+                    let body_a = e.mem.u32(constraint + 0x14);
+                    let local = frame + 0x10;
+                    for lane in 0..4 {
+                        let word = e.mem.u32(body_a + 0x120 + 4 * lane);
+                        e.mem.set_u32(local + 4 * lane, word);
+                    }
+                    let body_b = e.mem.u32(constraint + 0x18);
+                    let pivot_a = fn_00ce9c40(e, Ptr::new(constraint));
+                    for lane in 0..4 {
+                        e.mem.set_u32(pivot_a + 4 * lane, 0);
+                    }
+                    let pivot_b = fn_00ce9cf0(e, Ptr::new(constraint));
+                    e.call(
+                        SET_TRANSFORMED_INVERSE_POS,
+                        &args![pivot_b, body_b + 0xf0, local],
+                    );
                 }
-                let body_b = e.mem.u32(constraint + 0x18);
-                let pivot_a = fn_00ce9c40(e, Ptr::new(constraint));
-                for lane in 0..4 {
-                    e.mem.set_u32(pivot_a + 4 * lane, 0);
+                let (_, kind) = constraint_type(e, Ptr::new(constraint));
+                if kind == 8 {
+                    with_builder(e, |e, builder, buffer| {
+                        e.call(TEXT_BUILDER_APPEND, &args![builder, TEXT_STIFF_SPRING]);
+                        report(e, 0xabba_876d, buffer, 0x134);
+                    });
                 }
-                let pivot_b = fn_00ce9cf0(e, Ptr::new(constraint));
-                e.call(
-                    SET_TRANSFORMED_INVERSE_POS,
-                    &args![pivot_b, body_b + 0xf0, local],
-                );
-                e.mem.free(local);
-            }
-            let (_, kind) = constraint_type(e, Ptr::new(constraint));
-            if kind == 8 {
-                with_builder(e, |e, builder, buffer| {
-                    e.call(TEXT_BUILDER_APPEND, &args![builder, TEXT_STIFF_SPRING]);
-                    report(e, 0xabba_876d, buffer, 0x134);
-                });
-            }
-            index += 1;
-            if index >= size {
-                break;
+                index += 1;
+                if index >= size {
+                    break;
+                }
             }
         }
-    }
-    0
+        0
+    })
 }
 
 /// Bumps the memory router's pointer past `bytes` (rounded up to 128) and answers where it was.
@@ -1072,104 +1095,107 @@ pub fn hka_ragdoll_utils_create_ragdoll_instance_from_skeleton(
 /// stored at the output address of the pass (`*out_first`, `*out_second`), and the arrays are given
 /// back, `X` then `Z` then `Y`. Last the byte buffer is freed (`(buffer, capacity)`) when it is owned.
 pub fn fn_00ceaf60(e: &mut Engine, this: Ptr, root: u32, out_first: u32, out_second: u32) {
-    let t = this.addr();
-    let outputs = [out_first, out_second];
-    let marks = [0u8, 1u8];
-    let skeleton = e.mem.u32(t + 0x2c);
-    let bone_count = e.mem.u32(skeleton + 0x1c);
-    let router = e.call(MEMORY_ROUTER, &args![]).u32();
-    let allocator = e.mem.u32(router + 0x10);
-    let mut buffer: u32 = 0;
-    let mut buffer_capacity: u32 = NOT_OWNED;
-    if bone_count != 0 {
-        e.with_stack(4, |e, request| {
-            e.mem.set_u32(request.addr(), bone_count);
+    // The exe's frame (`SUB ESP,0x3c`, four pushes): 0x4c bytes, the allocation request word at
+    // +0x18 (00ceaf9e), the three arrays at +0x28, +0x34 and +0x40 (00ceaff3..00ceb013).
+    e.with_stack(0x4c, |e, frame| {
+        let frame = frame.addr();
+        let t = this.addr();
+        let outputs = [out_first, out_second];
+        let marks = [0u8, 1u8];
+        let skeleton = e.mem.u32(t + 0x2c);
+        let bone_count = e.mem.u32(skeleton + 0x1c);
+        let router = e.call(MEMORY_ROUTER, &args![]).u32();
+        let allocator = e.mem.u32(router + 0x10);
+        let mut buffer: u32 = 0;
+        let mut buffer_capacity: u32 = NOT_OWNED;
+        if bone_count != 0 {
+            let request = frame + 0x18;
+            e.mem.set_u32(request, bone_count);
             buffer = e.vcall(allocator, 0xc, &args![request]).u32();
-            let granted = e.mem.u32(request.addr());
+            let granted = e.mem.u32(request);
             if granted != 0 {
                 buffer_capacity = granted;
             }
-        });
-    }
-    let skeleton = e.mem.u32(t + 0x2c);
-    e.call(MARK_BONES, &args![skeleton, root, buffer, 1u32]);
-    for pass in 0..2 {
-        let arrays = e.mem.alloc(0x24);
-        let (x, y, z) = (arrays, arrays + 0xc, arrays + 0x18);
-        for array in [x, y, z] {
-            e.mem.set_u32(array + 8, NOT_OWNED);
         }
-        let mark = marks[pass];
-        let mut bone: i32 = 0;
         let skeleton = e.mem.u32(t + 0x2c);
-        if e.mem.i32(skeleton + 0x1c) > 0 {
-            loop {
-                if e.mem.u8(buffer.wrapping_add(bone as u32)) != mark {
-                    push_back_word(e, x, 0xffff_ffff);
-                } else {
-                    let index = e.mem.i32(
-                        e.mem
-                            .u32(t + 0x20)
-                            .wrapping_add((bone as u32).wrapping_mul(4)),
-                    );
-                    let mut body: u32 = 0;
-                    if index >= 0 {
-                        body = e.mem.u32(
-                            e.mem
-                                .u32(t + 8)
-                                .wrapping_add((index as u32).wrapping_mul(4)),
-                        );
-                    }
-                    let before = index.wrapping_sub(1);
-                    let mut constraint: u32 = 0;
-                    if before >= 0 {
-                        constraint = e.mem.u32(
-                            e.mem
-                                .u32(t + 0x14)
-                                .wrapping_add((before as u32).wrapping_mul(4)),
-                        );
-                    }
-                    if body == 0 {
+        e.call(MARK_BONES, &args![skeleton, root, buffer, 1u32]);
+        for pass in 0..2 {
+            let arrays = frame + 0x28;
+            let (x, y, z) = (arrays, arrays + 0xc, arrays + 0x18);
+            for array in [x, y, z] {
+                e.mem.set_u32(array + 8, NOT_OWNED);
+            }
+            let mark = marks[pass];
+            let mut bone: i32 = 0;
+            let skeleton = e.mem.u32(t + 0x2c);
+            if e.mem.i32(skeleton + 0x1c) > 0 {
+                loop {
+                    if e.mem.u8(buffer.wrapping_add(bone as u32)) != mark {
                         push_back_word(e, x, 0xffff_ffff);
                     } else {
-                        let bodies_so_far = e.mem.u32(y + 4);
-                        push_back_word(e, x, bodies_so_far);
-                        push_back_word(e, y, body);
-                        if bone as u32 != root && bone != 0 {
-                            push_back_word(e, z, constraint);
+                        let index = e.mem.i32(
+                            e.mem
+                                .u32(t + 0x20)
+                                .wrapping_add((bone as u32).wrapping_mul(4)),
+                        );
+                        let mut body: u32 = 0;
+                        if index >= 0 {
+                            body = e.mem.u32(
+                                e.mem
+                                    .u32(t + 8)
+                                    .wrapping_add((index as u32).wrapping_mul(4)),
+                            );
+                        }
+                        let before = index.wrapping_sub(1);
+                        let mut constraint: u32 = 0;
+                        if before >= 0 {
+                            constraint = e.mem.u32(
+                                e.mem
+                                    .u32(t + 0x14)
+                                    .wrapping_add((before as u32).wrapping_mul(4)),
+                            );
+                        }
+                        if body == 0 {
+                            push_back_word(e, x, 0xffff_ffff);
+                        } else {
+                            let bodies_so_far = e.mem.u32(y + 4);
+                            push_back_word(e, x, bodies_so_far);
+                            push_back_word(e, y, body);
+                            if bone as u32 != root && bone != 0 {
+                                push_back_word(e, z, constraint);
+                            }
                         }
                     }
-                }
-                bone += 1;
-                let skeleton = e.mem.u32(t + 0x2c);
-                if bone >= e.mem.i32(skeleton + 0x1c) {
-                    break;
+                    bone += 1;
+                    let skeleton = e.mem.u32(t + 0x2c);
+                    if bone >= e.mem.i32(skeleton + 0x1c) {
+                        break;
+                    }
                 }
             }
+            let router = e.call(MEMORY_ROUTER, &args![]).u32();
+            let allocator = e.mem.u32(router + 0x10);
+            let block = e.vcall(allocator, 4, &args![0x30u32]).u32();
+            e.mem.set_u16(block + 4, 0x30);
+            let skeleton = e.mem.u32(t + 0x2c);
+            let instance = e
+                .call(RAGDOLL_INSTANCE_CONSTRUCT, &args![block, y, z, skeleton, x])
+                .u32();
+            e.mem.set_u32(outputs[pass], instance);
+            release_heap_ints(e, x);
+            release_heap_ints(e, z);
+            release_heap_ints(e, y);
         }
         let router = e.call(MEMORY_ROUTER, &args![]).u32();
         let allocator = e.mem.u32(router + 0x10);
-        let block = e.vcall(allocator, 4, &args![0x30u32]).u32();
-        e.mem.set_u16(block + 4, 0x30);
-        let skeleton = e.mem.u32(t + 0x2c);
-        let instance = e
-            .call(RAGDOLL_INSTANCE_CONSTRUCT, &args![block, y, z, skeleton, x])
-            .u32();
-        e.mem.set_u32(outputs[pass], instance);
-        release_heap_ints(e, x);
-        release_heap_ints(e, z);
-        release_heap_ints(e, y);
-        e.mem.free(arrays);
-    }
-    let router = e.call(MEMORY_ROUTER, &args![]).u32();
-    let allocator = e.mem.u32(router + 0x10);
-    if buffer_capacity as i32 >= 0 {
-        e.vcall(
-            allocator,
-            0x10,
-            &args![buffer, buffer_capacity & CAPACITY_MASK],
-        );
-    }
+        if buffer_capacity as i32 >= 0 {
+            e.vcall(
+                allocator,
+                0x10,
+                &args![buffer, buffer_capacity & CAPACITY_MASK],
+            );
+        }
+    })
 }
 
 /// Makes the array of 8-byte, 2-byte or 0x30-byte elements at `array` hold room for `wanted`: when
@@ -1210,150 +1236,152 @@ pub fn hka_ragdoll_utils_construct_skeleton_for_ragdoll(
     bodies: Ptr,
     constraints: Ptr,
 ) -> u32 {
-    let bodies = bodies.addr();
-    let constraints = constraints.addr();
-    let router = e.call(MEMORY_ROUTER, &args![]).u32();
-    let allocator = e.mem.u32(router + 0x10);
-    let skeleton = e.vcall(allocator, 4, &args![0x48u32]).u32();
-    e.mem.set_u16(skeleton + 6, 1);
-    e.mem.set_u16(skeleton + 4, 0x48);
-    e.mem.set_u32(skeleton, SKELETON_VTABLE);
-    e.call(STRING_PTR_CONSTRUCT, &args![skeleton + 8]);
-    for array in [0xc, 0x18, 0x24, 0x30, 0x3c] {
-        e.mem.set_u32(skeleton + array, 0);
-        e.mem.set_u32(skeleton + array + 4, 0);
-        e.mem.set_u32(skeleton + array + 8, NOT_OWNED);
-    }
-    let n = e.mem.u32(bodies + 4);
-    let n_signed = n as i32;
-    // The bones: room for `n`, extra strings destroyed, new ones constructed.
-    reserve_elements(e, skeleton + 0x18, n_signed, 8);
-    let extra = e.mem.i32(skeleton + 0x1c).wrapping_sub(n_signed);
-    let mut element = e.mem.u32(skeleton + 0x18).wrapping_add(n.wrapping_mul(8));
-    if extra > 0 {
-        for _ in 0..extra {
-            e.call(STRING_PTR_DESTRUCT, &args![element]);
-            element = element.wrapping_add(8);
+    // The exe aligns ESP, then `SUB ESP,0x2b4` and three pushes: S is 0x2c0 bytes under the
+    // boundary (00ceb2c3..00ceb2ce); the transforms at S + 0x60 and S + 0x90 (00ceb48f, 00ceb4a7).
+    with_aligned_frame(e, 0x2c0, |e, frame| {
+        let bodies = bodies.addr();
+        let constraints = constraints.addr();
+        let router = e.call(MEMORY_ROUTER, &args![]).u32();
+        let allocator = e.mem.u32(router + 0x10);
+        let skeleton = e.vcall(allocator, 4, &args![0x48u32]).u32();
+        e.mem.set_u16(skeleton + 6, 1);
+        e.mem.set_u16(skeleton + 4, 0x48);
+        e.mem.set_u32(skeleton, SKELETON_VTABLE);
+        e.call(STRING_PTR_CONSTRUCT, &args![skeleton + 8]);
+        for array in [0xc, 0x18, 0x24, 0x30, 0x3c] {
+            e.mem.set_u32(skeleton + array, 0);
+            e.mem.set_u32(skeleton + array + 4, 0);
+            e.mem.set_u32(skeleton + array + 8, NOT_OWNED);
         }
-    }
-    let size = e.mem.u32(skeleton + 0x1c);
-    let missing = n_signed.wrapping_sub(size as i32);
-    let mut element = e
-        .mem
-        .u32(skeleton + 0x18)
-        .wrapping_add(size.wrapping_mul(8));
-    if missing > 0 {
-        for _ in 0..missing {
-            if element != 0 {
-                e.call(STRING_PTR_CONSTRUCT, &args![element]);
-                e.mem.set_u8(element + 4, 0);
+        let n = e.mem.u32(bodies + 4);
+        let n_signed = n as i32;
+        // The bones: room for `n`, extra strings destroyed, new ones constructed.
+        reserve_elements(e, skeleton + 0x18, n_signed, 8);
+        let extra = e.mem.i32(skeleton + 0x1c).wrapping_sub(n_signed);
+        let mut element = e.mem.u32(skeleton + 0x18).wrapping_add(n.wrapping_mul(8));
+        if extra > 0 {
+            for _ in 0..extra {
+                e.call(STRING_PTR_DESTRUCT, &args![element]);
+                element = element.wrapping_add(8);
             }
-            element = element.wrapping_add(8);
         }
-    }
-    e.mem.set_u32(skeleton + 0x1c, n);
-    reserve_elements(e, skeleton + 0xc, n_signed, 2);
-    e.mem.set_u32(skeleton + 0x10, n);
-    reserve_elements(e, skeleton + 0x24, n_signed, 0x30);
-    e.mem.set_u32(skeleton + 0x28, n);
-    if n_signed > 0 {
-        // The exe's frame: the child's `hkQsTransform` at `S + 0x60`, the parent's at `S + 0x90`,
-        // the inverse of the parent's scale at `S + 0x50`, the conjugated rotation at `S + 0x40`.
-        let frame = e.mem.alloc(0xd0);
-        let mut index: i32 = 0;
-        let mut offset: u32 = 0;
-        loop {
-            let mut parent: i32 = -1;
-            if index != 0 {
-                let constraint = e.mem.u32(
-                    e.mem
-                        .u32(constraints)
-                        .wrapping_add((index as u32).wrapping_mul(4))
-                        .wrapping_sub(4),
-                );
-                let parent_body = e.mem.u32(constraint + 0x18);
-                if index > 0 {
-                    let list = e.mem.u32(bodies);
-                    for search in 0..index {
-                        let candidate = e
-                            .mem
-                            .u32(list.wrapping_add((search as u32).wrapping_mul(4)));
-                        if candidate == parent_body {
-                            parent = search;
-                            break;
+        let size = e.mem.u32(skeleton + 0x1c);
+        let missing = n_signed.wrapping_sub(size as i32);
+        let mut element = e
+            .mem
+            .u32(skeleton + 0x18)
+            .wrapping_add(size.wrapping_mul(8));
+        if missing > 0 {
+            for _ in 0..missing {
+                if element != 0 {
+                    e.call(STRING_PTR_CONSTRUCT, &args![element]);
+                    e.mem.set_u8(element + 4, 0);
+                }
+                element = element.wrapping_add(8);
+            }
+        }
+        e.mem.set_u32(skeleton + 0x1c, n);
+        reserve_elements(e, skeleton + 0xc, n_signed, 2);
+        e.mem.set_u32(skeleton + 0x10, n);
+        reserve_elements(e, skeleton + 0x24, n_signed, 0x30);
+        e.mem.set_u32(skeleton + 0x28, n);
+        if n_signed > 0 {
+            // The exe's frame: the child's `hkQsTransform` at `S + 0x60`, the parent's at `S + 0x90`,
+            // the inverse of the parent's scale at `S + 0x50`, the conjugated rotation at `S + 0x40`.
+            let mut index: i32 = 0;
+            let mut offset: u32 = 0;
+            loop {
+                let mut parent: i32 = -1;
+                if index != 0 {
+                    let constraint = e.mem.u32(
+                        e.mem
+                            .u32(constraints)
+                            .wrapping_add((index as u32).wrapping_mul(4))
+                            .wrapping_sub(4),
+                    );
+                    let parent_body = e.mem.u32(constraint + 0x18);
+                    if index > 0 {
+                        let list = e.mem.u32(bodies);
+                        for search in 0..index {
+                            let candidate = e
+                                .mem
+                                .u32(list.wrapping_add((search as u32).wrapping_mul(4)));
+                            if candidate == parent_body {
+                                parent = search;
+                                break;
+                            }
                         }
                     }
                 }
-            }
-            let parents = e.mem.u32(skeleton + 0xc);
-            e.mem.set_u16(
-                parents.wrapping_add((index as u32).wrapping_mul(2)),
-                parent as u16,
-            );
-            let list = e.mem.u32(bodies);
-            let bones = e.mem.u32(skeleton + 0x18);
-            let body = e.mem.u32(list.wrapping_add((index as u32).wrapping_mul(4)));
-            let bone = bones.wrapping_add((index as u32).wrapping_mul(8));
-            if parent >= 0 {
-                let parent_body = e
-                    .mem
-                    .u32(list.wrapping_add((parent as u32).wrapping_mul(4)));
-                e.call(
-                    SET_FROM_TRANSFORM_NO_SCALE,
-                    &args![frame + 0x60, body + 0xf0],
+                let parents = e.mem.u32(skeleton + 0xc);
+                e.mem.set_u16(
+                    parents.wrapping_add((index as u32).wrapping_mul(2)),
+                    parent as u16,
                 );
-                e.call(
-                    SET_FROM_TRANSFORM_NO_SCALE,
-                    &args![frame + 0x90, parent_body + 0xf0],
-                );
-                let half = load_vec(e, HALF_NEGATIVE);
-                let q_parent = load_vec(e, frame + 0xa0);
-                let t_parent = load_vec(e, frame + 0x90);
-                let pose = e.mem.u32(skeleton + 0x24).wrapping_add(offset);
-                let spun = rotation(q_parent, t_parent, half, true);
-                let negated = xorps(addps(spun, spun), load_bits(e, SIGN_MASK));
-                let conjugate = xorps(q_parent, load_bits(e, XYZ_SIGN_MASK));
-                let inverse = inverse_scale(e, load_vec(e, frame + 0xb0));
-                store_vec(e, frame + 0x50, inverse);
-                let t_child = load_vec(e, frame + 0x60);
-                store_vec(e, frame + 0x30, negated);
-                store_vec(e, frame + 0x40, conjugate);
-                let spun_child = rotation(conjugate, t_child, half, false);
-                let translation = addps(addps(spun_child, spun_child), negated);
-                store_vec(e, pose, translation);
-                e.call(
-                    QUATERNION_SET_MUL,
-                    &args![pose + 0x10, frame + 0x40, frame + 0x70],
-                );
-                let scale = mulps(load_vec(e, frame + 0x80), load_vec(e, frame + 0x50));
-                store_vec(e, pose + 0x20, scale);
-            } else {
-                let pose = e.mem.u32(skeleton + 0x24).wrapping_add(offset);
-                e.call(SET_FROM_TRANSFORM_NO_SCALE, &args![pose, body + 0xf0]);
-            }
-            let name = e.mem.u32(body + 0x74) & 0xffff_fffe;
-            if name != 0 {
-                e.call(STRING_PTR_ASSIGN_TEXT, &args![bone, name]);
-            } else {
-                with_builder(e, |e, builder, buffer| {
-                    e.call(TEXT_BUILDER_APPEND, &args![builder, TEXT_NO_BODY_NAME]);
-                    report(e, 0xabba_cc14, buffer, 0x22e);
-                });
-            }
-            e.mem.set_u8(bone + 4, u8::from(index != 0));
-            offset = offset.wrapping_add(0x30);
-            index += 1;
-            if index >= n_signed {
-                break;
+                let list = e.mem.u32(bodies);
+                let bones = e.mem.u32(skeleton + 0x18);
+                let body = e.mem.u32(list.wrapping_add((index as u32).wrapping_mul(4)));
+                let bone = bones.wrapping_add((index as u32).wrapping_mul(8));
+                if parent >= 0 {
+                    let parent_body = e
+                        .mem
+                        .u32(list.wrapping_add((parent as u32).wrapping_mul(4)));
+                    e.call(
+                        SET_FROM_TRANSFORM_NO_SCALE,
+                        &args![frame + 0x60, body + 0xf0],
+                    );
+                    e.call(
+                        SET_FROM_TRANSFORM_NO_SCALE,
+                        &args![frame + 0x90, parent_body + 0xf0],
+                    );
+                    let half = load_vec(e, HALF_NEGATIVE);
+                    let q_parent = load_vec(e, frame + 0xa0);
+                    let t_parent = load_vec(e, frame + 0x90);
+                    let pose = e.mem.u32(skeleton + 0x24).wrapping_add(offset);
+                    let spun = rotation(q_parent, t_parent, half, true);
+                    let negated = xorps(addps(spun, spun), load_bits(e, SIGN_MASK));
+                    let conjugate = xorps(q_parent, load_bits(e, XYZ_SIGN_MASK));
+                    let inverse = inverse_scale(e, load_vec(e, frame + 0xb0));
+                    store_vec(e, frame + 0x50, inverse);
+                    let t_child = load_vec(e, frame + 0x60);
+                    store_vec(e, frame + 0x30, negated);
+                    store_vec(e, frame + 0x40, conjugate);
+                    let spun_child = rotation(conjugate, t_child, half, false);
+                    let translation = addps(addps(spun_child, spun_child), negated);
+                    store_vec(e, pose, translation);
+                    e.call(
+                        QUATERNION_SET_MUL,
+                        &args![pose + 0x10, frame + 0x40, frame + 0x70],
+                    );
+                    let scale = mulps(load_vec(e, frame + 0x80), load_vec(e, frame + 0x50));
+                    store_vec(e, pose + 0x20, scale);
+                } else {
+                    let pose = e.mem.u32(skeleton + 0x24).wrapping_add(offset);
+                    e.call(SET_FROM_TRANSFORM_NO_SCALE, &args![pose, body + 0xf0]);
+                }
+                let name = e.mem.u32(body + 0x74) & 0xffff_fffe;
+                if name != 0 {
+                    e.call(STRING_PTR_ASSIGN_TEXT, &args![bone, name]);
+                } else {
+                    with_builder(e, |e, builder, buffer| {
+                        e.call(TEXT_BUILDER_APPEND, &args![builder, TEXT_NO_BODY_NAME]);
+                        report(e, 0xabba_cc14, buffer, 0x22e);
+                    });
+                }
+                e.mem.set_u8(bone + 4, u8::from(index != 0));
+                offset = offset.wrapping_add(0x30);
+                index += 1;
+                if index >= n_signed {
+                    break;
+                }
             }
         }
-        e.mem.free(frame);
-    }
-    if e.mem.i32(skeleton + 0x1c) > 0 {
-        let first_bone = e.mem.u32(skeleton + 0x18);
-        e.call(STRING_PTR_ASSIGN, &args![skeleton + 8, first_bone]);
-    }
-    skeleton
+        if e.mem.i32(skeleton + 0x1c) > 0 {
+            let first_bone = e.mem.u32(skeleton + 0x18);
+            e.call(STRING_PTR_ASSIGN, &args![skeleton + 8, first_bone]);
+        }
+        skeleton
+    })
 }
 
 /// This unit's translated functions, by exe address.
@@ -1805,6 +1833,18 @@ mod tests {
     }
 
     #[test]
+    fn the_pivot_frame_sits_0x124_bytes_under_a_16_byte_boundary() {
+        let mut e = engine();
+        let pivot = pivot_setup(&mut e, 1, 0);
+        let raw = e.mem.alloc(0x134);
+        e.mem.free(raw);
+        e.call(0x00ce_9880, &args![pivot.transform, pivot.body]);
+        let p = frame_of(&pivot);
+        assert_eq!(p, aligned_frame_at(raw, 0x124));
+        assert_eq!((p + 0x124) & 0xf, 0);
+    }
+
+    #[test]
     fn the_report_sink_is_silenced_around_the_collapse_and_restored() {
         let mut e = engine();
         let pivot = pivot_setup(&mut e, 0, 0);
@@ -1963,6 +2003,31 @@ mod tests {
         assert_eq!(e.call(0x00ce_9db0, &args![none]).u32(), 0);
     }
 
+    #[test]
+    fn the_pivot_transform_sits_at_0x30_of_a_0x60_byte_aligned_frame() {
+        let mut e = engine();
+        install_types(&mut e);
+        install_text(&mut e);
+        install_vectors(&mut e);
+        e.register_double(IS_APPROXIMATELY_EQUAL, |e, a| {
+            e.mem.set_u8(a[1], 1);
+            a[1].into_ret()
+        });
+        let big = constraint(&mut e, 0);
+        let body = e.mem.alloc(0x200);
+        e.mem.set_u32(big + 0x14, body);
+        {
+            let at = data_of(&e, big) + 0x20;
+            store_vec(&mut e, at, [1.0, 2.0, 3.0, 0.0]);
+        }
+        let constraints = list(&mut e, &[big]);
+        let raw = e.mem.alloc(0x70);
+        e.mem.free(raw);
+        e.call(0x00ce_9db0, &args![constraints]);
+        let compares = calls(&e, IS_APPROXIMATELY_EQUAL);
+        assert_eq!(compares[0][0], aligned_frame_at(raw, 0x60) + 0x30);
+    }
+
     /// Records the inverse position calls: (arguments, the four words at the position).
     fn record_inverse_pos(e: &mut Engine) -> Rc<RefCell<Vec<(Vec<u32>, Vec<u32>)>>> {
         let log = Rc::new(RefCell::new(Vec::new()));
@@ -1996,6 +2061,23 @@ mod tests {
         assert_eq!(seen[0].0[..2], [data + 0x30, body_b + 0xf0]);
         assert_eq!(seen[0].1, bits([1.0, 2.0, 3.0, 4.0]).to_vec());
         assert!(reports(&e).is_empty());
+    }
+
+    #[test]
+    fn the_aligned_vector_sits_at_0x10_of_a_0x230_byte_aligned_frame() {
+        let mut e = engine();
+        install_types(&mut e);
+        install_text(&mut e);
+        let log = record_inverse_pos(&mut e);
+        let c = constraint(&mut e, 0);
+        let (body_a, body_b) = (e.mem.alloc(0x200), e.mem.alloc(0x200));
+        e.mem.set_u32(c + 0x14, body_a);
+        e.mem.set_u32(c + 0x18, body_b);
+        let constraints = list(&mut e, &[c]);
+        let raw = e.mem.alloc(0x240);
+        e.mem.free(raw);
+        e.call(0x00ce_9e90, &args![constraints]);
+        assert_eq!(log.borrow()[0].0[2], aligned_frame_at(raw, 0x230) + 0x10);
     }
 
     #[test]
@@ -2563,6 +2645,31 @@ mod tests {
         assert_eq!(frees[4], vec![allocator, marks_at, 7]);
     }
 
+    #[test]
+    fn the_split_arrays_and_request_sit_in_the_exe_frame() {
+        let mut e = engine();
+        install_text(&mut e);
+        let (_router, _allocator) = install_arrays(&mut e);
+        let pieces = make_pieces(&mut e);
+        e.register(MARK_BONES, |_, _| Ret::default());
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&seen);
+        e.register_double(RAGDOLL_INSTANCE_CONSTRUCT, move |_, a| {
+            sink.borrow_mut().push(vec![a[1], a[2], a[4]]);
+            Ret::default()
+        });
+        let block = e.mem.alloc(0x40);
+        answer(&mut e, ALLOCATE_SLOT, block);
+        let outputs = e.mem.alloc(8);
+        let frame = e.mem.alloc(0x4c);
+        e.mem.free(frame);
+        e.call(0x00ce_af60, &args![pieces.this, 0u32, outputs, outputs + 4]);
+        // Both passes build their arrays at +0x28 (x), +0x34 (y) and +0x40 (z).
+        let arrays = vec![frame + 0x34, frame + 0x40, frame + 0x28];
+        assert_eq!(*seen.borrow(), vec![arrays.clone(), arrays]);
+        assert_eq!(calls(&e, BUFFER_SLOT)[0][1], frame + 0x18);
+    }
+
     /// The doubles `constructSkeletonForRagdoll` needs. `setFromTransformNoScale` makes a
     /// `hkQsTransform` out of a test layout: translation from `+0x30`, rotation from `+0x20` and scale
     /// from `+0x10` of the source. `setMul` writes (1, 2, 3, 4) and records its two arguments'
@@ -2733,6 +2840,25 @@ mod tests {
         assert_eq!(multiplications[0][3..7], bits([-0.0, -0.0, -0.0, 1.0]));
         assert_eq!(multiplications[0][7..11], bits(identity));
         assert_eq!(multiplications[0][2], multiplications[0][1] + 0x30);
+    }
+
+    #[test]
+    fn the_skeleton_transforms_sit_in_the_aligned_exe_frame() {
+        let mut e = engine();
+        let (_skeleton, _logs, _allocator) = skeleton_setup(&mut e);
+        let identity = [0.0, 0.0, 0.0, 1.0];
+        let root = posed_body(&mut e, Some(b"root"), [1.0; 4], identity, [1.0; 4]);
+        let child = posed_body(&mut e, Some(b"child"), [2.0; 4], identity, [1.0; 4]);
+        let link_to_root = link(&mut e, child, root);
+        let bodies = list(&mut e, &[root, child]);
+        let constraints = list(&mut e, &[link_to_root]);
+        let raw = e.mem.alloc(0x2d0);
+        e.mem.free(raw);
+        e.call(0x00ce_b2c0, &args![bodies, constraints]);
+        let frame = aligned_frame_at(raw, 0x2c0);
+        let sources = calls(&e, SET_FROM_TRANSFORM_NO_SCALE);
+        assert_eq!(sources[1][0], frame + 0x60);
+        assert_eq!(sources[2][0], frame + 0x90);
     }
 
     #[test]

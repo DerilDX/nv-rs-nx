@@ -3343,7 +3343,9 @@ pub fn fn_00875bf0(e: &mut Engine, this: Ptr) {
         });
     }
     let menu = e.call(GET_CURRENT_RENDERED_MENU, &args![]).u32();
-    let scene = e.vcall(menu, 0x8, &args![target]).u32();
+    // The pushed target is the third word of the cdecl `00b6bee0` (`ADD ESP,0xc` after it, at
+    // 00875d72 and 00875df5); the menu's +8 takes none (00875d6b, 00875dee).
+    let scene = e.vcall(menu, 0x8, &args![]).u32();
     e.call(ACCUMULATE_SCENE, &args![menu_node, scene, target]);
     e.call(0x00b4_f450, &args![0xfu32]);
     e.call(0x00b9_7e30, &args![0u32, 1u32]);
@@ -3354,7 +3356,9 @@ pub fn fn_00875bf0(e: &mut Engine, this: Ptr) {
     e.call(0x004e_ced0, &args![1u32]);
     e.call(0x0071_4a60, &args![1u32]);
     let menu = e.call(GET_CURRENT_RENDERED_MENU, &args![]).u32();
-    let scene = e.vcall(menu, 0x8, &args![target]).u32();
+    // The pushed target is the third word of the cdecl `00b6bee0` (`ADD ESP,0xc` after it, at
+    // 00875d72 and 00875df5); the menu's +8 takes none (00875d6b, 00875dee).
+    let scene = e.vcall(menu, 0x8, &args![]).u32();
     e.call(ACCUMULATE_SCENE, &args![menu_node, scene, target]);
     let accumulator = pointer_get(e, this_addr + MAIN_MENU_ACCUM);
     e.call(0x00b6_c0d0, &args![menu_node, accumulator, 0u32]);
@@ -8551,6 +8555,20 @@ mod tests_second {
         r.set(0x008b_6200, &[0x6600]);
         let (_, log) = r.run(0x0087_5bf0, &args![this]);
         assert_eq!(calls_to(&log, 0x0041_fd00), vec![vec![0x5000, 0x6600]]);
+    }
+
+    #[test]
+    fn menu_pass_asks_the_menu_scene_without_a_stack_word() {
+        let (mut r, this) = scene_rig();
+        let menu = r.object_with_slots(&[(8, 0x7a00)]);
+        r.set(GET_CURRENT_RENDERED_MENU, &[menu]);
+        r.set(GET_PIPBOY, &[0x1111]);
+        let slot = r.e.mem.u32(r.e.mem.u32(menu) + 8);
+        let (_, log) = r.run(0x0087_5bf0, &args![this]);
+        // 00875d6b / 00875dee: the target pushed before the menu's +8 (plain RET) is the
+        // third word of the cdecl 00b6bee0 (ADD ESP,0xc), which gets it.
+        assert_eq!(calls_to(&log, slot), vec![vec![menu]; 2]);
+        assert_eq!(calls_to(&log, ACCUMULATE_SCENE)[0][2], 0x5000);
     }
 
     #[test]

@@ -456,6 +456,7 @@ pub fn fn_00e645b0(
 /// `+0x44`, builds the query of the box (`generateQueryFromNode`), clears the hit byte at
 /// `+0x40`, walks the code at `mopp + 0x20` (`queryOBBOnTree`) and writes the hit byte to
 /// `result`.
+/// Answers `result` (`EAX` at both `RET`s; the caller tests the flag through it, 00e5cf29).
 pub fn fn_00e647e0(
     e: &mut Engine,
     this: Ptr,
@@ -464,13 +465,13 @@ pub fn fn_00e647e0(
     transform: Ptr,
     half_extents: Ptr,
     radius: Ptr,
-) {
+) -> Ptr {
     let me = this.addr();
     if e.mem.u8(LICENSE_FLAG) == 0 {
         e.call(LICENSE_CHECK, &args![LICENSE_FLAG]);
         if e.mem.u8(LICENSE_FLAG) == 0 {
             e.mem.set_u8(result.addr(), 0);
-            return;
+            return result;
         }
     }
     e.mem.set_u32(me + 0x44, mopp.addr());
@@ -483,6 +484,7 @@ pub fn fn_00e647e0(
     });
     let hit = e.mem.u8(me + 0x40);
     e.mem.set_u8(result.addr(), hit);
+    result
 }
 
 /// This unit's translated functions, by exe address.
@@ -490,7 +492,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00e6_3f10, fn_00e63f10(Ptr, Ptr, Ptr)),
         entry!(0x00e6_45b0, fn_00e645b0(Ptr, Ptr, Ptr, Ptr, Ptr)),
-        entry!(0x00e6_47e0, fn_00e647e0(Ptr, Ptr, Ptr, Ptr, Ptr, Ptr)),
+        entry!(0x00e6_47e0, fn_00e647e0(Ptr, Ptr, Ptr, Ptr, Ptr, Ptr) -> Ptr),
     ]
 }
 
@@ -526,6 +528,21 @@ mod a06_tests {
             query,
             code: at,
         }
+    }
+
+    #[test]
+    fn the_obb_query_answers_its_result_pointer() {
+        let mut r = rig(&[]);
+        // Without the licence flag (the check leaves it clear) nothing is walked.
+        r.e.register_double(LICENSE_CHECK, |_, _| Ret::default());
+        let result = r.e.mem.alloc(4);
+        r.e.mem.set_u8(result, 9);
+        // EAX is `result` at both RETs; the caller tests the flag through it (00e5cf29).
+        let answered =
+            r.e.call(0x00e6_47e0, &args![r.this, result, 0u32, 0u32, 0u32, 0u32])
+                .u32();
+        assert_eq!(answered, result);
+        assert_eq!(r.e.mem.u8(result), 0);
     }
 
     impl Rig {

@@ -2986,8 +2986,8 @@ pub fn tes_data_handler_unload_cell(e: &mut Engine, _this: Ptr<TESDataHandler>, 
 /// Sets or clears bit 0 of the word at `+0x294` of the TLS block: set when
 /// `flag` is 0, cleared otherwise. Returns what `00462480` said before the
 /// change. `this` is only passed on to `00462480`, which does not read it.
-pub fn fn_004623f0(e: &mut Engine, _this: Ptr, flag: u8) -> u8 {
-    let before = fn_00462480(e);
+pub fn fn_004623f0(e: &mut Engine, this: Ptr, flag: u8) -> u8 {
+    let before = fn_00462480(e, this);
     let word = e.tls() + TLS_FLAG_WORD;
     let value = e.mem.u32(word);
     let value = if flag == 0 { value | 1 } else { value & !1 };
@@ -2998,7 +2998,7 @@ pub fn fn_004623f0(e: &mut Engine, _this: Ptr, flag: u8) -> u8 {
 // Translated from 00462480 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Whether bit 0 of the word at `+0x294` of the TLS block is clear. (Its
 /// `this` is saved but never read.)
-pub fn fn_00462480(e: &mut Engine) -> bool {
+pub fn fn_00462480(e: &mut Engine, _this: Ptr) -> bool {
     let word = e.tls() + TLS_FLAG_WORD;
     e.mem.u32(word) & 1 == 0
 }
@@ -8666,7 +8666,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             tes_data_handler_unload_cell(Ptr<TESDataHandler>, Ptr)
         ),
         entry!(0x004623f0, fn_004623f0(Ptr, u8) -> u8),
-        entry!(0x00462480, fn_00462480() -> bool),
+        entry!(0x00462480, fn_00462480(Ptr) -> bool),
         entry!(0x004624b0, fn_004624b0(Ptr<TESDataHandler>, Ptr) -> bool),
         entry!(
             0x00462d40,
@@ -11670,11 +11670,11 @@ mod tests {
     fn thread_flag_test_says_whether_bit_0_is_clear() {
         let mut e = Engine::new();
         let word = e.tls() + TLS_FLAG_WORD;
-        assert!(e.call(0x0046_2480, &args![]).bool());
+        assert!(e.call(0x0046_2480, &args![0u32]).bool());
         e.mem.set_u32(word, 1);
-        assert!(!e.call(0x0046_2480, &args![]).bool());
+        assert!(!e.call(0x0046_2480, &args![0u32]).bool());
         e.mem.set_u32(word, 0xfe);
-        assert!(e.call(0x0046_2480, &args![]).bool());
+        assert!(e.call(0x0046_2480, &args![0u32]).bool());
     }
 
     // The small accessors and wrappers.

@@ -1556,7 +1556,9 @@ pub fn queued_texture_queue_me(e: &mut Engine, this: Ptr<QueuedTexture>) {
             .u8();
         fn_0043c100(e, this, added);
     }
-    if fn_0043c130(e) != 0 {
+    // 0043c093: ECX is the model loader (`011c3b3c`).
+    let loader = e.global::<u32>(FILE_MAP_OWNER);
+    if fn_0043c130(e, Ptr::new(loader)) != 0 {
         fn_0043c0d0(e, this, 1);
     }
     let queue = e.global::<u32>(TASK_QUEUE);
@@ -1580,7 +1582,7 @@ pub fn fn_0043c100(e: &mut Engine, this: Ptr<QueuedTexture>, flag: u8) {
 // Translated from 0043c130 (decompiled, FalloutNV.exe 1.4.0.525)
 /// The byte at +0x25C of the thread's TLS block. (The code is a method of
 /// the object at `011c3b3c` but does not use `this`.)
-pub fn fn_0043c130(e: &mut Engine) -> u8 {
+pub fn fn_0043c130(e: &mut Engine, _this: Ptr) -> u8 {
     let address = e.tls() + TLS_QUEUED_FLAG;
     e.mem.u8(address)
 }
@@ -5069,7 +5071,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0043c050, queued_texture_queue_me(Ptr<QueuedTexture>)),
         entry!(0x0043c0d0, fn_0043c0d0(Ptr<QueuedTexture>, u8)),
         entry!(0x0043c100, fn_0043c100(Ptr<QueuedTexture>, u8)),
-        entry!(0x0043c130, fn_0043c130() -> u8),
+        entry!(0x0043c130, fn_0043c130(Ptr) -> u8),
         entry!(0x0043c150, queued_texture_run(Ptr<QueuedTexture>)),
         entry!(0x0043c3b0, fn_0043c3b0(Ptr) -> u32),
         entry!(0x0043c3d0, fn_0043c3d0(Ptr<QueuedTexture>) -> bool),
@@ -7206,10 +7208,10 @@ mod tests {
     #[test]
     fn thread_flag_is_the_tls_byte_at_0x25c() {
         let mut e = queue_engine();
-        assert_eq!(e.call(0x0043_c130, &args![]).u8(), 0);
+        assert_eq!(e.call(0x0043_c130, &args![0u32]).u8(), 0);
         let tls = e.tls();
         e.mem.set_u8(tls + 0x25c, 7);
-        assert_eq!(e.call(0x0043_c130, &args![]).u8(), 7);
+        assert_eq!(e.call(0x0043_c130, &args![0u32]).u8(), 7);
     }
 
     /// Doubles and objects for `Run`: the texture map finds nothing unless

@@ -26,6 +26,7 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 use crate::types::BSSimpleArray;
+use crate::units::crt::glue::alloca16_esp;
 
 /// Global holding the `CombatManager*` singleton.
 const COMBAT_MANAGER: u32 = 0x011f_1958;
@@ -2672,6 +2673,9 @@ pub fn fn_00989970(e: &mut Engine, this: Ptr<CombatGroup>, actor: Ptr, radius: f
     })
 }
 
+/// `CheckMemberTargetIntersection`'s fixed frame under `EBP` (`SUB ESP,0x104`).
+const INTERSECTION_FIXED_LOCALS: u32 = 0x104;
+
 // Translated from 009899a0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `CombatGroup::CheckMemberTargetIntersection` (Xbox PDB): whether the
 /// members and the targets lie on opposite sides of the group.
@@ -2684,6 +2688,14 @@ pub fn fn_00989970(e: &mut Engine, this: Ptr<CombatGroup>, actor: Ptr, radius: f
 /// product) are counted; the answer is true when those fractions are both
 /// above the `double` at `01026998` (0.33) or both below the one at
 /// `01051680` (0.67).
+///
+/// The frame is the exe's: `EBP` is the top of one `with_stack` block, the
+/// fixed locals sit under it (`SUB ESP,0x104`) and the two position tables
+/// (12 bytes an actor) come from `_alloca16` (`00ec5ec0`, the member table
+/// first from `ESP = EBP-0x104`, then the target table under it), placed with
+/// [`alloca16_esp`], so their addresses and 16-byte alignment are the exe's.
+/// The block holds the fixed locals, both tables and both alignment pads. The
+/// `/GS` cookie is not written.
 pub fn combat_group_check_member_target_intersection(
     e: &mut Engine,
     this: Ptr<CombatGroup>,
@@ -2693,96 +2705,107 @@ pub fn combat_group_check_member_target_intersection(
     if member_count == 0 || target_count == 0 || (member_count == 1 && target_count == 1) {
         return false;
     }
-    let member_positions = e.mem.alloc(12 * member_count);
-    let target_positions = e.mem.alloc(12 * target_count);
-    // The game's NiPoint3 locals, in one block of 0x60 bytes: +0x00 the
-    // sum (then centre) of the members, +0x0c of the targets, +0x18 of both,
-    // +0x24 the direction, +0x30 the offset from M to A, +0x3c the scaled
-    // direction, +0x48 the point P, +0x54 M - P, +0x60 a temporary.
-    let frame = e.mem.alloc(0x6c);
-    let member_sum: Ptr = Ptr::new(frame);
-    let target_sum: Ptr = Ptr::new(frame + 0x0c);
-    let total: Ptr = Ptr::new(frame + 0x18);
-    let direction: Ptr = Ptr::new(frame + 0x24);
-    let to_all: Ptr = Ptr::new(frame + 0x30);
-    let scaled: Ptr = Ptr::new(frame + 0x3c);
-    let behind_point: Ptr = Ptr::new(frame + 0x48);
-    let reference: Ptr = Ptr::new(frame + 0x54);
-    let temporary: Ptr = Ptr::new(frame + 0x60);
-    for sum in [member_sum, target_sum] {
-        for word in 0..3 {
-            let value = e.mem.u32(ZERO_POINT + 4 * word);
-            e.mem.set_u32(sum.addr() + 4 * word, value);
+    let block_size = INTERSECTION_FIXED_LOCALS
+        .wrapping_add(12u32.wrapping_mul(member_count.wrapping_add(target_count)))
+        .wrapping_add(0x20);
+    e.with_stack(block_size, |e, block| {
+        let ebp = block.addr().wrapping_add(block_size);
+        let member_positions = alloca16_esp(ebp - INTERSECTION_FIXED_LOCALS, 12 * member_count);
+        let target_positions = alloca16_esp(member_positions, 12 * target_count);
+        // The game's NiPoint3 locals under EBP: the sum (then centre) of the
+        // members, of the targets and of both, the direction, the offset from M to
+        // A, the scaled direction, the point P, M - P, and the temporaries of the
+        // member and the target loops (00989adc..00989d2b).
+        let member_sum: Ptr = Ptr::new(ebp - 0x4c);
+        let target_sum: Ptr = Ptr::new(ebp - 0x74);
+        let total: Ptr = Ptr::new(ebp - 0x80);
+        let direction: Ptr = Ptr::new(ebp - 0x24);
+        let to_all: Ptr = Ptr::new(ebp - 0x5c);
+        let scaled: Ptr = Ptr::new(ebp - 0xc0);
+        let behind_point: Ptr = Ptr::new(ebp - 0x30);
+        let reference: Ptr = Ptr::new(ebp - 0x14);
+        let member_temporary: Ptr = Ptr::new(ebp - 0xa0);
+        let target_temporary: Ptr = Ptr::new(ebp - 0xb0);
+        for sum in [member_sum, target_sum] {
+            for word in 0..3 {
+                let value = e.mem.u32(ZERO_POINT + 4 * word);
+                e.mem.set_u32(sum.addr() + 4 * word, value);
+            }
         }
-    }
-    for index in 0..member_count {
-        let actor = e.call(MEMBER_ACTOR_AT, &args![this, index]).u32();
-        let found = e.vcall(actor, 0x1f4, &args![]).u32();
-        let slot = Ptr::new(member_positions + 12 * index);
-        copy_point(e, slot, found);
-        e.call(POINT_ACCUMULATE, &args![member_sum, slot]);
-    }
-    for index in 0..target_count {
-        let actor = e.call(TARGET_ACTOR_AT, &args![this, index]).u32();
-        let found = e.vcall(actor, 0x1f4, &args![]).u32();
-        let slot = Ptr::new(target_positions + 12 * index);
-        copy_point(e, slot, found);
-        e.call(POINT_ACCUMULATE, &args![target_sum, slot]);
-    }
-    e.call(POINT_ADD, &args![member_sum, total, target_sum]);
-    e.call(
-        POINT_DIVIDE_IN_PLACE,
-        &args![member_sum, member_count as f32],
-    );
-    e.call(
-        POINT_DIVIDE_IN_PLACE,
-        &args![target_sum, target_count as f32],
-    );
-    e.call(
-        POINT_DIVIDE_IN_PLACE,
-        &args![total, member_count.wrapping_add(target_count) as f32],
-    );
-    e.call(POINT_SUBTRACT, &args![target_sum, direction, member_sum]);
-    e.call(POINT_SUBTRACT, &args![total, to_all, member_sum]);
-    let along = e.call(POINT_DOT, &args![to_all, direction]).f32();
-    let distance = e.call(SQUARE_ROOT, &args![along]).f32();
-    e.call(POINT_UNITIZE_GET_LENGTH, &args![direction]);
-    let scaled = e
-        .call(POINT_SCALE, &args![direction, scaled, distance])
-        .u32();
-    e.call(POINT_ADD, &args![member_sum, behind_point, scaled]);
-    e.call(POINT_SUBTRACT, &args![member_sum, reference, behind_point]);
-    let mut members_behind = 0u32;
-    for index in 0..member_count {
+        for index in 0..member_count {
+            let actor = e.call(MEMBER_ACTOR_AT, &args![this, index]).u32();
+            let found = e.vcall(actor, 0x1f4, &args![]).u32();
+            let slot = Ptr::new(member_positions + 12 * index);
+            copy_point(e, slot, found);
+            e.call(POINT_ACCUMULATE, &args![member_sum, slot]);
+        }
+        for index in 0..target_count {
+            let actor = e.call(TARGET_ACTOR_AT, &args![this, index]).u32();
+            let found = e.vcall(actor, 0x1f4, &args![]).u32();
+            let slot = Ptr::new(target_positions + 12 * index);
+            copy_point(e, slot, found);
+            e.call(POINT_ACCUMULATE, &args![target_sum, slot]);
+        }
+        e.call(POINT_ADD, &args![member_sum, total, target_sum]);
         e.call(
-            POINT_SUBTRACT,
-            &args![member_positions + 12 * index, temporary, behind_point],
+            POINT_DIVIDE_IN_PLACE,
+            &args![member_sum, member_count as f32],
         );
-        let dot = e.call(POINT_DOT, &args![temporary, reference]).f32();
-        if (dot as f64) < e.global::<f64>(ZERO_DOUBLE) {
-            members_behind += 1;
-        }
-    }
-    let mut targets_behind = 0u32;
-    for index in 0..target_count {
         e.call(
-            POINT_SUBTRACT,
-            &args![target_positions + 12 * index, temporary, behind_point],
+            POINT_DIVIDE_IN_PLACE,
+            &args![target_sum, target_count as f32],
         );
-        let dot = e.call(POINT_DOT, &args![temporary, reference]).f32();
-        if (dot as f64) < e.global::<f64>(ZERO_DOUBLE) {
-            targets_behind += 1;
+        e.call(
+            POINT_DIVIDE_IN_PLACE,
+            &args![total, member_count.wrapping_add(target_count) as f32],
+        );
+        e.call(POINT_SUBTRACT, &args![target_sum, direction, member_sum]);
+        e.call(POINT_SUBTRACT, &args![total, to_all, member_sum]);
+        let along = e.call(POINT_DOT, &args![to_all, direction]).f32();
+        let distance = e.call(SQUARE_ROOT, &args![along]).f32();
+        e.call(POINT_UNITIZE_GET_LENGTH, &args![direction]);
+        let scaled = e
+            .call(POINT_SCALE, &args![direction, scaled, distance])
+            .u32();
+        e.call(POINT_ADD, &args![member_sum, behind_point, scaled]);
+        e.call(POINT_SUBTRACT, &args![member_sum, reference, behind_point]);
+        let mut members_behind = 0u32;
+        for index in 0..member_count {
+            e.call(
+                POINT_SUBTRACT,
+                &args![
+                    member_positions + 12 * index,
+                    member_temporary,
+                    behind_point
+                ],
+            );
+            let dot = e.call(POINT_DOT, &args![member_temporary, reference]).f32();
+            if (dot as f64) < e.global::<f64>(ZERO_DOUBLE) {
+                members_behind += 1;
+            }
         }
-    }
-    let member_fraction = (members_behind as f64 / member_count as f64) as f32 as f64;
-    let target_fraction = (targets_behind as f64 / target_count as f64) as f32 as f64;
-    let low: f64 = e.global(FRACTION_LOW);
-    let high: f64 = e.global(FRACTION_HIGH);
-    e.mem.free(frame);
-    e.mem.free(target_positions);
-    e.mem.free(member_positions);
-    (member_fraction > low && target_fraction > low)
-        || (member_fraction < high && target_fraction < high)
+        let mut targets_behind = 0u32;
+        for index in 0..target_count {
+            e.call(
+                POINT_SUBTRACT,
+                &args![
+                    target_positions + 12 * index,
+                    target_temporary,
+                    behind_point
+                ],
+            );
+            let dot = e.call(POINT_DOT, &args![target_temporary, reference]).f32();
+            if (dot as f64) < e.global::<f64>(ZERO_DOUBLE) {
+                targets_behind += 1;
+            }
+        }
+        let member_fraction = (members_behind as f64 / member_count as f64) as f32 as f64;
+        let target_fraction = (targets_behind as f64 / target_count as f64) as f32 as f64;
+        let low: f64 = e.global(FRACTION_LOW);
+        let high: f64 = e.global(FRACTION_HIGH);
+        (member_fraction > low && target_fraction > low)
+            || (member_fraction < high && target_fraction < high)
+    })
 }
 
 /// Builds the box of the actors of `count_at` / `actor_at` (the group's
@@ -8910,6 +8933,30 @@ mod tests {
         // behind it (0.5 and 1.0).
         let group = sides(&mut e, &[0.0, 100.0], &[20.0, 30.0]);
         assert!(combat_group_check_member_target_intersection(&mut e, group));
+    }
+
+    #[test]
+    fn member_target_intersection_places_its_alloca16_tables_as_the_exe_does() {
+        let mut e = geometry_engine();
+        let group = sides(&mut e, &[0.0, 2.0], &[10.0, 12.0]);
+        // Two members and two targets: the block holds 0x104 bytes of fixed
+        // locals, 2 * 24 bytes of tables and both pads.
+        let size = INTERSECTION_FIXED_LOCALS + 2 * 24 + 0x20;
+        let block = e.mem.alloc(size);
+        e.mem.free(block);
+        let ebp = block + size;
+        combat_group_check_member_target_intersection(&mut e, group);
+        // `_alloca16` from ESP = EBP-0x104, then from the member table.
+        let members = (ebp - 0x104 - 24) & !0xf;
+        let targets = (members - 24) & !0xf;
+        assert!(targets >= block);
+        let xs = |e: &Engine, table: u32| [e.mem.f32(table), e.mem.f32(table + 12)];
+        assert_eq!(xs(&e, members), [0.0, 2.0]);
+        assert_eq!(xs(&e, targets), [10.0, 12.0]);
+        // The centres in the fixed locals under EBP.
+        assert_eq!(e.mem.f32(ebp - 0x4c), 1.0);
+        assert_eq!(e.mem.f32(ebp - 0x74), 11.0);
+        assert_eq!(e.mem.f32(ebp - 0x80), 6.0);
     }
 
     #[test]

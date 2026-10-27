@@ -547,7 +547,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e7_f610, fn_00e7f610()),
         entry!(0x00e7_f750, fn_00e7f750(u32)),
         entry!(0x00e7_f790, fn_00e7f790(Ptr)),
-        entry!(0x00e7_f7c0, fn_00e7f7c0() -> u32),
+        entry!(0x00e7_f7c0, fn_00e7f7c0(Ptr) -> u32),
     ]
 }
 
@@ -666,7 +666,7 @@ pub fn fn_00e7f790(e: &mut Engine, this: Ptr) {
 
 // Translated from 00e7f7c0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map (`run_00e7ef80`), no arguments: answers the word at `0126f728`.
-pub fn fn_00e7f7c0(e: &mut Engine) -> u32 {
+pub fn fn_00e7f7c0(e: &mut Engine, _this: Ptr) -> u32 {
     e.mem.u32(0x0126_f728)
 }
 
@@ -1271,7 +1271,7 @@ mod b052_tests {
     fn fn_00e7f7c0_reads_the_word() {
         let mut e = engine();
         e.mem.set_u32(0x0126_f728, 0x1234);
-        assert_eq!(e.call(0x00e7_f7c0, &args![]).u32(), 0x1234);
+        assert_eq!(e.call(0x00e7_f7c0, &args![0u32]).u32(), 0x1234);
     }
 }
 

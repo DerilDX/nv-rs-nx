@@ -25,9 +25,11 @@ const OFFSET: u32 = 0x0101_ff40;
 /// * `i - 1` when `0.0 < a` and `v != a` (x87 compares; `a` is positive here so not a NaN);
 /// * `i` otherwise.
 pub fn fn_00dddc40(e: &mut Engine, points: u32) -> u32 {
-    let scratch = e.mem.alloc(8);
-    let angle = e.call(ANGLE, &args![points, scratch, scratch + 4]).f64();
-    e.mem.free(scratch);
+    // The exe's frame (`SUB ESP,0x8`): the two out words at +0 and +0x4 (00dddc47).
+    let angle = e.with_stack(8, |e, scratch| {
+        let scratch = scratch.addr();
+        e.call(ANGLE, &args![points, scratch, scratch + 4]).f64()
+    });
     let angle = x87_load32(x87_to_float(angle).to_bits());
     let step = e.mem.f64(STEP);
     let offset = e.mem.f64(OFFSET);
@@ -130,10 +132,14 @@ mod tests {
             seen.borrow_mut().push(a.to_vec());
             Ret::default()
         });
+        // The two out words are the exe's whole 8-byte frame.
+        let frame = e.mem.alloc(8);
+        e.mem.free(frame);
         e.call(0x00dd_dc40, &args![0x1234u32]);
         let log = log.borrow();
         assert_eq!(log.len(), 1);
         assert_eq!(log[0][0], 0x1234);
         assert_eq!(log[0][2], log[0][1] + 4);
+        assert_eq!(log[0][1], frame);
     }
 }

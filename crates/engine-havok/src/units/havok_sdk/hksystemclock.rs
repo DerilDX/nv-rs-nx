@@ -65,41 +65,51 @@ fn unsigned_as_double(value: u64) -> f64 {
 /// stack) replaces the smallest so far, starting from 1000000.0, only when it is smaller (a
 /// NaN never is). The result is that smallest ratio times the performance frequency now in the
 /// cached word, converted to 64 bits by `00ec62f6` and stored there.
-pub fn hk_windows_system_clock_get_ticks_per_second(e: &mut Engine, this: Ptr) {
+///
+/// Answers the cached word in `EDX:EAX` on both paths: the exe loads it into `EAX`/`EDX` first
+/// and leaves them on the early return, and the measured rate is the `00ec62f6` result it stores
+/// (`getTicksPerSecond` answers an `hkUint64`).
+pub fn hk_windows_system_clock_get_ticks_per_second(e: &mut Engine, this: Ptr) -> u64 {
     let low = e.mem.u32(CACHED_TICKS_PER_SECOND);
     let high = e.mem.u32(CACHED_TICKS_PER_SECOND + 4);
     if low | high != 0 {
-        return;
+        return u64::from(high) << 32 | u64::from(low);
     }
     let mut smallest = e.mem.f64(INITIAL_RATIO);
-    let scratch = e.mem.alloc(8);
-    for _ in 0..MEASUREMENTS {
-        let first = e.vcall(this.addr(), 0xc, &args![]).u64();
-        e.call(QUERY_PERFORMANCE_COUNTER, &args![scratch]);
-        let start = e.mem.u64(scratch);
-        let mut spin: u32 = 1;
-        for _ in 0..BUSY_LOOP_ITERATIONS {
-            spin = spin.wrapping_mul(spin).wrapping_add(spin);
+    // The exe's frame (`AND ESP,0xfffffff8`, `SUB ESP,0x48`, four pushes): 0x58 bytes from an
+    // 8-byte boundary; the busy loop's word at +0x10 (00dd8e74), the end counter at +0x28
+    // (00dd8ea2) and the start counter at +0x30 (00dd8e63).
+    e.with_stack(0x58 + 8, |e, raw| {
+        let frame = (raw.addr() + 7) & !7;
+        let (spin_at, end_at, start_at) = (frame + 0x10, frame + 0x28, frame + 0x30);
+        for _ in 0..MEASUREMENTS {
+            let first = e.vcall(this.addr(), 0xc, &args![]).u64();
+            e.call(QUERY_PERFORMANCE_COUNTER, &args![start_at]);
+            let start = e.mem.u64(start_at);
+            let mut spin: u32 = 1;
+            for _ in 0..BUSY_LOOP_ITERATIONS {
+                spin = spin.wrapping_mul(spin).wrapping_add(spin);
+            }
+            e.mem.set_u32(spin_at, spin);
+            let second = e.vcall(this.addr(), 0xc, &args![]).u64();
+            e.call(QUERY_PERFORMANCE_COUNTER, &args![end_at]);
+            let end = e.mem.u64(end_at);
+            e.call(QUERY_PERFORMANCE_FREQUENCY, &args![CACHED_TICKS_PER_SECOND]);
+            let ticks = unsigned_as_double(second.wrapping_sub(first));
+            let performance = unsigned_as_double(end.wrapping_sub(start));
+            let ratio = x87_div(ticks, performance);
+            if smallest > ratio {
+                smallest = ratio;
+            }
         }
-        e.mem.set_u32(scratch + 4, spin);
-        let second = e.vcall(this.addr(), 0xc, &args![]).u64();
-        e.call(QUERY_PERFORMANCE_COUNTER, &args![scratch]);
-        let end = e.mem.u64(scratch);
-        e.call(QUERY_PERFORMANCE_FREQUENCY, &args![CACHED_TICKS_PER_SECOND]);
-        let ticks = unsigned_as_double(second.wrapping_sub(first));
-        let performance = unsigned_as_double(end.wrapping_sub(start));
-        let ratio = x87_div(ticks, performance);
-        if smallest > ratio {
-            smallest = ratio;
-        }
-    }
-    e.mem.free(scratch);
+    });
     let frequency = u64::from(e.mem.u32(CACHED_TICKS_PER_SECOND + 4)) << 32
         | u64::from(e.mem.u32(CACHED_TICKS_PER_SECOND));
     let product = x87_mul(smallest, unsigned_as_double(frequency));
     let rate = e.call(FLOAT_TO_INT64, &args![product]);
     e.mem.set_u32(CACHED_TICKS_PER_SECOND, rate.eax);
     e.mem.set_u32(CACHED_TICKS_PER_SECOND + 4, rate.edx);
+    u64::from(rate.edx) << 32 | u64::from(rate.eax)
 }
 
 /// This unit's translated functions, by exe address.
@@ -108,7 +118,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00dd8e00, hk_windows_system_clock_get_tick_counter(Ptr) -> u64),
         entry!(
             0x00dd8e20,
-            hk_windows_system_clock_get_ticks_per_second(Ptr)
+            hk_windows_system_clock_get_ticks_per_second(Ptr) -> u64
         ),
     ]
 }
@@ -216,7 +226,21 @@ mod tests {
             [100; 10],
         );
         let (mut e, clock, calls) = world(counters, counts, 2_000_000);
+        // The start counter at +0x30, the end counter at +0x28 of the exe's 8-aligned frame.
+        let block = e.mem.alloc(0x60);
+        e.mem.free(block);
+        let frame = (block + 7) & !7;
+        e.call_log = Some(vec![]);
         e.call(0x00dd_8e20, &args![clock]);
+        let counted: Vec<u32> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == QUERY_PERFORMANCE_COUNTER)
+            .map(|c| c.1[0])
+            .collect();
+        assert_eq!(counted[..2], [frame + 0x30, frame + 0x28]);
         assert_eq!(cached(&e), 8_000_000);
         // `QueryPerformanceFrequency` was asked ten times, writing into the cached word.
         let asked = calls.borrow();
@@ -235,6 +259,23 @@ mod tests {
         let (mut e, clock, _) = world(counters, counts, 3);
         e.call(0x00dd_8e20, &args![clock]);
         assert_eq!(cached(&e), 3_000_000);
+    }
+
+    #[test]
+    fn the_rate_is_answered_measured_or_cached() {
+        let (counters, counts) = measurements(
+            [10_000_000, 0, 10_000_000, 0, 0, 0, 0, 0, 0, 0],
+            [1, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+        );
+        let (mut e, clock, _) = world(counters, counts, 3);
+        assert_eq!(e.call(0x00dd_8e20, &args![clock]).u64(), 3_000_000);
+        // The second call finds the cached word and answers it unchanged.
+        e.mem.set_u32(CACHED_TICKS_PER_SECOND, 0x89ab_cdef);
+        e.mem.set_u32(CACHED_TICKS_PER_SECOND + 4, 0x0123_4567);
+        assert_eq!(
+            e.call(0x00dd_8e20, &args![clock]).u64(),
+            0x0123_4567_89ab_cdef
+        );
     }
 
     #[test]

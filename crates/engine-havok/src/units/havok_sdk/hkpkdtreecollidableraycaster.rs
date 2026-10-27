@@ -45,10 +45,13 @@ pub fn hk_kd_tree_bundle_cast_collector_scalar_deleting_destructor(
 // Translated from 00d979c0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkpKdTreeCollidableRaycaster::hasHit` (Xbox PDB): writes to the byte at `out` whether the
 /// hit record at `this + 0x10` has a collidable (its word at `+0x50`) set.
-pub fn hkp_kd_tree_collidable_raycaster_has_hit(e: &mut Engine, this: Ptr, out: Ptr) {
+/// Answers `out`: the exe leaves it in `EAX` at every `RET` (the hkBool/hkResult result
+/// returned through a pointer, which callers read through `EAX`).
+pub fn hkp_kd_tree_collidable_raycaster_has_hit(e: &mut Engine, this: Ptr, out: Ptr) -> Ptr {
     let hit = e.mem.u32(this.addr() + 0x10);
     let found = e.mem.u32(hit + HIT_COLLIDABLE) != 0;
     e.mem.set_u8(out.addr(), u8::from(found));
+    out
 }
 
 // Translated from 00d979e0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -114,12 +117,14 @@ impl Frame {
 /// called with `(byte, ray, hit record)` and when the byte it sets is non-zero the candidate
 /// is stored at `hit + 0x50`, the normal at `hit` is rotated back through the rows and
 /// the result is 1.
+/// Answers `result`: the exe leaves it in `EAX` at every `RET` (the hkBool result returned
+/// through a pointer), and virtual call sites test the flag through `EAX` (e.g. 00d1b726).
 pub fn hkp_kd_tree_collidable_raycaster_add_mid_phase_hit(
     e: &mut Engine,
     this: Ptr,
     result: Ptr,
     candidate: Ptr,
-) {
+) -> Ptr {
     let this = this.addr();
     let candidate = candidate.addr();
     let object = e.mem.u32(candidate);
@@ -168,6 +173,7 @@ pub fn hkp_kd_tree_collidable_raycaster_add_mid_phase_hit(
         false
     });
     e.mem.set_u8(result.addr(), u8::from(!reject));
+    result
 }
 
 /// The four 0x30-byte rays of a bundle: ray `i` has its start at `+0x30 * i` and its end at
@@ -346,7 +352,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x00d9_79c0,
-            hkp_kd_tree_collidable_raycaster_has_hit(Ptr, Ptr)
+            hkp_kd_tree_collidable_raycaster_has_hit(Ptr, Ptr) -> Ptr
         ),
         entry!(
             0x00d9_79e0,
@@ -358,7 +364,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x00d9_7a40,
-            hkp_kd_tree_collidable_raycaster_add_mid_phase_hit(Ptr, Ptr, Ptr)
+            hkp_kd_tree_collidable_raycaster_add_mid_phase_hit(Ptr, Ptr, Ptr) -> Ptr
         ),
         entry!(
             0x00d9_7c90,
@@ -523,6 +529,18 @@ mod tests {
     }
 
     #[test]
+    fn fn_00d979c0_answers_its_result_pointer() {
+        let mut e = engine();
+        let hit = e.mem.alloc(0x60);
+        let this = e.mem.alloc(0x20);
+        e.mem.set_u32(this + 0x10, hit);
+        let out = e.mem.alloc(4);
+        e.mem.set_u8(out, 0xee);
+        // The exe leaves the result pointer in EAX at every RET; callers read through it.
+        assert_eq!(e.call(0x00d9_79c0, &args![this, out]).u32(), args![out][0]);
+    }
+
+    #[test]
     fn get_hit_fraction_00d979e0_loads_the_fraction_quietly() {
         let mut e = engine();
         let hit = e.mem.alloc(0x60);
@@ -563,6 +581,20 @@ mod tests {
         e.call(0x00d9_7a40, &args![s.this, s.result, s.candidate]);
         assert_eq!(e.mem.u8(s.result), 0);
         assert!(log.borrow().is_empty());
+    }
+
+    #[test]
+    fn fn_00d97a40_answers_its_result_pointer() {
+        let mut e = engine();
+        let log = new_log();
+        let s = setup(&mut e, &log, 0, 0);
+        e.mem.set_u32(s.candidate, 0);
+        // The exe leaves the result pointer in EAX at every RET; callers read through it.
+        assert_eq!(
+            e.call(0x00d9_7a40, &args![s.this, s.result, s.candidate])
+                .u32(),
+            args![s.result][0]
+        );
     }
 
     #[test]

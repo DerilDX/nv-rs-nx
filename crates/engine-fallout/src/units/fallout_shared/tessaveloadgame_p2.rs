@@ -618,7 +618,7 @@ pub fn tes_save_load_game_save_numeric_id_arrays(
 /// Pokes the `TES` object (`00457d70(tes, 1, 0, 0)`) when more than 3000 ms
 /// have passed since the tick count kept in `011de464` and the loading menu
 /// is not visible (`Interface::GetLoadingMenuVisible`).
-pub fn fn_00861ea0(e: &mut Engine) {
+pub fn fn_00861ea0(e: &mut Engine, _this: Ptr<TESSaveLoadGame>) {
     let now = e.call(GET_TICK_COUNT_IMPORT, &args![]).u32();
     let last: u32 = e.global(LAST_POKE_TICK);
     if now > last.wrapping_add(POKE_INTERVAL) && !e.call(LOADING_MENU_VISIBLE, &args![]).bool() {
@@ -739,7 +739,10 @@ pub fn fn_008620f0(e: &mut Engine, this: Ptr<TESSaveLoadGame>) {
 // Translated from 00862110 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `TESSaveLoadGame::UseSaveGameBlocks` (Xbox PDB): whether the current
 /// version of the game's `TESSaveLoadGame` (`011de45c`) is from 0x1F to 0x59.
-pub fn tes_save_load_game_use_save_game_blocks(e: &mut Engine) -> bool {
+pub fn tes_save_load_game_use_save_game_blocks(
+    e: &mut Engine,
+    _this: Ptr<TESSaveLoadGame>,
+) -> bool {
     let game: u32 = e.global(SAVE_LOAD_GAME);
     let version = e.call(CURRENT_VERSION, &args![game]).u8();
     if version < 0x1F {
@@ -2045,7 +2048,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00861d10,
             tes_save_load_game_save_numeric_id_arrays(Ptr<TESSaveLoadGame>, Ptr)
         ),
-        entry!(0x00861ea0, fn_00861ea0()),
+        entry!(0x00861ea0, fn_00861ea0(Ptr<TESSaveLoadGame>)),
         entry!(0x00861ee0, fn_00861ee0(Ptr<TESSaveLoadGame>, u8)),
         entry!(
             0x00861f20,
@@ -2054,7 +2057,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x008620f0, fn_008620f0(Ptr<TESSaveLoadGame>)),
         entry!(
             0x00862110,
-            tes_save_load_game_use_save_game_blocks() -> bool
+            tes_save_load_game_use_save_game_blocks(Ptr<TESSaveLoadGame>) -> bool
         ),
         entry!(0x00862150, fn_00862150(Ptr<TESSaveLoadGame>, Ptr)),
         entry!(0x008622a0, fn_008622a0(Ptr<TESSaveLoadGame>) -> u32),
@@ -2797,7 +2800,7 @@ mod tests {
             constant(&mut e, GET_TICK_COUNT_IMPORT, now);
             constant(&mut e, LOADING_MENU_VISIBLE, visible);
             stub(&mut e, TES_LOAD_SCREEN_POKE);
-            fn_00861ea0(&mut e);
+            fn_00861ea0(&mut e, Ptr::new(0));
             calls_to(&e, TES_LOAD_SCREEN_POKE)
         };
         assert_eq!(run(4001, 0), vec![vec![0x0555_5000, 1, 0, 0]]);
@@ -2960,7 +2963,7 @@ mod tests {
         let with_version = |version: u32| {
             let mut e = game();
             constant(&mut e, CURRENT_VERSION, version);
-            tes_save_load_game_use_save_game_blocks(&mut e)
+            tes_save_load_game_use_save_game_blocks(&mut e, Ptr::new(0))
         };
         assert!(!with_version(0x1E));
         assert!(with_version(0x1F));

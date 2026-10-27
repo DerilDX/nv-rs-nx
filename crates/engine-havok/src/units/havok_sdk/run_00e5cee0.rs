@@ -9649,7 +9649,9 @@ pub fn fn_00e608d0(e: &mut Engine, this: Ptr, direction: Ptr, out: Ptr) {
 /// method at `+0x20` (`first`, `second`); the index of the last piece that answers is stored at
 /// `second + 0x20 + counter * 4`; the counter is decremented, a closing record is written and
 /// `*result` is whether a piece answered.
-pub fn fn_00e609c0(e: &mut Engine, this: Ptr, result: Ptr, first: Ptr, second: Ptr) {
+/// Answers `result`: the exe leaves it in `EAX` at every `RET` (the hkBool/hkResult result
+/// returned through a pointer, which callers read through `EAX`).
+pub fn fn_00e609c0(e: &mut Engine, this: Ptr, result: Ptr, first: Ptr, second: Ptr) -> Ptr {
     e.with_stack(0x500, |e, frame| {
         let mut esp = frame.addr() + 0x400;
         e.mem.set_u32(esp.wrapping_add(4), result.addr());
@@ -9941,7 +9943,8 @@ pub fn fn_00e609c0(e: &mut Engine, this: Ptr, result: Ptr, first: Ptr, second: P
                 _ => unreachable!("no block at {pc:08x}"),
             }
         }
-    })
+    });
+    result
 }
 
 #[allow(
@@ -10327,7 +10330,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e607c0, fn_00e607c0(Ptr, f32) -> Ptr),
         entry!(0x00e60800, fn_00e60800(Ptr, Ptr, f32, Ptr)),
         entry!(0x00e608d0, fn_00e608d0(Ptr, Ptr, Ptr)),
-        entry!(0x00e609c0, fn_00e609c0(Ptr, Ptr, Ptr, Ptr)),
+        entry!(0x00e609c0, fn_00e609c0(Ptr, Ptr, Ptr, Ptr) -> Ptr),
         entry!(0x00e60b00, fn_00e60b00(Ptr, Ptr, Ptr, u32)),
         entry!(0x00e60c20, fn_00e60c20(Ptr, u8) -> Ptr),
     ]
@@ -10904,6 +10907,21 @@ mod tests {
         assert_eq!(e.mem.u32(STREAM + 4), STREAM + 0x40 + 24);
         assert_eq!(e.mem.u32(STREAM + 0x40), 0x010e_ce74);
         assert_eq!(e.mem.u32(STREAM + 0x4c), 0x010c_41f8);
+    }
+
+    #[test]
+    fn query_over_the_pieces_answers_its_result_pointer() {
+        let mut e = Engine::new();
+        logging(&mut e);
+        monitor(&mut e);
+        let (this, first, second) = piece_world(&mut e, &[10, 20, 30]);
+        e.register(0x7500_1010, |e, a| {
+            e.mem.set_u8(a[1], 0);
+            Ret::default()
+        });
+        let result = Ptr::new(e.mem.alloc(8));
+        // EAX is `result` at the RET (the hkBool result pointer the caller reads through).
+        assert_eq!(fn_00e609c0(&mut e, this, result, first, second), result);
     }
 
     #[test]

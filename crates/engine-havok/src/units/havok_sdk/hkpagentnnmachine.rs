@@ -23,6 +23,22 @@ use super::hkpagent1nmachineprocess::{
     TRANSFORM_SET_MUL_INVERSE_MUL,
 };
 
+/// Runs `f` on an exe-shaped frame: a function that aligns `ESP` (`AND ESP,0xfffffff0`) and
+/// then reserves `below` bytes (its `SUB ESP` and pushes) has its frame `below` bytes under a
+/// 16-byte boundary; `f` gets the frame's lowest address.
+fn with_aligned_frame<R>(e: &mut Engine, below: u32, f: impl FnOnce(&mut Engine, u32) -> R) -> R {
+    e.with_stack(below + 0x10, |e, raw| {
+        let boundary = (raw.addr() + below + 0xf) & !0xf;
+        f(e, boundary - below)
+    })
+}
+
+/// The frame base [`with_aligned_frame`] picks for a block at `raw` (tests).
+#[cfg(test)]
+fn aligned_frame_at(raw: u32, below: u32) -> u32 {
+    ((raw + below + 0xf) & !0xf) - below
+}
+
 /// Size of an agent entry and of a sector (four entries).
 const ENTRY_SIZE: u32 = 0x80;
 const SECTOR_SIZE: u32 = 0x200;
@@ -368,13 +384,6 @@ pub fn hk_agent_machine_process_transformed_shapes(
     Ptr::new(body)
 }
 
-/// Gives back the scratch buffers of `hk_agent_nn_machine_update_shape_collection_filter`.
-fn free_scratch(e: &mut Engine, blocks: Vec<u32>) {
-    for block in blocks {
-        e.mem.free(block);
-    }
-}
-
 // Translated from 00cfeba0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkAgentNnMachine_UpdateShapeCollectionFilter` (Xbox PDB): for the entry's type (2, 6 → agent
 /// data at +0x20; 4 → +0x30) calls the dispatcher's update function (record +0x16c8; the
@@ -389,64 +398,59 @@ pub fn hk_agent_nn_machine_update_shape_collection_filter(
     input: Ptr,
     argument: u32,
 ) {
-    let me = entry.addr();
-    let mut kind = u32::from(e.mem.u8(me));
-    let mut first = e.mem.u32(me + 0x10);
-    let mut second = e.mem.u32(me + 0x14);
-    let mut scratch = Vec::new();
-    let agent_data = loop {
-        match kind {
-            2 | 6 => break me + 0x20,
-            4 => break me + 0x30,
-            10 | 12 | 14 => {
-                let first_bodies = e.mem.alloc(0x40);
-                let first_transforms = e.mem.alloc(0x2c0);
-                let second_bodies = e.mem.alloc(0x40);
-                let second_transforms = e.mem.alloc(0x2c0);
-                let changed = e.mem.alloc(8);
-                scratch.extend([
-                    first_bodies,
-                    first_transforms,
-                    second_bodies,
-                    second_transforms,
-                    changed,
-                ]);
-                first = hk_agent_machine_process_transformed_shapes(
-                    e,
-                    Ptr::new(first),
-                    Ptr::new(first_bodies),
-                    Ptr::new(first_transforms),
-                    4,
-                    Ptr::new(changed),
-                )
-                .addr();
-                second = hk_agent_machine_process_transformed_shapes(
-                    e,
-                    Ptr::new(second),
-                    Ptr::new(second_bodies),
-                    Ptr::new(second_transforms),
-                    4,
-                    Ptr::new(changed),
-                )
-                .addr();
-                kind &= 0xf7;
+    // The exe aligns ESP, then `SUB ESP,0x614` and three pushes: a 0x620-byte frame with the
+    // changed flag at +0x1b, the body arrays at +0x20 and +0x60 and the transform arrays at +0xa0
+    // and +0x360 (00cfebe1..00cfec13).
+    with_aligned_frame(e, 0x620, |e, frame| {
+        let me = entry.addr();
+        let mut kind = u32::from(e.mem.u8(me));
+        let mut first = e.mem.u32(me + 0x10);
+        let mut second = e.mem.u32(me + 0x14);
+        let agent_data = loop {
+            match kind {
+                2 | 6 => break me + 0x20,
+                4 => break me + 0x30,
+                10 | 12 | 14 => {
+                    let first_bodies = frame + 0x20;
+                    let first_transforms = frame + 0xa0;
+                    let second_bodies = frame + 0x60;
+                    let second_transforms = frame + 0x360;
+                    let changed = frame + 0x1b;
+                    first = hk_agent_machine_process_transformed_shapes(
+                        e,
+                        Ptr::new(first),
+                        Ptr::new(first_bodies),
+                        Ptr::new(first_transforms),
+                        4,
+                        Ptr::new(changed),
+                    )
+                    .addr();
+                    second = hk_agent_machine_process_transformed_shapes(
+                        e,
+                        Ptr::new(second),
+                        Ptr::new(second_bodies),
+                        Ptr::new(second_transforms),
+                        4,
+                        Ptr::new(changed),
+                    )
+                    .addr();
+                    kind &= 0xf7;
+                }
+                _ => {
+                    return;
+                }
             }
-            _ => {
-                free_scratch(e, scratch);
-                return;
-            }
+        };
+        let dispatcher = e.mem.u32(input.addr());
+        let function = dispatcher_function(e, me, dispatcher, 0x16c8);
+        if function != 0 {
+            let partner_data = e.mem.u32(me + 8);
+            e.call(
+                function,
+                &args![me, agent_data, first, second, input, partner_data, argument],
+            );
         }
-    };
-    let dispatcher = e.mem.u32(input.addr());
-    let function = dispatcher_function(e, me, dispatcher, 0x16c8);
-    if function != 0 {
-        let partner_data = e.mem.u32(me + 8);
-        e.call(
-            function,
-            &args![me, agent_data, first, second, input, partner_data, argument],
-        );
-    }
-    free_scratch(e, scratch);
+    })
 }
 
 // Translated from 00cfea30 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1723,6 +1727,32 @@ mod tests {
         assert_eq!(e.mem.u32(calls[0][2]), scene.child);
         assert_eq!(calls[0][3], plain);
         assert_eq!(calls_to(&log, QUATERNION_SET_MUL).len(), 2);
+    }
+
+    #[test]
+    fn the_resolved_bodies_sit_in_the_aligned_exe_frame() {
+        let mut e = engine();
+        let log = new_log();
+        record(&mut e, &log, AGENT_FUNCTION, 0);
+        record(&mut e, &log, QUATERNION_SET_MUL, 0);
+        let dispatcher = make_dispatcher(&mut e, AGENT_FUNCTION);
+        let input = e.mem.alloc(8);
+        e.mem.set_u32(input, dispatcher);
+        let scene = transform_scene(&mut e);
+        let plain_shape = e.mem.alloc(0x40);
+        e.mem.set_u32(plain_shape + 0xc, 5);
+        let plain = e.mem.alloc(0x10);
+        e.mem.set_u32(plain, plain_shape);
+        let entry = make_entry(&mut e, 12);
+        e.mem.set_u32(entry + 0x10, scene.body);
+        e.mem.set_u32(entry + 0x14, plain);
+        let raw = e.mem.alloc(0x630);
+        e.mem.free(raw);
+        e.call(0x00cf_eba0, &args![entry, input, 0x99u32]);
+        let frame = aligned_frame_at(raw, 0x620);
+        // The first shape resolves into the first body array at +0x20.
+        let resolved = calls_to(&log, AGENT_FUNCTION)[0][2];
+        assert!((frame + 0x20..frame + 0x60).contains(&resolved));
     }
 
     // ---- InvalidateTimInAgent, GetAgentType, CreateAgent, ProcessAgent, ProcessTrack ----

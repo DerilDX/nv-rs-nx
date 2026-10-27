@@ -3489,130 +3489,133 @@ pub fn bs_audio_manager_get_debug_string(
     enter_section(e, section);
     let states = this.at(BSAudioManager::SoundStateMap);
     let mut position = map_first_item(e, states);
-    let info = e.mem.alloc(0x23c);
-    e.call(DEBUG_SOUND_INFO_CONSTRUCTOR, &[info]);
-    let mut counter = 1i32;
-    while position != 0 && counter < 0x14 {
-        let (_key, record) = map_next(e, states, &mut position);
-        let text = e.call(ALLOCATE, &[MEMORY_MANAGER, 0x104]).u32();
-        let mut loudest = 0u32;
-        if record != 0 {
-            copy_debug_record(e, info, record);
-            let static_attenuation = e.mem.u32(info + 0x230);
-            let system_attenuation = e.mem.u32(info + 0x234);
-            let distance_attenuation = e.mem.u32(info + 0x238);
-            loudest = loudest.max(static_attenuation);
-            loudest = loudest.max(system_attenuation);
-            loudest = loudest.max(distance_attenuation);
-        }
-        let playing = record != 0 && e.mem.u8(record + 0x14) != 0;
-        let audible = (loudest as i32) <= 0xbb8;
-        let listed = if only_stopped && record != 0 {
-            !playing || !audible
-        } else {
-            !only_stopped && record != 0 && playing && audible
-        };
-        if !listed || e.mem.u32(record + 0xc) & filter == 0 {
-            continue;
-        }
-        copy_debug_record(e, info, record);
-        let id = e.mem.u32(record);
-        let state_text = if playing { PLAY_TEXT } else { STOP_TEXT };
-        let name = e.mem.u32(info + 0x108);
-        if name != 0 {
-            // The name pointer is made to point at the record's own buffer.
-            let name = info + 0x10c;
-            e.mem.set_u32(info + 0x108, name);
-            let mut last = 0;
-            e.with_stack(0x104 + 0x104, |e, buffers| {
-                let path = buffers.addr();
-                let formatted = path + 0x104;
-                e.call(STRCPY_S, &[path, 0x104, name]);
-                let mut slash = e.call(STRSTR, &[path, BACKSLASH_TEXT]).u32();
-                while slash != 0 && e.call(STRSTR, &[slash + 1, BACKSLASH_TEXT]).u32() != 0 {
-                    slash = e.call(STRSTR, &[slash + 1, BACKSLASH_TEXT]).u32();
-                }
-                if slash != 0 && e.mem.u8(slash + 1) != 0 {
-                    e.call(STRCPY_S, &[name, 0x104, slash]);
-                    let kind = e.mem.u32(record + 0xc);
-                    let distance = e.mem.f32(info + 0x220) as f64;
-                    let minimum = e.mem.f32(info + 0x210) as f64;
-                    let maximum = e.mem.f32(info + 0x214) as f64;
-                    let static_attenuation = e.mem.u32(info + 0x230);
-                    let system_attenuation = e.mem.u32(info + 0x234);
-                    let distance_attenuation = e.mem.u32(info + 0x238);
-                    let words = if kind & 2 != 0 {
-                        args![
-                            formatted,
-                            DEBUG_3D_FORMAT,
-                            id,
-                            name,
-                            state_text,
-                            distance,
-                            minimum,
-                            maximum,
-                            static_attenuation,
-                            system_attenuation,
-                            distance_attenuation
-                        ]
-                    } else if kind & 1 != 0 && kind & 0x800_0000 == 0 {
-                        args![
-                            formatted,
-                            DEBUG_2D_FORMAT,
-                            id,
-                            name,
-                            state_text,
-                            static_attenuation,
-                            system_attenuation
-                        ]
-                    } else if kind & 1 != 0 {
-                        args![
-                            formatted,
-                            DEBUG_2D_RADIUS_FORMAT,
-                            id,
-                            name,
-                            state_text,
-                            distance,
-                            minimum,
-                            maximum,
-                            static_attenuation,
-                            system_attenuation,
-                            distance_attenuation
-                        ]
-                    } else {
-                        args![
-                            formatted,
-                            DEBUG_ERROR_FORMAT,
-                            id,
-                            name,
-                            state_text,
-                            static_attenuation,
-                            system_attenuation
-                        ]
-                    };
-                    e.call(SPRINTF, &words);
-                    e.call(STRCPY_S, &[text, 0x104, formatted]);
-                    last = 1;
-                }
-            });
-            if last == 0 {
-                e.call(DEALLOCATE, &[MEMORY_MANAGER, text]);
+    // The exe's frame: the exception record (three pushes) and `SUB ESP,0xa84` under `EBP`, 0xa90
+    // bytes; the sound info record at `EBP - 0x494` (00ae6443).
+    e.with_stack(0xa90, |e, frame| {
+        let info = frame.addr() + 0xa90 - 0x494;
+        e.call(DEBUG_SOUND_INFO_CONSTRUCTOR, &[info]);
+        let mut counter = 1i32;
+        while position != 0 && counter < 0x14 {
+            let (_key, record) = map_next(e, states, &mut position);
+            let text = e.call(ALLOCATE, &[MEMORY_MANAGER, 0x104]).u32();
+            let mut loudest = 0u32;
+            if record != 0 {
+                copy_debug_record(e, info, record);
+                let static_attenuation = e.mem.u32(info + 0x230);
+                let system_attenuation = e.mem.u32(info + 0x234);
+                let distance_attenuation = e.mem.u32(info + 0x238);
+                loudest = loudest.max(static_attenuation);
+                loudest = loudest.max(system_attenuation);
+                loudest = loudest.max(distance_attenuation);
+            }
+            let playing = record != 0 && e.mem.u8(record + 0x14) != 0;
+            let audible = (loudest as i32) <= 0xbb8;
+            let listed = if only_stopped && record != 0 {
+                !playing || !audible
+            } else {
+                !only_stopped && record != 0 && playing && audible
+            };
+            if !listed || e.mem.u32(record + 0xc) & filter == 0 {
                 continue;
             }
-        } else {
-            e.with_stack(0x104, |e, formatted| {
-                let shown = if playing { PLAYING_TEXT } else { STOPPED_TEXT };
-                e.call(SPRINTF, &[formatted.addr(), DEBUG_PLAIN_FORMAT, id, shown]);
-                e.call(STRCAT, &[text, formatted.addr()]);
-            });
+            copy_debug_record(e, info, record);
+            let id = e.mem.u32(record);
+            let state_text = if playing { PLAY_TEXT } else { STOP_TEXT };
+            let name = e.mem.u32(info + 0x108);
+            if name != 0 {
+                // The name pointer is made to point at the record's own buffer.
+                let name = info + 0x10c;
+                e.mem.set_u32(info + 0x108, name);
+                let mut last = 0;
+                e.with_stack(0x104 + 0x104, |e, buffers| {
+                    let path = buffers.addr();
+                    let formatted = path + 0x104;
+                    e.call(STRCPY_S, &[path, 0x104, name]);
+                    let mut slash = e.call(STRSTR, &[path, BACKSLASH_TEXT]).u32();
+                    while slash != 0 && e.call(STRSTR, &[slash + 1, BACKSLASH_TEXT]).u32() != 0 {
+                        slash = e.call(STRSTR, &[slash + 1, BACKSLASH_TEXT]).u32();
+                    }
+                    if slash != 0 && e.mem.u8(slash + 1) != 0 {
+                        e.call(STRCPY_S, &[name, 0x104, slash]);
+                        let kind = e.mem.u32(record + 0xc);
+                        let distance = e.mem.f32(info + 0x220) as f64;
+                        let minimum = e.mem.f32(info + 0x210) as f64;
+                        let maximum = e.mem.f32(info + 0x214) as f64;
+                        let static_attenuation = e.mem.u32(info + 0x230);
+                        let system_attenuation = e.mem.u32(info + 0x234);
+                        let distance_attenuation = e.mem.u32(info + 0x238);
+                        let words = if kind & 2 != 0 {
+                            args![
+                                formatted,
+                                DEBUG_3D_FORMAT,
+                                id,
+                                name,
+                                state_text,
+                                distance,
+                                minimum,
+                                maximum,
+                                static_attenuation,
+                                system_attenuation,
+                                distance_attenuation
+                            ]
+                        } else if kind & 1 != 0 && kind & 0x800_0000 == 0 {
+                            args![
+                                formatted,
+                                DEBUG_2D_FORMAT,
+                                id,
+                                name,
+                                state_text,
+                                static_attenuation,
+                                system_attenuation
+                            ]
+                        } else if kind & 1 != 0 {
+                            args![
+                                formatted,
+                                DEBUG_2D_RADIUS_FORMAT,
+                                id,
+                                name,
+                                state_text,
+                                distance,
+                                minimum,
+                                maximum,
+                                static_attenuation,
+                                system_attenuation,
+                                distance_attenuation
+                            ]
+                        } else {
+                            args![
+                                formatted,
+                                DEBUG_ERROR_FORMAT,
+                                id,
+                                name,
+                                state_text,
+                                static_attenuation,
+                                system_attenuation
+                            ]
+                        };
+                        e.call(SPRINTF, &words);
+                        e.call(STRCPY_S, &[text, 0x104, formatted]);
+                        last = 1;
+                    }
+                });
+                if last == 0 {
+                    e.call(DEALLOCATE, &[MEMORY_MANAGER, text]);
+                    continue;
+                }
+            } else {
+                e.with_stack(0x104, |e, formatted| {
+                    let shown = if playing { PLAYING_TEXT } else { STOPPED_TEXT };
+                    e.call(SPRINTF, &[formatted.addr(), DEBUG_PLAIN_FORMAT, id, shown]);
+                    e.call(STRCAT, &[text, formatted.addr()]);
+                });
+            }
+            add_debug_line(e, list, id.wrapping_add(2), text);
+            counter += 1;
         }
-        add_debug_line(e, list, id.wrapping_add(2), text);
-        counter += 1;
-    }
-    leave_section(e, section);
-    bs_simple_list_audio_debug_string_sort(e, Ptr::new(list), DEBUG_LINE_COMPARE);
-    e.call(DEBUG_SOUND_INFO_DESTRUCTOR, &[info]);
-    e.mem.free(info);
+        leave_section(e, section);
+        bs_simple_list_audio_debug_string_sort(e, Ptr::new(list), DEBUG_LINE_COMPARE);
+        e.call(DEBUG_SOUND_INFO_DESTRUCTOR, &[info]);
+    });
     list
 }
 
@@ -10900,6 +10903,24 @@ mod tests {
                 (10, "8:\\f.wav\t [Play][ERROR] [ST:3][SY:4]".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn the_debug_sound_info_sits_0x494_under_the_frames_ebp() {
+        let (mut f, _audio) = audio_fixture();
+        let blocks = debug_doubles(&mut f);
+        debug_record(&mut f, &blocks, 3, 2, 1, b"p\\a.wav", 1.0);
+        let frame = f.e.mem.alloc(0xa90);
+        f.e.mem.free(frame);
+        f.e.call_log = Some(vec![]);
+        f.call(0x00ae5ff0, &[0]);
+        let log = f.e.call_log.take().unwrap();
+        let built: Vec<u32> = log
+            .iter()
+            .filter(|c| c.0 == DEBUG_SOUND_INFO_CONSTRUCTOR)
+            .map(|c| c.1[0])
+            .collect();
+        assert_eq!(built, vec![frame + 0xa90 - 0x494]);
     }
 
     #[test]

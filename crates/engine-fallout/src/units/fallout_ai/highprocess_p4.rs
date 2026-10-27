@@ -121,6 +121,12 @@ fn list_append(e: &mut Engine, list: u32, item: u32) {
     });
 }
 
+/// [`list_append`] with the caller's local `slot` holding the item.
+fn list_append_at(e: &mut Engine, list: u32, item: u32, slot: u32) {
+    e.mem.set_u32(slot, item);
+    e.call(LIST_APPEND, &args![list, slot]);
+}
+
 /// `MiddleHighProcess::GetSavedAcquireObject` in the engine map, but the
 /// body (shared by folding) returns the word at +0x68 of an actor: its
 /// process (`008d8520`).
@@ -2546,13 +2552,16 @@ fn update_case_0_travel(e: &mut Engine, this: Ptr, package: u32, actor: u32) {
     let radius = e.call(0x0067_8670, &args![package, actor, 0u32]).f32();
     let world = e.call(0x0067_5a50, &args![package, actor]).u32();
     let cell = e.call(0x0067_5c20, &args![package, actor]).u32();
-    let goal = e.mem.alloc(12);
-    let coordinates = e.call(0x0067_5de0, &args![package, goal, actor]).u32();
-    e.call(
-        0x008b_3690,
-        &args![actor, coordinates, cell, world, radius, 0u32],
-    );
-    e.mem.free(goal);
+    // The frame of `008f4020` (`SUB ESP,0xb0` under `EBP`, then `ESI`): the goal at `EBP-0x64`
+    // (+0x50).
+    e.with_stack(0xb4, |e, frame| {
+        let goal = frame.addr() + 0x50;
+        let coordinates = e.call(0x0067_5de0, &args![package, goal, actor]).u32();
+        e.call(
+            0x008b_3690,
+            &args![actor, coordinates, cell, world, radius, 0u32],
+        );
+    });
     let saved_acquire_object = e.call(ACTOR_PROCESS, &args![actor]).u32();
     if e.call(0x0045_cd60, &args![saved_acquire_object]).u32() != 0 {
         return;
@@ -2599,21 +2608,23 @@ fn update_case_0_travel(e: &mut Engine, this: Ptr, package: u32, actor: u32) {
     }
     if e.call(0x0067_6280, &args![package, actor]).u32() != 0 {
         let radius = e.call(0x0067_6280, &args![package, actor]).u32() as f32;
-        let look = e.mem.alloc(12);
-        let scratch = e.mem.alloc(12);
-        let coordinates = e.call(0x0067_5de0, &args![package, scratch, actor]).u32();
-        let (x, y, z) = (
-            e.mem.u32(coordinates),
-            e.mem.u32(coordinates + 4),
-            e.mem.u32(coordinates + 8),
-        );
-        if e.call(0x008e_3e90, &args![actor, x, y, z, radius, look])
-            .bool()
-        {
-            e.vcall(actor, ACTOR_SLOT_SET_LOOK_POINT, &args![look]);
-        }
-        e.mem.free(scratch);
-        e.mem.free(look);
+        // The same frame: the look point at `EBP-0x40` (+0x74), the coordinates at `EBP-0x7c`
+        // (+0x38).
+        e.with_stack(0xb4, |e, frame| {
+            let look = frame.addr() + 0x74;
+            let scratch = frame.addr() + 0x38;
+            let coordinates = e.call(0x0067_5de0, &args![package, scratch, actor]).u32();
+            let (x, y, z) = (
+                e.mem.u32(coordinates),
+                e.mem.u32(coordinates + 4),
+                e.mem.u32(coordinates + 8),
+            );
+            if e.call(0x008e_3e90, &args![actor, x, y, z, radius, look])
+                .bool()
+            {
+                e.vcall(actor, ACTOR_SLOT_SET_LOOK_POINT, &args![look]);
+            }
+        });
     }
 }
 
@@ -3072,14 +3083,12 @@ fn buffer_load_form_id_into(e: &mut Engine, buffer: u32, destination: u32) {
 
 /// Reads a counted run of form IDs and appends each to `list` (a node
 /// address or the pointer the process keeps).
-fn buffer_load_form_id_run(e: &mut Engine, buffer: u32, list: u32) {
+fn buffer_load_form_id_run(e: &mut Engine, buffer: u32, list: u32, slot: u32) {
     let count = e.call(BUFFER_LOAD_SIZED_VALUE, &args![buffer]).u32();
     for _ in 0..count {
-        let slot = e.mem.alloc(4);
         e.mem.set_u32(slot, 0);
         buffer_load_form_id_into(e, buffer, slot);
         e.call(LIST_APPEND, &args![list, slot]);
-        e.mem.free(slot);
     }
 }
 
@@ -3173,12 +3182,16 @@ pub fn high_process_load_game_ov2(e: &mut Engine, this: Ptr, buffer: u32) {
         buffer_load_form_id_into(e, buffer, this.addr() + HEAD_TRACKING_TARGETS + 4 * index);
         buffer_load_field(e, buffer, this, HEAD_TRACKING_TARGET_FLAGS + index, 1);
     }
-    buffer_load_form_id_run(e, buffer, this.addr() + 0x38c);
-    buffer_load_form_id_run(e, buffer, this.addr() + 0x394);
-    if version(e) >= 0x12 {
-        let spoken_to = e.mem.u32(this.addr() + 0x264);
-        buffer_load_form_id_run(e, buffer, spoken_to);
-    }
+    // The exe's frame (`SUB ESP,0xa8` under the exception record, then the record link) has
+    // one form word per list: `EBP-0x2c` (+0x8c), `EBP-0x38` (+0x80) and `EBP-0x44` (+0x74).
+    e.with_stack(0xb8, |e, frame| {
+        buffer_load_form_id_run(e, buffer, this.addr() + 0x38c, frame.addr() + 0x8c);
+        buffer_load_form_id_run(e, buffer, this.addr() + 0x394, frame.addr() + 0x80);
+        if version(e) >= 0x12 {
+            let spoken_to = e.mem.u32(this.addr() + 0x264);
+            buffer_load_form_id_run(e, buffer, spoken_to, frame.addr() + 0x74);
+        }
+    });
     if buffer_load_discard(e, buffer, 1) != 0 {
         let block = e.call(OPERATOR_NEW, &args![0x1cu32]).u32();
         let item = if block == 0 {
@@ -3310,238 +3323,244 @@ pub fn high_process_evaluate_detection(e: &mut Engine, this: Ptr, actor: Ptr) ->
     // The running package (slot 0x27c) is fetched but never used.
     e.vcall(base, PROCESS_SLOT_RUNNING_PACKAGE, &args![]);
     let current_package = e.call(0x0088_1510, &args![actor]).u32();
-    let flag_slot = e.mem.alloc(4);
-    e.mem.set_u8(flag_slot, 0);
-    e.call(LIST_CLEAR, &args![0x011e_0280u32]);
-    let player = e.mem.u32(PLAYER);
-    let mut alert_level = 0;
-    let mut check_time = setting_float(e, 0x011c_d7d8);
-    let no_target = e.global::<f32>(NO_TARGET_FLOAT);
-    let own_strength = e
-        .call(CALCULATE_COMBAT_STRENGTH, &args![actor, no_target])
-        .f32();
-    let own_group = e.vcall(actor_addr, ACTOR_SLOT_GROUP, &args![]).u32();
-    let base_form = e.call(0x0041_81e0, &args![actor]).u32();
-    let mut sight_distance: i32 = 0;
-    if base_form != 0 && e.call(0x0070_5cf0, &args![base_form + 0x90]).bool() {
-        sight_distance = e.call(WORD_AT_0X14, &args![base_form + 0x90]).i32();
-    }
-    let mut near = false;
-    let attack_result = e.mem.alloc(4);
-    e.mem.set_u32(attack_result, 0);
-    let mut stronger = false;
-    // `ActorValueOwner` embedded at +0xa4: vtable slot 8 (value, one
-    // argument) and slot 0xc (float value).
-    let owner = actor_addr + 0xa4;
-    let owner_vtable = e.mem.u32(owner);
-    let aggression_slot = e.mem.u32(owner_vtable + 8);
-    let aggression = e.call(aggression_slot, &args![owner, 0u32]).i32();
-    let confidence_slot = e.mem.u32(owner_vtable + 0xc);
-    let confidence = e.call(confidence_slot, &args![owner, 1u32]).f32();
-    let mut player_strength = e
-        .call(CALCULATE_COMBAT_STRENGTH, &args![player, no_target])
-        .f32();
-    if player_strength == 0.0 {
-        player_strength = 1.0;
-    }
-    let attack_value = e.mem.i32(attack_result);
-    let ratio = f64::from(own_strength) / f64::from(player_strength);
-    let confident = f64::from(confidence).partial_cmp(&ratio) == Some(std::cmp::Ordering::Less);
-    if aggression != 0 || attack_value != 1 || !confident {
-        let should_attack = e
-            .call(
-                0x008b_06d0,
-                &args![actor, player, 0u32, attack_result, 0u32],
-            )
-            .bool();
-        if should_attack {
-            alert_level = 100;
-        } else {
-            let attack_value = e.mem.i32(attack_result);
-            if sight_distance > 0 && (attack_value == 0 || attack_value == 1) {
-                let player_position = e.call(0x0043_6aa0, &args![player]).u32();
-                let actor_position = e.call(0x0043_6aa0, &args![actor]).u32();
-                let squared = e.with_stack(12, |e, out| {
-                    e.call(0x0043_9ef0, &args![actor_position, out, player_position]);
-                    e.call(0x004a_7290, &args![out]).f32()
-                });
-                let range_squared = f64::from(sight_distance.wrapping_mul(sight_distance));
-                if range_squared >= f64::from(squared) {
-                    near = true;
+    // The exe's frame (`SUB ESP,0x11c` under the exception record, then `ESI` and the record
+    // link): the flag byte at `EBP-0x19` (+0x117), the attack result at `EBP-0x48` (+0xe8), the
+    // difference at `EBP-0x74` (+0xbc), the combat flag at `EBP-0x75` (+0xbb) and the queued
+    // words at `EBP-0xd8`, `-0x8c`, `-0xe4` and `-0x94` (+0x58, +0xa4, +0x4c, +0x9c).
+    e.with_stack(0x130, |e, frame| {
+        let local = |offset: u32| frame.addr() + offset;
+        let flag_slot = local(0x117);
+        e.mem.set_u8(flag_slot, 0);
+        e.call(LIST_CLEAR, &args![0x011e_0280u32]);
+        let player = e.mem.u32(PLAYER);
+        let mut alert_level = 0;
+        let mut check_time = setting_float(e, 0x011c_d7d8);
+        let no_target = e.global::<f32>(NO_TARGET_FLOAT);
+        let own_strength = e
+            .call(CALCULATE_COMBAT_STRENGTH, &args![actor, no_target])
+            .f32();
+        let own_group = e.vcall(actor_addr, ACTOR_SLOT_GROUP, &args![]).u32();
+        let base_form = e.call(0x0041_81e0, &args![actor]).u32();
+        let mut sight_distance: i32 = 0;
+        if base_form != 0 && e.call(0x0070_5cf0, &args![base_form + 0x90]).bool() {
+            sight_distance = e.call(WORD_AT_0X14, &args![base_form + 0x90]).i32();
+        }
+        let mut near = false;
+        let attack_result = local(0xe8);
+        e.mem.set_u32(attack_result, 0);
+        let mut stronger = false;
+        // `ActorValueOwner` embedded at +0xa4: vtable slot 8 (value, one
+        // argument) and slot 0xc (float value).
+        let owner = actor_addr + 0xa4;
+        let owner_vtable = e.mem.u32(owner);
+        let aggression_slot = e.mem.u32(owner_vtable + 8);
+        let aggression = e.call(aggression_slot, &args![owner, 0u32]).i32();
+        let confidence_slot = e.mem.u32(owner_vtable + 0xc);
+        let confidence = e.call(confidence_slot, &args![owner, 1u32]).f32();
+        let mut player_strength = e
+            .call(CALCULATE_COMBAT_STRENGTH, &args![player, no_target])
+            .f32();
+        if player_strength == 0.0 {
+            player_strength = 1.0;
+        }
+        let attack_value = e.mem.i32(attack_result);
+        let ratio = f64::from(own_strength) / f64::from(player_strength);
+        let confident = f64::from(confidence).partial_cmp(&ratio) == Some(std::cmp::Ordering::Less);
+        if aggression != 0 || attack_value != 1 || !confident {
+            let should_attack = e
+                .call(
+                    0x008b_06d0,
+                    &args![actor, player, 0u32, attack_result, 0u32],
+                )
+                .bool();
+            if should_attack {
+                alert_level = 100;
+            } else {
+                let attack_value = e.mem.i32(attack_result);
+                if sight_distance > 0 && (attack_value == 0 || attack_value == 1) {
+                    let player_position = e.call(0x0043_6aa0, &args![player]).u32();
+                    let actor_position = e.call(0x0043_6aa0, &args![actor]).u32();
+                    let squared = {
+                        let out = local(0xbc);
+                        e.call(0x0043_9ef0, &args![actor_position, out, player_position]);
+                        e.call(0x004a_7290, &args![out]).f32()
+                    };
+                    let range_squared = f64::from(sight_distance.wrapping_mul(sight_distance));
+                    if range_squared >= f64::from(squared) {
+                        near = true;
+                    }
                 }
             }
+        } else {
+            stronger = true;
         }
-    } else {
-        stronger = true;
-    }
-    if player != actor_addr {
-        let mut level: i32 = -100;
-        let state = detection_state(e, this, player, 0);
-        if state != 0 {
-            level = e.mem.i32(state + 8);
-        }
-        if e.vcall(player, ACTOR_SLOT_0X22C, &args![0u32]).bool()
-            && !e.vcall(player, ACTOR_SLOT_IS_DYING, &args![]).bool()
-        {
-            let player_process = e.call(ACTOR_PROCESS, &args![player]).u32();
-            if !e
-                .vcall(player_process, PROCESS_SLOT_GREETING_FLAG, &args![])
-                .bool()
-                && e.mem.f32(player + 0xc8) <= 0.0
-            {
-                e.mem.set_u8(base + 0x2c6, 1);
-            }
-        }
-        let mut threshold = setting_float(e, 0x011c_d45c);
-        if current_package != 0 && !e.call(0x0067_a770, &args![current_package]).bool() {
-            threshold = 0.0;
-        }
-        let evaluated = state != 0 && e.mem.u8(state + 0x1f) != 0;
-        if f64::from(threshold) < f64::from(level) && !evaluated {
+        if player != actor_addr {
+            let mut level: i32 = -100;
+            let state = detection_state(e, this, player, 0);
             if state != 0 {
-                e.mem.set_u8(state + 0x1f, 1);
+                level = e.mem.i32(state + 8);
             }
-            if !e.vcall(player, ACTOR_SLOT_0X22C, &args![0u32]).bool() {
-                if stronger {
-                    let list = base + 0x394;
-                    let player_ref = e.mem.u32(PLAYER);
-                    list_append(e, list, player_ref);
-                } else if alert_level > 0 {
-                    // The game skips this when both the player and a second
-                    // reference (a local it never sets) are in combatant factions;
-                    // that local is always null, so the skip cannot happen. The
-                    // first faction test is still made.
-                    e.call(IS_IN_COMBATANT_FACTION, &args![player]);
-                    {
-                        let mut engage = true;
-                        let in_combat = e.call(0x0095_3c20, &args![e.mem.u32(PLAYER)]).i32();
-                        let limit_slot = e.call(0x0043_d4d0, &args![0x011c_f414u32]).u32();
-                        if in_combat >= e.mem.i32(limit_slot) {
-                            let threshold = setting_float(e, 0x011c_df10);
-                            if f64::from(threshold) >= f64::from(level) {
-                                engage = false;
+            if e.vcall(player, ACTOR_SLOT_0X22C, &args![0u32]).bool()
+                && !e.vcall(player, ACTOR_SLOT_IS_DYING, &args![]).bool()
+            {
+                let player_process = e.call(ACTOR_PROCESS, &args![player]).u32();
+                if !e
+                    .vcall(player_process, PROCESS_SLOT_GREETING_FLAG, &args![])
+                    .bool()
+                    && e.mem.f32(player + 0xc8) <= 0.0
+                {
+                    e.mem.set_u8(base + 0x2c6, 1);
+                }
+            }
+            let mut threshold = setting_float(e, 0x011c_d45c);
+            if current_package != 0 && !e.call(0x0067_a770, &args![current_package]).bool() {
+                threshold = 0.0;
+            }
+            let evaluated = state != 0 && e.mem.u8(state + 0x1f) != 0;
+            if f64::from(threshold) < f64::from(level) && !evaluated {
+                if state != 0 {
+                    e.mem.set_u8(state + 0x1f, 1);
+                }
+                if !e.vcall(player, ACTOR_SLOT_0X22C, &args![0u32]).bool() {
+                    if stronger {
+                        let list = base + 0x394;
+                        let player_ref = e.mem.u32(PLAYER);
+                        list_append_at(e, list, player_ref, local(0x58));
+                    } else if alert_level > 0 {
+                        // The game skips this when both the player and a second
+                        // reference (a local it never sets) are in combatant factions;
+                        // that local is always null, so the skip cannot happen. The
+                        // first faction test is still made.
+                        e.call(IS_IN_COMBATANT_FACTION, &args![player]);
+                        {
+                            let mut engage = true;
+                            let in_combat = e.call(0x0095_3c20, &args![e.mem.u32(PLAYER)]).i32();
+                            let limit_slot = e.call(0x0043_d4d0, &args![0x011c_f414u32]).u32();
+                            if in_combat >= e.mem.i32(limit_slot) {
+                                let threshold = setting_float(e, 0x011c_df10);
+                                if f64::from(threshold) >= f64::from(level) {
+                                    engage = false;
+                                }
+                            }
+                            if engage {
+                                let target_slot =
+                                    e.vcall(actor_addr, ACTOR_SLOT_0X304, &args![]).bool();
+                                let mut send_alarm = u8::from(!target_slot);
+                                let base_form = e.call(0x0041_81e0, &args![actor]).u32();
+                                if e.call(IS_IN_EVIL_FACTIONS_ONLY, &args![base_form + 0x30])
+                                    .bool()
+                                {
+                                    send_alarm = 1;
+                                }
+                                let block = e.call(OPERATOR_NEW, &args![0x14u32]).u32();
+                                let record = if block == 0 {
+                                    0
+                                } else {
+                                    fn_008f6120(e, Ptr::new(block)).addr()
+                                };
+                                e.mem.set_u32(record, player);
+                                e.mem.set_u8(record + 9, send_alarm);
+                                list_append_at(e, base + 0x274, record, local(0xa4));
+                                let current_player = e.mem.u32(PLAYER);
+                                e.mem.set_u32(base + 0x2a4, current_player);
                             }
                         }
-                        if engage {
-                            let target_slot =
-                                e.vcall(actor_addr, ACTOR_SLOT_0X304, &args![]).bool();
-                            let mut send_alarm = u8::from(!target_slot);
-                            let base_form = e.call(0x0041_81e0, &args![actor]).u32();
-                            if e.call(IS_IN_EVIL_FACTIONS_ONLY, &args![base_form + 0x30])
-                                .bool()
-                            {
-                                send_alarm = 1;
-                            }
+                    } else if near && level > 0 && !e.call(0x008a_78f0, &args![actor, 6u32]).bool()
+                    {
+                        let player_ref = e.mem.u32(PLAYER);
+                        list_append_at(e, base + 0x38c, player_ref, local(0x4c));
+                    }
+                    let player_group = e.vcall(player, ACTOR_SLOT_GROUP, &args![]).u32();
+                    let help_threshold = setting_float(e, 0x011c_df10);
+                    if f64::from(help_threshold) < f64::from(level)
+                        && player_group != 0
+                        && player_group != own_group
+                        && e.call(0x005a_4320, &args![player_group]).u32() != 0
+                        && !fn_008f5410(e, this, player_group)
+                    {
+                        let manager = e.mem.u32(0x011f_1958);
+                        if e.call(0x0099_2530, &args![manager, actor, player]).bool() {
                             let block = e.call(OPERATOR_NEW, &args![0x14u32]).u32();
                             let record = if block == 0 {
                                 0
                             } else {
                                 fn_008f6120(e, Ptr::new(block)).addr()
                             };
-                            e.mem.set_u32(record, player);
-                            e.mem.set_u8(record + 9, send_alarm);
-                            list_append(e, base + 0x274, record);
-                            let current_player = e.mem.u32(PLAYER);
-                            e.mem.set_u32(base + 0x2a4, current_player);
+                            e.mem.set_u32(record + 4, player_group);
+                            list_append_at(e, base + 0x27c, record, local(0x9c));
                         }
                     }
-                } else if near && level > 0 && !e.call(0x008a_78f0, &args![actor, 6u32]).bool() {
-                    let player_ref = e.mem.u32(PLAYER);
-                    list_append(e, base + 0x38c, player_ref);
                 }
-                let player_group = e.vcall(player, ACTOR_SLOT_GROUP, &args![]).u32();
-                let help_threshold = setting_float(e, 0x011c_df10);
-                if f64::from(help_threshold) < f64::from(level)
-                    && player_group != 0
-                    && player_group != own_group
-                    && e.call(0x005a_4320, &args![player_group]).u32() != 0
-                    && !fn_008f5410(e, this, player_group)
+            }
+            if level > 0 {
+                let player_value_ok = if player == e.mem.u32(PLAYER) {
+                    true
+                } else {
+                    let owner = player + 0xa4;
+                    let owner_vtable = e.mem.u32(owner);
+                    let value_slot = e.mem.u32(owner_vtable + 8);
+                    e.call(value_slot, &args![owner, 0x2au32]).i32() < 100
+                };
+                if player_value_ok
+                    && e.vcall(player, ACTOR_SLOT_0X448, &args![]).bool()
+                    && !e.call(0x008c_0050, &args![actor]).bool()
                 {
-                    let manager = e.mem.u32(0x011f_1958);
-                    if e.call(0x0099_2530, &args![manager, actor, player]).bool() {
-                        let block = e.call(OPERATOR_NEW, &args![0x14u32]).u32();
-                        let record = if block == 0 {
-                            0
-                        } else {
-                            fn_008f6120(e, Ptr::new(block)).addr()
-                        };
-                        e.mem.set_u32(record + 4, player_group);
-                        list_append(e, base + 0x27c, record);
+                    if let Some(result) = evaluate_trespass(e, this, actor_addr, player) {
+                        return result;
                     }
                 }
             }
-        }
-        if level > 0 {
-            let player_value_ok = if player == e.mem.u32(PLAYER) {
-                true
-            } else {
-                let owner = player + 0xa4;
-                let owner_vtable = e.mem.u32(owner);
-                let value_slot = e.mem.u32(owner_vtable + 8);
-                e.call(value_slot, &args![owner, 0x2au32]).i32() < 100
+            let in_combat_flag = {
+                let slot = local(0xbb);
+                e.mem.set_u8(slot, 0);
+                e.call(0x0095_3c50, &args![e.mem.u32(PLAYER), slot]).bool()
             };
-            if player_value_ok
-                && e.vcall(player, ACTOR_SLOT_0X448, &args![]).bool()
-                && !e.call(0x008c_0050, &args![actor]).bool()
-            {
-                if let Some(result) = evaluate_trespass(e, this, actor_addr, player) {
-                    e.mem.free(flag_slot);
-                    e.mem.free(attack_result);
-                    return result;
-                }
+            if in_combat_flag {
+                e.call(0x008f_fe50, &args![this, actor, player]);
             }
         }
-        let in_combat_flag = e.with_stack(4, |e, slot| {
-            e.mem.set_u8(slot.addr(), 0);
-            e.call(0x0095_3c50, &args![e.mem.u32(PLAYER), slot]).bool()
-        });
-        if in_combat_flag {
-            e.call(0x008f_fe50, &args![this, actor, player]);
-        }
-    }
-    e.mem.set_u32(base + 0x2a4, 0);
-    let parent = e.call(0x008d_6f30, &args![actor]).u32();
-    let doubles = if parent == 0 {
-        true
-    } else {
+        e.mem.set_u32(base + 0x2a4, 0);
         let parent = e.call(0x008d_6f30, &args![actor]).u32();
-        !e.call(0x0042_5fd0, &args![parent]).bool()
-    };
-    if doubles {
-        check_time += check_time;
-    }
-    let _ = check_time;
-    let mut index = 0u32;
-    loop {
-        let array = e.call(PROCESS_LISTS_GET_ARRAY, &args![PROCESS_LISTS]).u32();
-        let count = e.call(PROCESS_ARRAY_COUNT, &args![array, 0u32]).u32();
-        if index >= count {
-            break;
+        let doubles = if parent == 0 {
+            true
+        } else {
+            let parent = e.call(0x008d_6f30, &args![actor]).u32();
+            !e.call(0x0042_5fd0, &args![parent]).bool()
+        };
+        if doubles {
+            check_time += check_time;
         }
-        let array = e.call(PROCESS_LISTS_GET_ARRAY, &args![PROCESS_LISTS]).u32();
-        let other = e.call(PROCESS_ARRAY_GET_ACTOR, &args![array, index]).u32();
-        e.call(
-            0x008f_f350,
-            &args![
-                this,
-                other,
-                actor,
-                flag_slot,
-                0u32,
-                aggression,
-                confidence,
-                own_strength
-            ],
-        );
-        index += 1;
-    }
-    e.vcall(base, 0x6c, &args![actor]);
-    e.mem.set_u8(base + 0x270, 0);
-    let detected = e.mem.u32(base + 0x2a4) != 0;
-    e.mem.set_u32(base + 0x2a4, 0);
-    e.mem.free(flag_slot);
-    e.mem.free(attack_result);
-    detected
+        let _ = check_time;
+        let mut index = 0u32;
+        loop {
+            let array = e.call(PROCESS_LISTS_GET_ARRAY, &args![PROCESS_LISTS]).u32();
+            let count = e.call(PROCESS_ARRAY_COUNT, &args![array, 0u32]).u32();
+            if index >= count {
+                break;
+            }
+            let array = e.call(PROCESS_LISTS_GET_ARRAY, &args![PROCESS_LISTS]).u32();
+            let other = e.call(PROCESS_ARRAY_GET_ACTOR, &args![array, index]).u32();
+            e.call(
+                0x008f_f350,
+                &args![
+                    this,
+                    other,
+                    actor,
+                    flag_slot,
+                    0u32,
+                    aggression,
+                    confidence,
+                    own_strength
+                ],
+            );
+            index += 1;
+        }
+        e.vcall(base, 0x6c, &args![actor]);
+        e.mem.set_u8(base + 0x270, 0);
+        let detected = e.mem.u32(base + 0x2a4) != 0;
+        e.mem.set_u32(base + 0x2a4, 0);
+        detected
+    })
 }
 
 /// The trespass part of `EvaluateDetection` (from `008f5ba3`). Returns
@@ -3978,10 +3997,12 @@ pub fn high_process_process_use_item_at(e: &mut Engine, this: Ptr, actor: Ptr) -
         }
         12 | 13 | 21 | 22 | 23 => {
             let name = e.vcall(package, 0x130, &args![]).u32();
-            let buffer = e.mem.alloc(0x100);
-            e.call(0x0040_6d00, &args![buffer, 0x100u32, 0x0108_8318u32, name]);
-            e.call(0x005b_5e40, &args![buffer]);
-            e.mem.free(buffer);
+            // The exe's frame (`SUB ESP,0x1cc` under `EBP`): the message at `EBP-0x150` (+0x7c).
+            e.with_stack(0x1cc, |e, frame| {
+                let buffer = frame.addr() + 0x7c;
+                e.call(0x0040_6d00, &args![buffer, 0x100u32, 0x0108_8318u32, name]);
+                e.call(0x005b_5e40, &args![buffer]);
+            });
             return false;
         }
         14 | 15 => return false,
@@ -4483,10 +4504,13 @@ pub fn high_process_process_use_weapon(e: &mut Engine, this: Ptr, actor: Ptr) ->
                 3 => aim_target = e.call(0x0056_9b80, &args![actor]).u32(),
                 1 | 2 => {
                     let name = e.vcall(package, 0x130, &args![]).u32();
-                    let buffer = e.mem.alloc(0x100);
-                    e.call(0x0040_6d00, &args![buffer, 0x100u32, 0x0108_82a8u32, name]);
-                    e.call(0x005b_5e40, &args![buffer]);
-                    e.mem.free(buffer);
+                    // The exe's frame (`SUB ESP,0x370` under `EBP`, then `ESI`): the message at
+                    // `EBP-0x148` (+0x22c).
+                    e.with_stack(0x374, |e, frame| {
+                        let buffer = frame.addr() + 0x22c;
+                        e.call(0x0040_6d00, &args![buffer, 0x100u32, 0x0108_82a8u32, name]);
+                        e.call(0x005b_5e40, &args![buffer]);
+                    });
                 }
                 _ => {}
             }
@@ -4540,10 +4564,12 @@ pub fn high_process_process_use_weapon(e: &mut Engine, this: Ptr, actor: Ptr) ->
     let object_type = e.mem.u32(base + 0x108);
     if !matches!(object_type, 12 | 13 | 21 | 22 | 23) {
         let name = e.vcall(package, 0x130, &args![]).u32();
-        let buffer = e.mem.alloc(0x100);
-        e.call(0x0040_6d00, &args![buffer, 0x100u32, 0x0108_8260u32, name]);
-        e.call(0x005b_5e40, &args![buffer]);
-        e.mem.free(buffer);
+        // The same frame: the message at `EBP-0x248` (+0x12c).
+        e.with_stack(0x374, |e, frame| {
+            let buffer = frame.addr() + 0x12c;
+            e.call(0x0040_6d00, &args![buffer, 0x100u32, 0x0108_8260u32, name]);
+            e.call(0x005b_5e40, &args![buffer]);
+        });
         return false;
     }
     target = e.call(PACKAGE_GET_TARGET, &args![package]).u32();
@@ -4991,18 +5017,20 @@ fn attack_with_weapon(e: &mut Engine, this: Ptr, actor: u32, aim_target: u32) ->
         }
     }
     if chosen != -1 {
-        let pointer = e.mem.alloc(12);
-        e.call(LIST_ITEM_SLOT, &args![pointer]);
-        let accepted = e
-            .call(0x0097_fd80, &args![actor, chosen as u32, pointer])
-            .bool();
-        if accepted {
-            let second = e.mem.f32(pointer + 4);
-            if second != 0.0 {
-                chosen = if roll > 0x14 { 0x20 } else { 0x1a };
+        // The frame of `008f7730` (0x374 bytes): the attack data at `EBP-0x30c` (+0x68).
+        e.with_stack(0x374, |e, frame| {
+            let pointer = frame.addr() + 0x68;
+            e.call(LIST_ITEM_SLOT, &args![pointer]);
+            let accepted = e
+                .call(0x0097_fd80, &args![actor, chosen as u32, pointer])
+                .bool();
+            if accepted {
+                let second = e.mem.f32(pointer + 4);
+                if second != 0.0 {
+                    chosen = if roll > 0x14 { 0x20 } else { 0x1a };
+                }
             }
-        }
-        e.mem.free(pointer);
+        });
     }
     if e.call(0x0049_97b0, &args![actor]).bool()
         && !e
@@ -9649,7 +9677,19 @@ mod tests {
             e.mem.set_u32(fresh + offset, head);
         }
         e.call_log = Some(vec![]);
+        let frame = next_frame(&mut e, 0xb8);
         e.call(0x008f_ce90, &args![fresh, buffer]);
+        // The 0xb8-byte frame: the form words at EBP-0x2c (+0x8c) and EBP-0x38 (+0x80).
+        let appends = calls_to(&e, LIST_APPEND);
+        assert!(appends
+            .iter()
+            .filter(|c| c[0] == fresh + 0x38c)
+            .all(|c| c[1] == frame + 0x8c));
+        assert!(appends
+            .iter()
+            .filter(|c| c[0] == fresh + 0x394)
+            .all(|c| c[1] == frame + 0x80));
+        assert!(appends.iter().any(|c| c[0] == fresh + 0x38c));
         // The character controller block (a 4-byte size and its 4 bytes) is read
         // by the base class load, which is a double here.
         assert_eq!(e.mem.u32(buffer + 0xc) - stream, written - 8);
@@ -10009,7 +10049,10 @@ mod tests {
             e.mem.set_u32(process + offset, 0);
         }
         e.call_log = Some(vec![]);
+        let frame = next_frame(&mut e, 0x130);
         let detected = e.call(0x008f_5480, &args![process, actor]).bool();
+        // The 0x130-byte frame: the aggressor record word at EBP-0x8c (+0xa4).
+        assert!(calls_to(&e, LIST_APPEND).contains(&vec![process + 0x274, frame + 0xa4]));
         assert!(!detected);
         // The player was queued as an aggressor (+0x274) with the alarm byte.
         let aggressors = list_items(&e, process + 0x274);
@@ -10253,9 +10296,12 @@ mod tests {
         stub(&mut e, 0x0051_9b00, 2);
         stub(&mut e, 0x0068_0080, 12);
         e.call_log = Some(vec![]);
+        let frame = next_frame(&mut e, 0x1cc);
         assert!(!e
             .call(0x008f_9320, &args![scene.process, scene.actor])
             .bool());
+        // The 0x1cc-byte frame: the message at EBP-0x150 (+0x7c).
+        assert_eq!(calls_to(&e, 0x0040_6d00)[0][0], frame + 0x7c);
         assert_eq!(e.mem.u32(scene.process + 0x108), 12);
         assert_eq!(calls_to(&e, 0x0040_6d00).len(), 1);
         assert_eq!(calls_to(&e, 0x0040_6d00)[0][2], 0x0108_8318);
@@ -10296,9 +10342,12 @@ mod tests {
         // No package target: the object type is 0, which is not valid.
         stub(&mut e, 0x0067_1d10, 0);
         e.call_log = Some(vec![]);
+        let frame = next_frame(&mut e, 0x374);
         assert!(!e
             .call(0x008f_7730, &args![scene.process, scene.actor])
             .bool());
+        // The 0x374-byte frame: the message at EBP-0x248 (+0x12c).
+        assert_eq!(calls_to(&e, 0x0040_6d00)[0][0], frame + 0x12c);
         assert_eq!(calls_to(&e, 0x0040_6d00).len(), 1);
         assert_eq!(calls_to(&e, 0x0040_6d00)[0][2], 0x0108_8260);
     }
@@ -10357,9 +10406,12 @@ mod tests {
         // A low-level weapon: the attack animation group is chosen by weight.
         stub(&mut e, 0x0044_6390, 2);
         e.call_log = Some(vec![]);
+        let frame = next_frame(&mut e, 0x374);
         assert!(!e
             .call(0x008f_7730, &args![scene.process, scene.actor])
             .bool());
+        // The 0x374-byte frame: the attack data at EBP-0x30c (+0x68).
+        assert_eq!(calls_to(&e, 0x0097_fd80)[0][2], frame + 0x68);
         // The random roll (2500) % 100 = 0 and 2500 % 100 = 0 picks the first
         // usable group... the weights are 10, 10, 10, 10, 30, 30 and the
         // remainder 2500 % 100 = 0 ends on the very first entry.
@@ -13959,5 +14011,31 @@ mod tests {
             .map(|call| call[3])
             .collect();
         assert_eq!(verdicts, vec![frame + 0x64, frame + 0x5c]);
+    }
+
+    #[test]
+    fn test_high_process_update_ov2_travel_keeps_its_goal_in_the_frame() {
+        let mut e = Engine::new();
+        let scene = update_scene(&mut e, &[0, 0]);
+        global(&mut e, 0x011c_a248, 0x1234);
+        // The package test fails and the pathing is complete: the travel part runs and sets
+        // the pathfinding goal from the package coordinates at EBP-0x64 (+0x50).
+        stub(&mut e, 0x00aa_b220, 0);
+        stub(&mut e, 0x008b_3bb0, 1);
+        for addr in [
+            0x0067_8670u32,
+            0x0067_5a50,
+            0x0067_5c20,
+            0x0067_5de0,
+            0x008b_3690,
+        ] {
+            stub(&mut e, addr, 0);
+        }
+        // A saved acquire object ends the travel after the goal.
+        stub(&mut e, 0x0045_cd60, 1);
+        let frame = next_frame(&mut e, 0xb4);
+        e.call_log = Some(vec![]);
+        e.call(0x008f_4020, &args![scene.process, scene.actor, 0.0f32]);
+        assert_eq!(calls_to(&e, 0x0067_5de0)[0][1], frame + 0x50);
     }
 }

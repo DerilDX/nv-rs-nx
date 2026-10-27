@@ -397,13 +397,14 @@ pub fn fn_00e11520(e: &mut Engine, this: Ptr, _unused_1: u32, _unused_2: u32) {
 /// Bounding box of the mesh's vertex positions (`this` is ECX, one stack word `out`): writes
 /// the per-lane minimum at `out` and the maximum at `out + 0x10`. The head vertex's position
 /// is read before the list is tested, as the exe does, so an empty mesh reads address `0x10`.
-pub fn fn_00e11530(e: &mut Engine, this: Ptr, out: Ptr) {
+/// Answers `out` (`MOV EAX,[EBP+8]`; the caller keeps it, 00e1471c).
+pub fn fn_00e11530(e: &mut Engine, this: Ptr, out: Ptr) -> Ptr {
     let head = e.mem.u32(this.addr() + MESH_VERTEX_HEAD);
     let first = load_vec(e, head + VERTEX_POSITION);
     store_vec(e, out.addr(), first);
     store_vec(e, out.addr() + 0x10, first);
     if head == 0 {
-        return;
+        return out;
     }
     let mut minimum = first;
     let mut maximum = first;
@@ -416,6 +417,7 @@ pub fn fn_00e11530(e: &mut Engine, this: Ptr, out: Ptr) {
     }
     store_vec(e, out.addr(), minimum);
     store_vec(e, out.addr() + 0x10, maximum);
+    out
 }
 
 // Translated from 00e11570 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -8117,7 +8119,8 @@ fn cycle_assertion(e: &mut Engine, int3_address: u32) {
 /// (1, previous), 5 is (2, corner), 6 is (2, previous); case 7 (a degenerate triangle) is kind 3 with the
 /// pair of words of [`locate_zero_pair`]. When the walk fails the assertion "Cycle detected during
 /// point location" is raised and the kind is 4 with that pair.
-pub fn fn_00e24200(e: &mut Engine, this: Ptr, out: Ptr, x: i32, y: i32) {
+/// Answers `out` (`EAX` at every `RET`; the caller keeps it, 00e24bc3).
+pub fn fn_00e24200(e: &mut Engine, this: Ptr, out: Ptr, x: i32, y: i32) -> Ptr {
     let t = this.addr();
     let cell = (y >> 11).wrapping_shl(4).wrapping_add(x >> 11) as u32;
     let mut hint = e
@@ -8142,7 +8145,7 @@ pub fn fn_00e24200(e: &mut Engine, this: Ptr, out: Ptr, x: i32, y: i32) {
                     e.mem.set_u32(out.addr(), 3);
                     e.mem.set_u32(out.addr() + 4, low);
                     e.mem.set_u32(out.addr() + 8, high);
-                    return;
+                    return out;
                 }
             };
             e.mem.set_u32(out.addr(), kind);
@@ -8157,6 +8160,7 @@ pub fn fn_00e24200(e: &mut Engine, this: Ptr, out: Ptr, x: i32, y: i32) {
             e.mem.set_u32(out.addr() + 8, high);
         }
     }
+    out
 }
 
 // Translated from 00e23df0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -13588,7 +13592,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e1_1500, fn_00e11500(Ptr, u32, u32)),
         entry!(0x00e1_1510, fn_00e11510(Ptr, u32, u32)),
         entry!(0x00e1_1520, fn_00e11520(Ptr, u32, u32)),
-        entry!(0x00e1_1530, fn_00e11530(Ptr, Ptr)),
+        entry!(0x00e1_1530, fn_00e11530(Ptr, Ptr) -> Ptr),
         entry!(0x00e1_1570, fn_00e11570(Ptr, Ptr, Ptr) -> Ptr),
         entry!(0x00e1_1630, fn_00e11630(Ptr, Ptr)),
         entry!(0x00e1_1670, fn_00e11670(Ptr, Ptr) -> Ptr),
@@ -13746,7 +13750,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e1_aec0, mesh_split_parts(Ptr, u32, u32)),
         entry!(0x00e2_2de0, convex_overlap_impl_distance(u32, u32, u32, u8) -> f32),
         entry!(0x00e2_3bb0, fn_00e23bb0(Ptr) -> bool),
-        entry!(0x00e2_4200, fn_00e24200(Ptr, Ptr, i32, i32)),
+        entry!(0x00e2_4200, fn_00e24200(Ptr, Ptr, i32, i32) -> Ptr),
         entry!(0x00e2_3df0, fn_00e23df0(Ptr, Ptr, u32, u32, u32) -> Ptr),
         entry!(0x00e2_4650, fn_00e24650(Ptr, Ptr, u32, u32, u32, u32)),
         entry!(0x00e2_4aa0, fn_00e24aa0(Ptr, Ptr, i32, i32, i32, i32) -> Ptr),
@@ -14140,6 +14144,16 @@ mod tests {
         e.call(0x00e1_1530, &args![mesh, out]);
         assert_eq!(vec_at(&e, out), [-3.0, 2.0, -2.0, 1.0]);
         assert_eq!(vec_at(&e, out + 0x10), [1.0, 9.0, 4.0, 1.0]);
+    }
+
+    #[test]
+    fn fn_00e11530_answers_its_out_box() {
+        let mut e = engine();
+        let mesh = new_mesh(&mut e);
+        add_vertex(&mut e, mesh, [1.0, 5.0, -2.0, 1.0]);
+        let out = e.mem.alloc(0x20);
+        // `MOV EAX,[EBP+8]`: the caller keeps the answer (00e1471c).
+        assert_eq!(e.call(0x00e1_1530, &args![mesh, out]).u32(), out);
     }
 
     #[test]
@@ -19752,6 +19766,19 @@ mod tests {
             (e.mem.u32(out), e.mem.u32(out + 4), e.mem.u32(out + 8)),
             (3, 0, 0)
         );
+    }
+
+    #[test]
+    fn fn_00e24200_answers_its_out_record() {
+        let mut e = engine();
+        install_reporter(&mut e, 0);
+        let (triangulator, _, _, _) = square_triangulation(&mut e);
+        let out = e.mem.alloc(0xc);
+        // EAX is `out` at every RET; the caller keeps the answer (00e24bc3).
+        let answered = e
+            .call(0x00e2_4200, &args![triangulator, out, 80u32, 20u32])
+            .u32();
+        assert_eq!(answered, out);
     }
 
     #[test]

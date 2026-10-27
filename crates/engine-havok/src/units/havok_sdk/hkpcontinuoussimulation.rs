@@ -998,36 +998,39 @@ pub fn fn_00d0c290(e: &mut Engine, this: Ptr<HkpContinuousSimulation>, entities:
     if e.get(this, HkpContinuousSimulation::event_count) == 0 {
         return;
     }
-    let map = e.mem.alloc(12);
-    e.mem.set_u32(map, 0);
-    e.mem.set_u32(map + 4, 0);
-    e.mem.set_u32(map + 8, 0xffff_ffff);
-    let allocator = heap_allocator(e);
-    e.call(MAP_RESERVE, &args![map, allocator, count]);
-    for i in 0..count {
-        let key = e.mem.u32(entities + 4 * i as u32);
+    // The exe's frame (`SUB ESP,0xc`, four pushes): 0x1c bytes, the map at +0x10 (00d0c2ac).
+    e.with_stack(0x1c, |e, frame| {
+        let map = frame.addr() + 0x10;
+        e.mem.set_u32(map, 0);
+        e.mem.set_u32(map + 4, 0);
+        e.mem.set_u32(map + 8, 0xffff_ffff);
         let allocator = heap_allocator(e);
-        e.call(MAP_INSERT, &args![map, allocator, key, 0u32]);
-    }
-    let mut i = 0;
-    while i < e.get(this, HkpContinuousSimulation::event_count) {
-        let event = e.get(this, HkpContinuousSimulation::event_data) + i as u32 * TOI_EVENT_SIZE;
-        let first_key = e.mem.u32(event + EVENT_ENTITY_A);
-        let first = e.call(MAP_FIND_KEY, &args![map, first_key]).i32();
-        let second_key = e.mem.u32(event + EVENT_ENTITY_B);
-        let second = e.call(MAP_FIND_KEY, &args![map, second_key]).i32();
-        let hash_mod = e.mem.i32(map + 8);
-        if first <= hash_mod || second <= hash_mod {
-            notify_event_island(e, event);
-            remove_event_at(e, this, i);
-            i -= 1;
+        e.call(MAP_RESERVE, &args![map, allocator, count]);
+        for i in 0..count {
+            let key = e.mem.u32(entities + 4 * i as u32);
+            let allocator = heap_allocator(e);
+            e.call(MAP_INSERT, &args![map, allocator, key, 0u32]);
         }
-        i += 1;
-    }
-    let allocator = heap_allocator(e);
-    e.call(MAP_CLEAR_AND_DEALLOCATE, &args![map, allocator]);
-    e.call(MAP_DESTRUCTOR, &args![map]);
-    e.mem.free(map);
+        let mut i = 0;
+        while i < e.get(this, HkpContinuousSimulation::event_count) {
+            let event =
+                e.get(this, HkpContinuousSimulation::event_data) + i as u32 * TOI_EVENT_SIZE;
+            let first_key = e.mem.u32(event + EVENT_ENTITY_A);
+            let first = e.call(MAP_FIND_KEY, &args![map, first_key]).i32();
+            let second_key = e.mem.u32(event + EVENT_ENTITY_B);
+            let second = e.call(MAP_FIND_KEY, &args![map, second_key]).i32();
+            let hash_mod = e.mem.i32(map + 8);
+            if first <= hash_mod || second <= hash_mod {
+                notify_event_island(e, event);
+                remove_event_at(e, this, i);
+                i -= 1;
+            }
+            i += 1;
+        }
+        let allocator = heap_allocator(e);
+        e.call(MAP_CLEAR_AND_DEALLOCATE, &args![map, allocator]);
+        e.call(MAP_DESTRUCTOR, &args![map]);
+    });
 }
 
 // Translated from 00d0c3e0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1862,25 +1865,29 @@ pub fn hkp_continuous_simulation_add_toi_event(
     let size = e.get(this, HkpContinuousSimulation::event_count);
     let capacity = e.get(this, HkpContinuousSimulation::event_capacity) & 0x3fff_ffff;
     if size as u32 == capacity {
-        let stream = e.mem.alloc(0x10);
-        let text_buffer = e.mem.alloc(0x200);
-        e.call(STREAM_CONSTRUCTOR, &args![stream, text_buffer, 0x200u32]);
-        e.call(STREAM_WRITE_TEXT, &args![stream, TOI_QUEUE_FULL_TEXT]);
-        let error_object = e.mem.u32(ERROR_OBJECT);
-        e.vcall(
-            error_object,
-            0xc,
-            &args![
-                1u32,
-                0xf032_3454u32,
-                text_buffer,
-                ERROR_SOURCE_NAME,
-                0x43bu32
-            ],
-        );
-        e.call(STREAM_DESTRUCTOR, &args![stream]);
-        e.mem.free(text_buffer);
-        e.mem.free(stream);
+        // The exe's frame (`AND ESP,0xfffffff0`, `SUB ESP,0x218`, two pushes): 0x220 bytes from a
+        // 16-byte boundary, the stream at +0x14 (00d0d175) and its text buffer at +0x20
+        // (00d0d170).
+        e.with_stack(0x220 + 0x10, |e, raw| {
+            let frame = (raw.addr() + 0xf) & !0xf;
+            let stream = frame + 0x14;
+            let text_buffer = frame + 0x20;
+            e.call(STREAM_CONSTRUCTOR, &args![stream, text_buffer, 0x200u32]);
+            e.call(STREAM_WRITE_TEXT, &args![stream, TOI_QUEUE_FULL_TEXT]);
+            let error_object = e.mem.u32(ERROR_OBJECT);
+            e.vcall(
+                error_object,
+                0xc,
+                &args![
+                    1u32,
+                    0xf032_3454u32,
+                    text_buffer,
+                    ERROR_SOURCE_NAME,
+                    0x43bu32
+                ],
+            );
+            e.call(STREAM_DESTRUCTOR, &args![stream]);
+        });
         return;
     }
     let data = e.get(this, HkpContinuousSimulation::event_data);
@@ -1947,53 +1954,56 @@ pub fn hk_ls_collect_agent_entries_to_process(
     flags: u32,
     output: u32,
 ) {
-    let local = e.mem.alloc(12);
-    e.mem.set_u32(local, 0);
-    e.mem.set_u32(local + 4, 0);
-    e.mem.set_u32(local + 8, 0x8000_0000);
-    e.call(
-        GET_COLLISION_ENTRIES_SORTED,
-        &args![entity + ENTITY_COLLIDABLE, local],
-    );
-    let mut i = 0;
-    while e.mem.i32(local + 4) > i {
-        let pair = e.mem.u32(local) + 8 * i as u32;
-        let entry = e.mem.u32(pair);
-        if min_quality <= e.mem.u8(entry + ENTRY_QUALITY_INDEX) as i32 {
-            let collidable = e.mem.u32(pair + 4);
-            let other = collidable
-                .wrapping_add(e.mem.i8(collidable + COLLIDABLE_OWNER_OFFSET) as i32 as u32);
-            let mut collect = true;
-            if e.mem.u8(other + ENTITY_MOTION_TYPE) != 5 {
-                let slot = e.mem.u32(flags) + e.mem.u16(other + ENTITY_STORAGE_INDEX) as u32;
-                let state = e.mem.u8(slot);
-                if state >= 8 {
-                    collect = false;
-                } else if state == 0 {
-                    e.mem.set_u8(slot, 1);
-                    e.call(
-                        INTERPOLATE_MOTION_STATE,
-                        &args![
-                            other + ENTITY_SWEPT_TRANSFORM,
-                            x87_quiet(time),
-                            other + ENTITY_MOTION_STATE
-                        ],
-                    );
+    // The exe's frame (`SUB ESP,0xc`, four pushes): 0x1c bytes, the sorted entries at +0x10
+    // (00d0d2c8).
+    e.with_stack(0x1c, |e, frame| {
+        let local = frame.addr() + 0x10;
+        e.mem.set_u32(local, 0);
+        e.mem.set_u32(local + 4, 0);
+        e.mem.set_u32(local + 8, 0x8000_0000);
+        e.call(
+            GET_COLLISION_ENTRIES_SORTED,
+            &args![entity + ENTITY_COLLIDABLE, local],
+        );
+        let mut i = 0;
+        while e.mem.i32(local + 4) > i {
+            let pair = e.mem.u32(local) + 8 * i as u32;
+            let entry = e.mem.u32(pair);
+            if min_quality <= e.mem.u8(entry + ENTRY_QUALITY_INDEX) as i32 {
+                let collidable = e.mem.u32(pair + 4);
+                let other = collidable
+                    .wrapping_add(e.mem.i8(collidable + COLLIDABLE_OWNER_OFFSET) as i32 as u32);
+                let mut collect = true;
+                if e.mem.u8(other + ENTITY_MOTION_TYPE) != 5 {
+                    let slot = e.mem.u32(flags) + e.mem.u16(other + ENTITY_STORAGE_INDEX) as u32;
+                    let state = e.mem.u8(slot);
+                    if state >= 8 {
+                        collect = false;
+                    } else if state == 0 {
+                        e.mem.set_u8(slot, 1);
+                        e.call(
+                            INTERPOLATE_MOTION_STATE,
+                            &args![
+                                other + ENTITY_SWEPT_TRANSFORM,
+                                x87_quiet(time),
+                                other + ENTITY_MOTION_STATE
+                            ],
+                        );
+                    }
+                }
+                if collect {
+                    push_word_grow(e, output, entry);
                 }
             }
-            if collect {
-                push_word_grow(e, output, entry);
-            }
+            i += 1;
         }
-        i += 1;
-    }
-    let capacity = e.mem.u32(local + 8);
-    e.mem.set_u32(local + 4, 0);
-    if (capacity as i32) >= 0 {
-        let data = e.mem.u32(local);
-        heap_free(e, data, (capacity & 0x3fff_ffff).wrapping_mul(8));
-    }
-    e.mem.free(local);
+        let capacity = e.mem.u32(local + 8);
+        e.mem.set_u32(local + 4, 0);
+        if (capacity as i32) >= 0 {
+            let data = e.mem.u32(local);
+            heap_free(e, data, (capacity & 0x3fff_ffff).wrapping_mul(8));
+        }
+    });
 }
 
 // Translated from 00d0d3f0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2028,95 +2038,97 @@ pub fn hkp_continuous_simulation_collide_entities_broad_phase_continuous(
         return;
     }
     profile_record_pair(e, PROFILE_LT_BROAD_PHASE, PROFILE_ST_GATHER_AABBS);
-    let arrays = e.mem.alloc(0x18);
-    let added = arrays;
-    let removed = arrays + 0xc;
-    let pair_capacity = e.mem.u32(world + WORLD_BROAD_PHASE_UPDATE_SIZE);
-    for array in [added, removed] {
-        e.mem.set_u32(array, 0);
-        e.mem.set_u32(array + 4, 0);
-        e.mem.set_u32(array + 8, 0x8000_0000);
-    }
-    let added_top = stack_alloc(e, pair_capacity.wrapping_mul(8));
-    e.mem.set_u32(added + 8, pair_capacity | 0x8000_0000);
-    e.mem.set_u32(added, added_top);
-    let pair_capacity = e.mem.u32(world + WORLD_BROAD_PHASE_UPDATE_SIZE);
-    let removed_top = stack_alloc(e, pair_capacity.wrapping_mul(8));
-    e.mem.set_u32(removed, removed_top);
-    e.mem.set_u32(removed + 8, pair_capacity | 0x8000_0000);
-    let aabbs = stack_alloc(e, (n as u32) << 5);
-    let handles = stack_alloc(e, (n as u32) << 2);
-    gather_aabbs(e, entities, n, world, aabbs, handles);
-    profile_record(e, PROFILE_ST_3AXIS_SWEEP);
-    let broad_phase = e.mem.u32(world + WORLD_BROAD_PHASE);
-    broad_phase_lock(e, broad_phase);
-    e.vcall(broad_phase, 0x2c, &args![handles, aabbs, n, added, removed]);
-    let broad_phase = e.mem.u32(world + WORLD_BROAD_PHASE);
-    broad_phase_unlock(e, broad_phase);
-    stack_release(e, handles);
-    stack_release(e, aabbs);
-    if e.mem.i32(removed + 4).wrapping_add(e.mem.i32(added + 4)) > 0 {
-        profile_record(e, PROFILE_ST_REMOVE_DUP);
-        e.call(REMOVE_DUPLICATES, &args![added, removed]);
-    }
-    if export_flag != 0 {
-        profile_record(e, PROFILE_TT_WAIT_FOR_EXPORT);
-        loop {
-            if e.mem.u8(export_flag) == 1 {
-                break;
-            }
-            if e.mem.u8(export_flag) == 2 {
-                break;
-            }
-        }
-        profile_record(e, PROFILE_END);
-    }
-    if e.mem.i32(removed + 4).wrapping_add(e.mem.i32(added + 4)) > 0 {
-        profile_record(e, PROFILE_ST_REMOVE_AGENTS);
-        let island = e.mem.u32(e.mem.u32(entities) + ENTITY_SIMULATION_ISLAND);
-        e.call(WORLD_LOCK_ISLAND, &args![world, island]);
-        let dispatcher = e.mem.u32(world + WORLD_BROAD_PHASE_DISPATCHER);
-        let removed_data = e.mem.u32(removed);
-        let removed_size = e.mem.u32(removed + 4);
-        e.call(
-            DISPATCHER_REMOVE_PAIRS,
-            &args![dispatcher, removed_data, removed_size],
-        );
-        let added_size = e.mem.u32(added + 4);
-        let allocator = heap_allocator(e);
-        let accepted = e.vcall(allocator, 0x24, &args![added_size << 10]).u8() != 0;
-        if accepted {
-            profile_record(e, PROFILE_ST_ADD_AGENTS);
-            let filter = e.mem.u32(world + WORLD_COLLISION_FILTER);
-            let filter_part = if filter != 0 { filter + 8 } else { 0 };
-            let dispatcher = e.mem.u32(world + WORLD_BROAD_PHASE_DISPATCHER);
-            let added_data = e.mem.u32(added);
-            e.call(
-                DISPATCHER_ADD_PAIRS,
-                &args![dispatcher, added_data, added_size, filter_part],
-            );
-        }
-        let island = e.mem.u32(e.mem.u32(entities) + ENTITY_SIMULATION_ISLAND);
-        e.call(WORLD_UNLOCK_ISLAND, &args![world, island]);
-    }
-    profile_record(e, PROFILE_LT);
-    // Release the pair arrays: the stack memory in reverse order, and the
-    // heap memory of an array that outgrew it.
-    for (array, top) in [(removed, removed_top), (added, added_top)] {
-        if e.mem.u32(array) == top {
+    // The exe's frame (`SUB ESP,0x38`, four pushes): 0x48 bytes, the removed pairs at +0x28 and
+    // the added pairs at +0x38 (00d0d445 / 00d0d482; each 16 bytes with the saved stack top).
+    e.with_stack(0x48, |e, frame| {
+        let added = frame.addr() + 0x38;
+        let removed = frame.addr() + 0x28;
+        let pair_capacity = e.mem.u32(world + WORLD_BROAD_PHASE_UPDATE_SIZE);
+        for array in [added, removed] {
+            e.mem.set_u32(array, 0);
             e.mem.set_u32(array + 4, 0);
+            e.mem.set_u32(array + 8, 0x8000_0000);
         }
-        stack_release(e, top);
-        let capacity = e.mem.u32(array + 8);
-        e.mem.set_u32(array + 4, 0);
-        if (capacity as i32) >= 0 {
-            let data = e.mem.u32(array);
-            heap_free(e, data, (capacity & 0x3fff_ffff).wrapping_mul(8));
+        let added_top = stack_alloc(e, pair_capacity.wrapping_mul(8));
+        e.mem.set_u32(added + 8, pair_capacity | 0x8000_0000);
+        e.mem.set_u32(added, added_top);
+        let pair_capacity = e.mem.u32(world + WORLD_BROAD_PHASE_UPDATE_SIZE);
+        let removed_top = stack_alloc(e, pair_capacity.wrapping_mul(8));
+        e.mem.set_u32(removed, removed_top);
+        e.mem.set_u32(removed + 8, pair_capacity | 0x8000_0000);
+        let aabbs = stack_alloc(e, (n as u32) << 5);
+        let handles = stack_alloc(e, (n as u32) << 2);
+        gather_aabbs(e, entities, n, world, aabbs, handles);
+        profile_record(e, PROFILE_ST_3AXIS_SWEEP);
+        let broad_phase = e.mem.u32(world + WORLD_BROAD_PHASE);
+        broad_phase_lock(e, broad_phase);
+        e.vcall(broad_phase, 0x2c, &args![handles, aabbs, n, added, removed]);
+        let broad_phase = e.mem.u32(world + WORLD_BROAD_PHASE);
+        broad_phase_unlock(e, broad_phase);
+        stack_release(e, handles);
+        stack_release(e, aabbs);
+        if e.mem.i32(removed + 4).wrapping_add(e.mem.i32(added + 4)) > 0 {
+            profile_record(e, PROFILE_ST_REMOVE_DUP);
+            e.call(REMOVE_DUPLICATES, &args![added, removed]);
         }
-        e.mem.set_u32(array, 0);
-        e.mem.set_u32(array + 8, 0x8000_0000);
-    }
-    e.mem.free(arrays);
+        if export_flag != 0 {
+            profile_record(e, PROFILE_TT_WAIT_FOR_EXPORT);
+            loop {
+                if e.mem.u8(export_flag) == 1 {
+                    break;
+                }
+                if e.mem.u8(export_flag) == 2 {
+                    break;
+                }
+            }
+            profile_record(e, PROFILE_END);
+        }
+        if e.mem.i32(removed + 4).wrapping_add(e.mem.i32(added + 4)) > 0 {
+            profile_record(e, PROFILE_ST_REMOVE_AGENTS);
+            let island = e.mem.u32(e.mem.u32(entities) + ENTITY_SIMULATION_ISLAND);
+            e.call(WORLD_LOCK_ISLAND, &args![world, island]);
+            let dispatcher = e.mem.u32(world + WORLD_BROAD_PHASE_DISPATCHER);
+            let removed_data = e.mem.u32(removed);
+            let removed_size = e.mem.u32(removed + 4);
+            e.call(
+                DISPATCHER_REMOVE_PAIRS,
+                &args![dispatcher, removed_data, removed_size],
+            );
+            let added_size = e.mem.u32(added + 4);
+            let allocator = heap_allocator(e);
+            let accepted = e.vcall(allocator, 0x24, &args![added_size << 10]).u8() != 0;
+            if accepted {
+                profile_record(e, PROFILE_ST_ADD_AGENTS);
+                let filter = e.mem.u32(world + WORLD_COLLISION_FILTER);
+                let filter_part = if filter != 0 { filter + 8 } else { 0 };
+                let dispatcher = e.mem.u32(world + WORLD_BROAD_PHASE_DISPATCHER);
+                let added_data = e.mem.u32(added);
+                e.call(
+                    DISPATCHER_ADD_PAIRS,
+                    &args![dispatcher, added_data, added_size, filter_part],
+                );
+            }
+            let island = e.mem.u32(e.mem.u32(entities) + ENTITY_SIMULATION_ISLAND);
+            e.call(WORLD_UNLOCK_ISLAND, &args![world, island]);
+        }
+        profile_record(e, PROFILE_LT);
+        // Release the pair arrays: the stack memory in reverse order, and the
+        // heap memory of an array that outgrew it.
+        for (array, top) in [(removed, removed_top), (added, added_top)] {
+            if e.mem.u32(array) == top {
+                e.mem.set_u32(array + 4, 0);
+            }
+            stack_release(e, top);
+            let capacity = e.mem.u32(array + 8);
+            e.mem.set_u32(array + 4, 0);
+            if (capacity as i32) >= 0 {
+                let data = e.mem.u32(array);
+                heap_free(e, data, (capacity & 0x3fff_ffff).wrapping_mul(8));
+            }
+            e.mem.set_u32(array, 0);
+            e.mem.set_u32(array + 8, 0x8000_0000);
+        }
+    });
 }
 
 // Translated from 00d0d8b0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2627,77 +2639,80 @@ pub fn hk_ls_toi_activate_entities_and_check_constraints(
     let router = e.call(MEMORY_ROUTER, &args![]).u32();
     let saved_top = e.mem.u32(router);
     e.mem.set_u32(router, saved_top + 0x1000);
-    let collected = e.mem.alloc(12);
-    e.mem.set_u32(collected, saved_top);
-    e.mem.set_u32(collected + 4, 0);
-    e.mem.set_u32(collected + 8, 0x8000_03e8);
-    let mut i = 0;
-    while i < e.mem.i32(entities + 4) {
-        let body = e.mem.u32(e.mem.u32(entities) + 4 * i as u32);
-        let slot = e.mem.u32(flags) + e.mem.u16(body + ENTITY_STORAGE_INDEX) as u32;
-        if e.mem.u8(slot) == 0 {
-            e.mem.set_u8(slot, 1);
-            e.call(
-                INTERPOLATE_MOTION_STATE,
-                &args![
-                    body + ENTITY_SWEPT_TRANSFORM,
-                    x87_quiet(time),
-                    body + ENTITY_MOTION_STATE
-                ],
-            );
-        }
-        let slot = e.mem.u32(flags) + e.mem.u16(body + ENTITY_STORAGE_INDEX) as u32;
-        e.mem.set_u8(slot, 8);
-        hk_ls_collect_agent_entries_to_process(e, body, min_priority, time, flags, collected);
-        i += 1;
-    }
-    let old_start = e.mem.u32(input + 0x50);
-    let old_end = e.mem.u32(input + 0x54);
-    let old_delta = e.mem.u32(input + 0x58);
-    let old_inverse = e.mem.u32(input + 0x5c);
-    e.mem.set_u32(input + 0x54, x87_quiet_bits(time.to_bits()));
-    let delta = (time as f64 - e.mem.f32(input + 0x50) as f64) as f32;
-    e.mem.set_u32(input + 0x58, x87_quiet_bits(delta.to_bits()));
-    let inverse = if 0.0 < delta {
-        (1.0 / delta as f64) as f32
-    } else {
-        0.0
-    };
-    e.mem.set_f32(input + 0x5c, inverse);
-    let first_body = e.mem.u32(e.mem.u32(entities));
-    let simulation = e
-        .mem
-        .u32(e.mem.u32(first_body + ENTITY_WORLD) + WORLD_SIMULATION);
-    let island = e.mem.u32(first_body + ENTITY_SIMULATION_ISLAND);
-    let flagged_simulation = (simulation & 0xffff_ff00) | 1;
-    let collected_data = e.mem.u32(collected);
-    let collected_size = e.mem.u32(collected + 4);
-    e.vcall(
-        simulation,
-        0x48,
-        &args![
-            collected_data,
-            collected_size,
-            input,
-            island,
-            flagged_simulation
-        ],
-    );
-    e.mem.set_u32(input + 0x50, old_start);
-    e.mem.set_u32(input + 0x54, old_end);
-    e.mem.set_u32(input + 0x58, old_delta);
-    e.mem.set_u32(input + 0x5c, old_inverse);
-    if saved_top == e.mem.u32(collected) {
+    // The exe's frame (`AND ESP,0xfffffff0`, `SUB ESP,0x44`, three pushes): 0x50 bytes from a
+    // 16-byte boundary, the collected entries at +0x30 (00d0e4c6).
+    e.with_stack(0x50 + 0x10, |e, raw| {
+        let collected = ((raw.addr() + 0xf) & !0xf) + 0x30;
+        e.mem.set_u32(collected, saved_top);
         e.mem.set_u32(collected + 4, 0);
-    }
-    stack_release(e, saved_top);
-    let capacity = e.mem.u32(collected + 8);
-    e.mem.set_u32(collected + 4, 0);
-    if (capacity as i32) >= 0 {
-        let data = e.mem.u32(collected);
-        heap_free(e, data, (capacity & 0x3fff_ffff).wrapping_mul(4));
-    }
-    e.mem.free(collected);
+        e.mem.set_u32(collected + 8, 0x8000_03e8);
+        let mut i = 0;
+        while i < e.mem.i32(entities + 4) {
+            let body = e.mem.u32(e.mem.u32(entities) + 4 * i as u32);
+            let slot = e.mem.u32(flags) + e.mem.u16(body + ENTITY_STORAGE_INDEX) as u32;
+            if e.mem.u8(slot) == 0 {
+                e.mem.set_u8(slot, 1);
+                e.call(
+                    INTERPOLATE_MOTION_STATE,
+                    &args![
+                        body + ENTITY_SWEPT_TRANSFORM,
+                        x87_quiet(time),
+                        body + ENTITY_MOTION_STATE
+                    ],
+                );
+            }
+            let slot = e.mem.u32(flags) + e.mem.u16(body + ENTITY_STORAGE_INDEX) as u32;
+            e.mem.set_u8(slot, 8);
+            hk_ls_collect_agent_entries_to_process(e, body, min_priority, time, flags, collected);
+            i += 1;
+        }
+        let old_start = e.mem.u32(input + 0x50);
+        let old_end = e.mem.u32(input + 0x54);
+        let old_delta = e.mem.u32(input + 0x58);
+        let old_inverse = e.mem.u32(input + 0x5c);
+        e.mem.set_u32(input + 0x54, x87_quiet_bits(time.to_bits()));
+        let delta = (time as f64 - e.mem.f32(input + 0x50) as f64) as f32;
+        e.mem.set_u32(input + 0x58, x87_quiet_bits(delta.to_bits()));
+        let inverse = if 0.0 < delta {
+            (1.0 / delta as f64) as f32
+        } else {
+            0.0
+        };
+        e.mem.set_f32(input + 0x5c, inverse);
+        let first_body = e.mem.u32(e.mem.u32(entities));
+        let simulation = e
+            .mem
+            .u32(e.mem.u32(first_body + ENTITY_WORLD) + WORLD_SIMULATION);
+        let island = e.mem.u32(first_body + ENTITY_SIMULATION_ISLAND);
+        let flagged_simulation = (simulation & 0xffff_ff00) | 1;
+        let collected_data = e.mem.u32(collected);
+        let collected_size = e.mem.u32(collected + 4);
+        e.vcall(
+            simulation,
+            0x48,
+            &args![
+                collected_data,
+                collected_size,
+                input,
+                island,
+                flagged_simulation
+            ],
+        );
+        e.mem.set_u32(input + 0x50, old_start);
+        e.mem.set_u32(input + 0x54, old_end);
+        e.mem.set_u32(input + 0x58, old_delta);
+        e.mem.set_u32(input + 0x5c, old_inverse);
+        if saved_top == e.mem.u32(collected) {
+            e.mem.set_u32(collected + 4, 0);
+        }
+        stack_release(e, saved_top);
+        let capacity = e.mem.u32(collected + 8);
+        e.mem.set_u32(collected + 4, 0);
+        if (capacity as i32) >= 0 {
+            let data = e.mem.u32(collected);
+            heap_free(e, data, (capacity & 0x3fff_ffff).wrapping_mul(4));
+        }
+    });
     let mut k = 0;
     while k < e.mem.i32(entities + 4) {
         let body = e.mem.u32(e.mem.u32(entities) + 4 * k as u32);
@@ -5054,10 +5069,14 @@ mod tests {
         let entities = word_array(&mut e, &[a, b], 2);
         let list = e.mem.u32(entities);
         log(&mut e);
+        // The map sits at +0x10 of the exe's 0x1c-byte frame.
+        let frame = e.mem.alloc(0x1c);
+        e.mem.free(frame);
         e.call(0x00d0_c290, &args![this, list, 2i32]);
         let calls = take_log(&mut e);
         assert_eq!(*keys.borrow(), [a, b]);
         assert_eq!(calls_to(&calls, MAP_RESERVE).len(), 1);
+        assert_eq!(calls_to(&calls, MAP_RESERVE)[0][0], frame + 0x10);
         assert_eq!(calls_to(&calls, MAP_RESERVE)[0][2], 2);
         assert_eq!(calls_to(&calls, MAP_CLEAR_AND_DEALLOCATE).len(), 1);
         assert_eq!(calls_to(&calls, MAP_DESTRUCTOR).len(), 1);
@@ -6019,12 +6038,17 @@ mod tests {
             ],
         );
         log(&mut e);
+        // The stream at +0x14 and its text at +0x20 of the exe's aligned 0x220-byte frame.
+        let block = e.mem.alloc(0x230);
+        e.mem.free(block);
+        let frame = (block + 0xf) & !0xf;
         e.call(0x00d0_d150, &args![this, 0x1000u32, 0x2000u32]);
         let calls = take_log(&mut e);
         assert_eq!(e.get(this, HkpContinuousSimulation::event_count), 2);
         let constructed = calls_to(&calls, STREAM_CONSTRUCTOR);
         assert_eq!(constructed.len(), 1);
         let (stream, buffer) = (constructed[0][0], constructed[0][1]);
+        assert_eq!((stream, buffer), (frame + 0x14, frame + 0x20));
         assert_eq!(constructed[0][2], 0x200);
         assert_eq!(
             calls_to(&calls, STREAM_WRITE_TEXT),
@@ -6109,8 +6133,15 @@ mod tests {
         // An output array that is full after two entries.
         let output = word_array(&mut e, &[], 2);
         log(&mut e);
+        // The sorted entries sit at +0x10 of the exe's 0x1c-byte frame.
+        let frame = e.mem.alloc(0x1c);
+        e.mem.free(frame);
         e.call(0x00d0_d2c0, &args![entity, 2i32, 1.5f32, flags, output]);
         let calls = take_log(&mut e);
+        assert_eq!(
+            calls_to(&calls, GET_COLLISION_ENTRIES_SORTED)[0][1],
+            frame + 0x10
+        );
         assert_eq!(
             array_items(&e, output),
             [entries[1], entries[2], entries[4]]
@@ -6186,8 +6217,15 @@ mod tests {
         let export = e.mem.alloc(4);
         e.mem.set_u8(export, 2);
         log(&mut e);
+        // The added pairs at +0x38 and the removed at +0x28 of the exe's 0x48-byte frame.
+        let frame = e.mem.alloc(0x48);
+        e.mem.free(frame);
         e.call(0x00d0_d3f0, &args![list, 1i32, world, export]);
         let calls = take_log(&mut e);
+        assert_eq!(
+            calls_to(&calls, 0x0600_002c)[0][4..],
+            [frame + 0x38, frame + 0x28]
+        );
         let (added_data, removed_data) = *found.borrow();
         assert_eq!(
             only(
@@ -6803,6 +6841,11 @@ mod tests {
         let new_entities = word_array(&mut e, &[], 8);
         let constraints = word_array(&mut e, &[], 8);
         log(&mut e);
+        // The collected entries sit at +0x30 of the exe's aligned 0x50-byte frame (their
+        // capacity word, 0x3e8 not owned, at +0x38).
+        let block = e.mem.alloc(0x60);
+        e.mem.free(block);
+        let frame = (block + 0xf) & !0xf;
         e.call(
             0x00d0_e4b0,
             &args![
@@ -6816,6 +6859,7 @@ mod tests {
             ],
         );
         let calls = take_log(&mut e);
+        assert_eq!(e.mem.u32(frame + 0x38), 0x8000_03e8);
         // The narrow phase of the island's simulation, with the one entry.
         let narrow = narrow.borrow();
         assert_eq!(narrow.len(), 1);

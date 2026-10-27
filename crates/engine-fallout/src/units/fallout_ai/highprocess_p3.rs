@@ -3563,11 +3563,8 @@ pub fn fn_008e4e50(e: &mut Engine, this: Ptr<HighProcess>, actor: Ptr) {
     e.vcall(phantom, PHANTOM_SLOT_ADD_TO_WORLD, &args![world]);
 }
 
-/// Allocated sizes and helpers of `008e51b0`: the transform blocks, the
-/// collector (`hkpAllCdBodyPairCollector`-like, 0x11c bytes) and the calls
-/// working with them.
-const NODE_TRANSFORM_SIZE: u32 = 13 * 4;
-const COLLECTOR_SIZE: u32 = 0x11c;
+/// Helpers of `008e51b0`: the calls working with the transforms and the collector
+/// (`hkpAllCdBodyPairCollector`-like, 0x11c bytes).
 const NODE_TRANSFORM: u32 = 0x0046_1130;
 const TRANSFORM_COMPOSE: u32 = 0x0062_c250;
 const PHANTOM_SET_TRANSFORM: u32 = 0x0056_df20;
@@ -3646,96 +3643,99 @@ pub fn fn_008e51b0(e: &mut Engine, this: Ptr<HighProcess>, actor: Ptr) {
 fn door_search(e: &mut Engine, actor: Ptr, slot: u32) -> u32 {
     let a = actor.addr();
     let mut door = 0u32;
-    // The phantom's size, as a point (three floats at ebp-0x50).
-    let rotation = e.mem.alloc(0x30);
-    let unused = e.mem.alloc(0x40);
-    let size = e.mem.alloc(12);
-    let transform = e.mem.alloc(NODE_TRANSFORM_SIZE);
-    let composed = e.mem.alloc(0x40);
-    let collector = e.mem.alloc(COLLECTOR_SIZE + 4);
-    e.call(POINT_CONSTRUCT_DEFAULT, &args![size]);
-    e.call(MATRIX_CONSTRUCT, &args![unused]);
-    e.call(MATRIX_CONSTRUCT, &args![rotation]);
-    let phantom = e.call(NI_POINTER_GET, &args![slot]).u32();
-    let shape = e.call(PHANTOM_SHAPE, &args![phantom]).u32();
-    let converted = e.with_stack(12, |e, point| {
-        let out = fn_008e5620(e, Ptr::new(shape), point).addr();
-        [e.mem.u32(out), e.mem.u32(out + 4), e.mem.u32(out + 8)]
-    });
-    for (index, word) in converted.iter().enumerate() {
-        e.mem.set_u32(size + index as u32 * 4, *word);
-    }
-    let flags = e.call(ACTOR_MOVE_MODE, &args![actor]).u32();
-    let y = f32::from_bits(converted[1]);
-    let z = f32::from_bits(converted[2]);
-    let (offset, angle) = if flags & 2 != 0 {
-        ([0.0, -y, z], Some(DOOR_ANGLE_FLAG_2))
-    } else if flags & 4 != 0 {
-        ([-y, 0.0, z], Some(DOOR_ANGLE_FLAG_4))
-    } else if flags & 8 != 0 {
-        ([y, 0.0, z], Some(DOOR_ANGLE_FLAG_8))
-    } else {
-        ([0.0, y, z], None)
-    };
-    e.with_stack(12, |e, built| {
+    // The frame of `008e51b0` (`SUB ESP,0x25c` under the exception record, then `ESI`, `EDI`
+    // and the record link): the phantom's size, as a point, at `EBP-0x50` (+0x224), the
+    // rotation at `EBP-0x44` (+0x230), the unused matrix at `EBP-0x84` (+0x1f0), the converted
+    // size at `EBP-0x230` (+0x44), the offset point at `EBP-0x23c`, `-0x248`, `-0x254` or
+    // `-0x260` by move mode, the node transform at `EBP-0xb8` (+0x1bc), the composed one at
+    // `EBP-0xf4` (+0x180) and the collector at `EBP-0x214` (+0x60).
+    e.with_stack(0x274, |e, frame| {
+        let local = |offset: u32| frame.addr() + offset;
+        let rotation = local(0x230);
+        let unused = local(0x1f0);
+        let size = local(0x224);
+        let transform = local(0x1bc);
+        let composed = local(0x180);
+        let collector = local(0x60);
+        e.call(POINT_CONSTRUCT_DEFAULT, &args![size]);
+        e.call(MATRIX_CONSTRUCT, &args![unused]);
+        e.call(MATRIX_CONSTRUCT, &args![rotation]);
+        let phantom = e.call(NI_POINTER_GET, &args![slot]).u32();
+        let shape = e.call(PHANTOM_SHAPE, &args![phantom]).u32();
+        let converted = {
+            let out = fn_008e5620(e, Ptr::new(shape), Ptr::new(local(0x44))).addr();
+            [e.mem.u32(out), e.mem.u32(out + 4), e.mem.u32(out + 8)]
+        };
+        for (index, word) in converted.iter().enumerate() {
+            e.mem.set_u32(size + index as u32 * 4, *word);
+        }
+        let flags = e.call(ACTOR_MOVE_MODE, &args![actor]).u32();
+        let y = f32::from_bits(converted[1]);
+        let z = f32::from_bits(converted[2]);
+        let (offset, angle, built) = if flags & 2 != 0 {
+            ([0.0, -y, z], Some(DOOR_ANGLE_FLAG_2), local(0x38))
+        } else if flags & 4 != 0 {
+            ([-y, 0.0, z], Some(DOOR_ANGLE_FLAG_4), local(0x2c))
+        } else if flags & 8 != 0 {
+            ([y, 0.0, z], Some(DOOR_ANGLE_FLAG_8), local(0x20))
+        } else {
+            ([0.0, y, z], None, local(0x14))
+        };
         e.call(
             POINT_CONSTRUCT,
             &args![built, offset[0], offset[1], offset[2]],
         );
         for word in 0..3 {
-            let value = e.mem.u32(built.addr() + word * 4);
+            let value = e.mem.u32(built + word * 4);
             e.mem.set_u32(rotation + 0x24 + word * 4, value);
         }
-    });
-    match angle {
-        Some(angle) => {
-            let value = e.global::<f32>(angle);
-            e.call(MATRIX_FROM_ANGLE, &args![rotation, value]);
-        }
-        None => {
-            for word in 0..9 {
-                let value = e.mem.u32(IDENTITY_MATRIX + word * 4);
-                e.mem.set_u32(rotation + word * 4, value);
+        match angle {
+            Some(angle) => {
+                let value = e.global::<f32>(angle);
+                e.call(MATRIX_FROM_ANGLE, &args![rotation, value]);
+            }
+            None => {
+                for word in 0..9 {
+                    let value = e.mem.u32(IDENTITY_MATRIX + word * 4);
+                    e.mem.set_u32(rotation + word * 4, value);
+                }
             }
         }
-    }
-    let node = e.vcall(a, ACTOR_SLOT_NODE_FOR_FOLLOW, &args![]).u32();
-    let node_transform = e.call(NODE_TRANSFORM, &args![node]).u32();
-    for word in 0..13 {
-        let value = e.mem.u32(node_transform + word * 4);
-        e.mem.set_u32(transform + word * 4, value);
-    }
-    e.call(TRANSFORM_COMPOSE, &args![transform, composed, rotation]);
-    let phantom = e.call(NI_POINTER_GET, &args![slot]).u32();
-    e.call(PHANTOM_SET_TRANSFORM, &args![phantom, composed]);
-    e.call(COLLECTOR_CONSTRUCTOR, &args![collector]);
-    e.call(COLLECTOR_RESET, &args![collector]);
-    let phantom = e.call(NI_POINTER_GET, &args![slot]).u32();
-    e.call(PHANTOM_FILL_COLLECTOR, &args![phantom, collector]);
-    let array = e.call(COLLECTOR_ARRAY, &args![collector]).u32();
-    let count = e.call(NODE_NEXT, &args![array]).i32();
-    let mut index = 0;
-    while index < count {
+        let node = e.vcall(a, ACTOR_SLOT_NODE_FOR_FOLLOW, &args![]).u32();
+        let node_transform = e.call(NODE_TRANSFORM, &args![node]).u32();
+        for word in 0..13 {
+            let value = e.mem.u32(node_transform + word * 4);
+            e.mem.set_u32(transform + word * 4, value);
+        }
+        e.call(TRANSFORM_COMPOSE, &args![transform, composed, rotation]);
+        let phantom = e.call(NI_POINTER_GET, &args![slot]).u32();
+        e.call(PHANTOM_SET_TRANSFORM, &args![phantom, composed]);
+        e.call(COLLECTOR_CONSTRUCTOR, &args![collector]);
+        e.call(COLLECTOR_RESET, &args![collector]);
+        let phantom = e.call(NI_POINTER_GET, &args![slot]).u32();
+        e.call(PHANTOM_FILL_COLLECTOR, &args![phantom, collector]);
         let array = e.call(COLLECTOR_ARRAY, &args![collector]).u32();
-        let entry = e.call(COLLECTOR_ENTRY, &args![array, index as u32]).u32();
-        let body = e.mem.u32(entry + 8);
-        let object = e.call(NI_OBJECT_OF_BODY, &args![body]).u32();
-        let reference = e.call(FIND_REFERENCE_FOR_3D, &args![object]).u32();
-        if reference != 0 {
-            let form = e.call(REFERENCE_GET_FORM, &args![reference]).u32();
-            if e.call(FORM_TYPE_BYTE, &args![form]).i32() == 0x1c
-                && e.call(REFERENCE_HAS_EXTRA_FLAG, &args![reference]).u32() == 0
-            {
-                door = reference;
+        let count = e.call(NODE_NEXT, &args![array]).i32();
+        let mut index = 0;
+        while index < count {
+            let array = e.call(COLLECTOR_ARRAY, &args![collector]).u32();
+            let entry = e.call(COLLECTOR_ENTRY, &args![array, index as u32]).u32();
+            let body = e.mem.u32(entry + 8);
+            let object = e.call(NI_OBJECT_OF_BODY, &args![body]).u32();
+            let reference = e.call(FIND_REFERENCE_FOR_3D, &args![object]).u32();
+            if reference != 0 {
+                let form = e.call(REFERENCE_GET_FORM, &args![reference]).u32();
+                if e.call(FORM_TYPE_BYTE, &args![form]).i32() == 0x1c
+                    && e.call(REFERENCE_HAS_EXTRA_FLAG, &args![reference]).u32() == 0
+                {
+                    door = reference;
+                }
             }
+            index += 1;
         }
-        index += 1;
-    }
-    e.call(COLLECTOR_DESTRUCTOR, &args![collector]);
-    for block in [rotation, unused, size, transform, composed, collector] {
-        e.mem.free(block);
-    }
-    door
+        e.call(COLLECTOR_DESTRUCTOR, &args![collector]);
+        door
+    })
 }
 
 /// Settings and calls of the bone level of detail (`008e5730`).
@@ -6234,21 +6234,25 @@ pub fn high_process_process_accompany(e: &mut Engine, this: Ptr<HighProcess>, ac
         }
         let my_position = e.vcall(a, ACTOR_SLOT_POSITION, &args![]).u32();
         let target_position = e.vcall(target, ACTOR_SLOT_POSITION, &args![]).u32();
-        e.with_stack(12, |e, my_mover_position| {
+        // The exe's frame (`SUB ESP,0xac` under `EBP`): the mover positions at `EBP-0x3c` (+0x70) and
+        // `EBP-0x18` (+0x94), the differences at `EBP-0x60`, `-0x54`, `-0x24` and `-0xc` (+0x4c,
+        // +0x58, +0x88, +0xa0).
+        e.with_stack(0xac, |e, frame| {
+            let my_mover_position = frame.addr() + 0x70;
             let mover = e.mem.u32(a + ACTOR_MOVER);
             e.call(MOVER_POSITION, &args![mover, my_mover_position]);
-            e.with_stack(12, |e, target_mover_position| {
+            {
+                let target_mover_position = frame.addr() + 0x94;
                 let mover = e.mem.u32(target + ACTOR_MOVER);
                 e.call(MOVER_POSITION, &args![mover, target_mover_position]);
                 // Four differences (destination - me, destination - target,
                 // target - me, target mover - my mover) and, after the follow
                 // distance, their squared lengths.
-                let differences = e.mem.alloc(48);
                 let (to_me, to_target, between, mover_gap) = (
-                    differences,
-                    differences + 12,
-                    differences + 24,
-                    differences + 36,
+                    frame.addr() + 0x4c,
+                    frame.addr() + 0x58,
+                    frame.addr() + 0x88,
+                    frame.addr() + 0xa0,
                 );
                 e.call(POINT_DIFFERENCE, &args![destination, to_me, my_position]);
                 e.call(
@@ -6272,7 +6276,6 @@ pub fn high_process_process_accompany(e: &mut Engine, this: Ptr<HighProcess>, ac
                 let destination_to_target = e.call(POINT_SQUARED_LENGTH, &args![to_target]).f32();
                 let target_to_me = e.call(POINT_SQUARED_LENGTH, &args![between]).f32();
                 let movers = e.call(POINT_SQUARED_LENGTH, &args![mover_gap]).f32();
-                e.mem.free(differences);
                 let complete = e.call(ACTOR_IS_PATHING_COMPLETE, &args![actor]).bool();
                 // `FCOMPP` tests: strictly greater, false when unordered.
                 let farther =
@@ -6315,7 +6318,7 @@ pub fn high_process_process_accompany(e: &mut Engine, this: Ptr<HighProcess>, ac
                         ],
                     );
                 }
-            });
+            }
         });
     });
 }
@@ -28578,5 +28581,57 @@ mod tests {
         assert!(calls_to(&e, ACTOR_START_GREETING_PLAYER).is_empty());
         assert_eq!(e.get(p, HighProcess::fIdleChatterTimer), 2.5);
         let _ = player;
+    }
+
+    #[test]
+    fn test_fn_008e51b0_door_search_keeps_its_locals_in_the_frame() {
+        let mut e = Engine::new();
+        let (p, actor) = door_world(&mut e, 0x4000);
+        let phantom = object_with_slots(&mut e, OTHER_TABLE, &[(PHANTOM_SLOT_0X94, 1)]);
+        e.mem.set_u32(p.addr() + SHAPE_PHANTOM, phantom);
+        e.register(HAVOK_VECTOR_TO_POINT, |_, a| ret(a[0]));
+        e.map(IDENTITY_MATRIX & !0xfff, 0x1000);
+        let node_transform = e.mem.alloc(0x34);
+        returning(&mut e, NODE_TRANSFORM, node_transform);
+        returning(&mut e, NODE_NEXT, 0);
+        e.mem.set_f32(p.addr() + DOOR_TIMER, 0.0);
+        // The 0x274-byte frame of 008e51b0: the size at +0x224, the node transform at +0x1bc,
+        // the composed one at +0x180, the rotation at +0x230, the collector at +0x60.
+        let frame = e.mem.alloc(0x274);
+        e.mem.free(frame);
+        e.call_log = Some(vec![]);
+        e.call(0x008e51b0, &args![p, actor]);
+        assert_eq!(calls_to(&e, POINT_CONSTRUCT_DEFAULT)[0][0], frame + 0x224);
+        assert_eq!(
+            calls_to(&e, TRANSFORM_COMPOSE),
+            vec![vec![frame + 0x1bc, frame + 0x180, frame + 0x230]]
+        );
+        assert_eq!(
+            calls_to(&e, COLLECTOR_CONSTRUCTOR),
+            vec![vec![frame + 0x60]]
+        );
+    }
+
+    #[test]
+    fn test_high_process_process_accompany_keeps_its_points_in_the_frame() {
+        let mut e = Engine::new();
+        let (p, actor, _) = accompany_world(&mut e);
+        returning_float(&mut e, DISTANCE_FROM_REFERENCE, 350.0);
+        // The 0xac-byte frame: the mover positions at +0x70 and +0x94, the differences at
+        // +0x4c, +0x58, +0x88 and +0xa0.
+        let frame = e.mem.alloc(0xac);
+        e.mem.free(frame);
+        e.call_log = Some(vec![]);
+        e.call(0x008e0b00, &args![p, actor]);
+        let movers: Vec<u32> = calls_to(&e, MOVER_POSITION).iter().map(|c| c[1]).collect();
+        assert_eq!(movers, vec![frame + 0x70, frame + 0x94]);
+        let lengths: Vec<u32> = calls_to(&e, POINT_SQUARED_LENGTH)
+            .iter()
+            .map(|c| c[0])
+            .collect();
+        assert_eq!(
+            lengths,
+            vec![frame + 0x4c, frame + 0x58, frame + 0x88, frame + 0xa0]
+        );
     }
 }

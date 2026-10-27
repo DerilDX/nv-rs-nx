@@ -12,6 +12,22 @@ use crate::units::havok_sdk::hkgeometryprocessing::{
     sum3, test_parity_even,
 };
 
+/// Runs `f` on an exe-shaped frame: a function that aligns `ESP` (`AND ESP,0xfffffff0`) and
+/// then reserves `below` bytes (its `SUB ESP` and pushes) has its frame `below` bytes under a
+/// 16-byte boundary; `f` gets the frame's lowest address.
+fn with_aligned_frame<R>(e: &mut Engine, below: u32, f: impl FnOnce(&mut Engine, u32) -> R) -> R {
+    e.with_stack(below + 0x10, |e, raw| {
+        let boundary = (raw.addr() + below + 0xf) & !0xf;
+        f(e, boundary - below)
+    })
+}
+
+/// The frame base [`with_aligned_frame`] picks for a block at `raw` (tests).
+#[cfg(test)]
+fn aligned_frame_at(raw: u32, below: u32) -> u32 {
+    ((raw + below + 0xf) & !0xf) - below
+}
+
 /// The exe's `float` zero (`01011d78`), `3.0` (`01017718`) and `0.5` (`01016248`).
 const ZERO: u32 = 0x0101_1d78;
 const THREE: u32 = 0x0101_7718;
@@ -115,38 +131,38 @@ pub fn fn_00ddd6f0(
 /// (both through `FLD`/`FSTP`, so quiet), and answers `hkMath_atan2fApproximation(*out_a,
 /// dot)` (`00cbff80`): the two `float`s are passed as the words they have in memory.
 pub fn fn_00ddd7e0(e: &mut Engine, points: u32, out_a: u32, out_b: u32) -> f64 {
-    let p0 = points;
-    let p1 = points + 0x10;
-    let first = e.mem.alloc(0x10);
-    let second = e.mem.alloc(0x10);
-    fn_00ddd620(e, p0, p1, points + 0x20, first);
-    fn_00ddd620(e, p1, p0, points + 0x30, second);
-    let from = load_vec4(e, p0);
-    let to = load_vec4(e, p1);
-    let edge = sub4(to, from);
-    let squared = sum3(mul4(edge, edge));
-    let factor = inverse_length(e, squared);
-    let along = mul4([factor; 4], edge);
-    let n1 = load_vec4(e, first);
-    let cross = sub4(
-        mul4(rotate_d2(n1), rotate_c9(along)),
-        mul4(rotate_c9(n1), rotate_d2(along)),
-    );
-    let n2 = load_vec4(e, second);
-    let projected = sum3(mul4(cross, n2));
-    e.mem.set_u32(out_a, x87_quiet(projected).to_bits());
-    let dot = sum3(mul4(n2, n1));
-    e.mem.set_u32(out_b, x87_quiet(dot).to_bits());
-    let stored = x87_quiet_bits(e.mem.u32(out_a));
-    let result = e
-        .call(
+    // The exe aligns ESP, then `SUB ESP,0x28` and two pushes: a 0x30-byte frame, the two normals
+    // at +0x10 and +0x20 (00ddd7ee, 00ddd801).
+    with_aligned_frame(e, 0x30, |e, frame| {
+        let p0 = points;
+        let p1 = points + 0x10;
+        let first = frame + 0x10;
+        let second = frame + 0x20;
+        fn_00ddd620(e, p0, p1, points + 0x20, first);
+        fn_00ddd620(e, p1, p0, points + 0x30, second);
+        let from = load_vec4(e, p0);
+        let to = load_vec4(e, p1);
+        let edge = sub4(to, from);
+        let squared = sum3(mul4(edge, edge));
+        let factor = inverse_length(e, squared);
+        let along = mul4([factor; 4], edge);
+        let n1 = load_vec4(e, first);
+        let cross = sub4(
+            mul4(rotate_d2(n1), rotate_c9(along)),
+            mul4(rotate_c9(n1), rotate_d2(along)),
+        );
+        let n2 = load_vec4(e, second);
+        let projected = sum3(mul4(cross, n2));
+        e.mem.set_u32(out_a, x87_quiet(projected).to_bits());
+        let dot = sum3(mul4(n2, n1));
+        e.mem.set_u32(out_b, x87_quiet(dot).to_bits());
+        let stored = x87_quiet_bits(e.mem.u32(out_a));
+        e.call(
             ATAN2_APPROXIMATION,
             &args![stored, x87_quiet_bits(dot.to_bits())],
         )
-        .f64();
-    e.mem.free(first);
-    e.mem.free(second);
-    result
+        .f64()
+    })
 }
 
 /// This unit's translated functions, by exe address.
@@ -309,5 +325,38 @@ mod tests {
             *log.borrow(),
             vec![vec![e.mem.u32(out), e.mem.u32(out + 4)]]
         );
+    }
+
+    #[test]
+    fn the_two_normals_sit_at_0x10_and_0x20_of_the_aligned_frame() {
+        let mut e = engine();
+        let points = e.mem.alloc(0x40);
+        for (k, v) in [
+            [0.0, 0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            store_vec4(&mut e, points + 0x10 * k as u32, v);
+        }
+        let log: Rc<RefCell<Vec<Vec<u32>>>> = Rc::default();
+        let seen = Rc::clone(&log);
+        e.register_double(ATAN2_APPROXIMATION, move |_, a| {
+            seen.borrow_mut().push(a.to_vec());
+            Ret {
+                st0: 0.5,
+                ..Ret::default()
+            }
+        });
+        let out = e.mem.alloc(8);
+        let raw = e.mem.alloc(0x40);
+        e.mem.free(raw);
+        e.call(0x00dd_d7e0, &args![points, out, out + 4]);
+        let frame = aligned_frame_at(raw, 0x30);
+        assert_eq!(load_vec4(&e, frame + 0x10)[2], 1.0);
+        assert_eq!(load_vec4(&e, frame + 0x20)[1], 1.0);
     }
 }

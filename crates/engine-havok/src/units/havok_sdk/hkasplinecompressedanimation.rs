@@ -1276,6 +1276,8 @@ pub fn fn_00e346a0(e: &mut Engine, mask: u8, statics: u32, defaults: u32, out: u
 /// stored as a `float`; times `[this + 0x40]` (stored as a `float`) it is the fraction stored to
 /// `*fraction_out`; the key is the fraction times `[this + 0x3c]` times `n`, truncated towards
 /// zero (out of range gives `0x80000000`), and its low byte is stored to `*byte_out`.
+/// Answers `byte_out`: the exe leaves it in `EAX` at every `RET` (the hkBool/hkResult result
+/// returned through a pointer, which callers read through `EAX`).
 pub fn hka_spline_compressed_animation_get_block_and_time(
     e: &mut Engine,
     this: Ptr,
@@ -1284,7 +1286,7 @@ pub fn hka_spline_compressed_animation_get_block_and_time(
     block_out: u32,
     fraction_out: u32,
     byte_out: u32,
-) {
+) -> u32 {
     let this = this.addr();
     let frames = e.mem.u32(this + 0x30).wrapping_sub(1);
     if frames == 0 {
@@ -1312,6 +1314,7 @@ pub fn hka_spline_compressed_animation_get_block_and_time(
     let frames = e.mem.u32(this + 0x30).wrapping_sub(1);
     let scaled = f64::from(fraction) * f64::from(e.mem.f32(this + 0x3c)) * f64::from(frames as i32);
     e.mem.set_u8(byte_out, truncate(scaled) as u8);
+    byte_out
 }
 
 /// This unit's translated functions, by exe address.
@@ -1386,7 +1389,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e3_46a0, fn_00e346a0(u8, u32, u32, u32)),
         entry!(
             0x00e3_4720,
-            hka_spline_compressed_animation_get_block_and_time(Ptr, u32, f32, u32, u32, u32)
+            hka_spline_compressed_animation_get_block_and_time(Ptr, u32, f32, u32, u32, u32) -> u32
         ),
     ]
 }
@@ -2549,6 +2552,24 @@ mod tests {
         assert_eq!(e.mem.u32(block), 3);
         assert_eq!(e.mem.f32(fraction), 1_073_741_824.0);
         assert_eq!(e.mem.u8(byte), 0);
+    }
+
+    #[test]
+    fn get_block_and_time_splits_the_frame_into_block_fraction_and_key_answers_its_result_pointer()
+    {
+        let mut e = engine();
+        let this = block_animation(&mut e);
+        let outs = e.mem.alloc(0x10);
+        let (block, fraction, byte) = (outs, outs + 4, outs + 8);
+        // The exe leaves the result pointer in EAX at every RET; callers read through it.
+        assert_eq!(
+            e.call(
+                0x00e3_4720,
+                &args![this, 9u32, 0.5f32, block, fraction, byte],
+            )
+            .u32(),
+            args![byte][0]
+        );
     }
 
     #[test]

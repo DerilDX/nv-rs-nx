@@ -504,46 +504,48 @@ pub fn havok_error_assert_message(
     file: u32,
     line: u32,
 ) {
-    let buffer = e.mem.alloc(0x400);
-    let path = e.mem.alloc(0x104);
-    if label == 0 {
-        e.mem.set_u8(buffer, 0);
-    } else {
-        e.call(STR_COPY, &args![buffer, 0x400u32, label]);
-    }
-    if text != 0 {
-        e.call(STR_CAT, &args![buffer, 0x400u32, TEXT_SEPARATOR]);
-        e.call(STR_CAT, &args![buffer, 0x400u32, text]);
-    }
-    let root = this.byte_add(HavokError::pRootDir.off);
-    let mut shown = 0;
-    if e.get(this, HavokError::pRootDir) != 0 {
-        let mut found = e.call(STRSTR, &args![file, TES4_UPPER]).u32();
-        if found == 0 {
-            found = e.call(STRSTR, &args![file, TES4_LOWER]).u32();
+    // The exe's frame (`SUB ESP,0x520` under `EBP`): the message at +0x118 (`EBP-0x408`) and
+    // the path at +0x10 (`EBP-0x510`).
+    e.with_stack(0x520, |e, frame| {
+        let buffer = frame.addr() + 0x118;
+        let path = frame.addr() + 0x10;
+        if label == 0 {
+            e.mem.set_u8(buffer, 0);
+        } else {
+            e.call(STR_COPY, &args![buffer, 0x400u32, label]);
         }
-        if found != 0 {
-            e.call(STR_COPY, &args![path, 0x104u32, root]);
-            e.call(STR_CAT, &args![path, 0x104u32, found]);
-            shown = path;
-        } else if e.mem.u8(file) == b'.' && e.mem.u8(file + 1) == b'.' {
-            e.call(STR_COPY, &args![path, 0x104u32, root]);
-            e.call(STR_CAT, &args![path, 0x104u32, HAVOK_INCLUDE_PATH]);
-            e.call(STR_CAT, &args![path, 0x104u32, file + 3]);
-            shown = path;
+        if text != 0 {
+            e.call(STR_CAT, &args![buffer, 0x400u32, TEXT_SEPARATOR]);
+            e.call(STR_CAT, &args![buffer, 0x400u32, text]);
         }
-    }
-    if shown == 0 {
-        shown = file;
-    }
-    let handler = e.call(ASSERT_HANDLER, &args![]).u32();
-    let answer = e.vcall(handler, 0xc, &args![shown, line, buffer]).i32();
-    if answer == 5 {
-        let disabled = hk_bool_word(e, false);
-        e.vcall(this.addr(), 0x10, &args![id, disabled]);
-    }
-    e.mem.free(buffer);
-    e.mem.free(path);
+        let root = this.byte_add(HavokError::pRootDir.off);
+        let mut shown = 0;
+        if e.get(this, HavokError::pRootDir) != 0 {
+            let mut found = e.call(STRSTR, &args![file, TES4_UPPER]).u32();
+            if found == 0 {
+                found = e.call(STRSTR, &args![file, TES4_LOWER]).u32();
+            }
+            if found != 0 {
+                e.call(STR_COPY, &args![path, 0x104u32, root]);
+                e.call(STR_CAT, &args![path, 0x104u32, found]);
+                shown = path;
+            } else if e.mem.u8(file) == b'.' && e.mem.u8(file + 1) == b'.' {
+                e.call(STR_COPY, &args![path, 0x104u32, root]);
+                e.call(STR_CAT, &args![path, 0x104u32, HAVOK_INCLUDE_PATH]);
+                e.call(STR_CAT, &args![path, 0x104u32, file + 3]);
+                shown = path;
+            }
+        }
+        if shown == 0 {
+            shown = file;
+        }
+        let handler = e.call(ASSERT_HANDLER, &args![]).u32();
+        let answer = e.vcall(handler, 0xc, &args![shown, line, buffer]).i32();
+        if answer == 5 {
+            let disabled = hk_bool_word(e, false);
+            e.vcall(this.addr(), 0x10, &args![id, disabled]);
+        }
+    });
 }
 
 // Translated from 006259b0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2404,5 +2406,26 @@ mod tests_b {
         fn_00626680(&mut e, array, 2);
         assert_eq!(e.mem.u32(array.addr() + 4), 2);
         assert_eq!(calls(&e, ARRAY_ELEMENT_COPY).len(), 1);
+    }
+
+    #[test]
+    fn assert_message_keeps_the_buffer_at_frame_offset_0x118() {
+        let mut e = engine();
+        put_exe_strings(&mut e);
+        let answer = Rc::new(Cell::new(0));
+        assert_handler(&mut e, answer);
+        let buffers = Rc::new(RefCell::new(Vec::new()));
+        let log = buffers.clone();
+        e.register_double(SLOT_HANDLER, move |_, a| {
+            log.borrow_mut().push(a[3]);
+            0u32.into_ret()
+        });
+        let this = error_with_slots(&mut e);
+        let file = put(&mut e, "C:\\src\\foo.cpp");
+        // No label, no text, no root directory: only the empty buffer at +0x118 of 0x520 bytes.
+        let frame = e.mem.alloc(0x520);
+        e.mem.free(frame);
+        havok_error_assert_message(&mut e, this, 0, 9, 0, file, 13);
+        assert_eq!(*buffers.borrow(), vec![frame + 0x118]);
     }
 }

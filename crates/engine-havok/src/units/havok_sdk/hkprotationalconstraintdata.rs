@@ -50,7 +50,9 @@ pub fn hkp_rotational_constraint_data_get_runtime_info(
 /// (`RET 4`): writes into the byte at `valid` whether the rotation at `this + 0x20` and the one
 /// at `this + 0x50` are both orthonormal within the tolerance. The second is only asked when the
 /// first is. The answers are read through the pointers `isOrthonormal` returns.
-pub fn hkp_rotational_constraint_data_is_valid(e: &mut Engine, this: Ptr, valid: Ptr) {
+/// Answers `valid`: the exe leaves it in `EAX` at every `RET` (the hkBool/hkResult result
+/// returned through a pointer, which callers read through `EAX`).
+pub fn hkp_rotational_constraint_data_is_valid(e: &mut Engine, this: Ptr, valid: Ptr) -> Ptr {
     let tolerance = x87_quiet_bits(e.global::<u32>(ORTHONORMAL_TOLERANCE));
     let result = e.with_stack(2, |e, buffer| {
         let buffer = buffer.addr();
@@ -72,6 +74,7 @@ pub fn hkp_rotational_constraint_data_is_valid(e: &mut Engine, this: Ptr, valid:
         false
     });
     e.mem.set_u8(valid.addr(), u8::from(result));
+    valid
 }
 
 // Translated from 00e3b5b0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -93,7 +96,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x00e3_b550,
-            hkp_rotational_constraint_data_is_valid(Ptr, Ptr)
+            hkp_rotational_constraint_data_is_valid(Ptr, Ptr) -> Ptr
         ),
         entry!(0x00e3_b5b0, hkp_rotational_constraint_data_get_type() -> u32),
     ]
@@ -176,6 +179,16 @@ mod tests {
                 assert_eq!(seen[1], (0x5050, 0x3a83_126f));
             }
         }
+    }
+
+    #[test]
+    fn fn_00e3b550_answers_its_result_pointer() {
+        let mut e = engine();
+        e.set_global(ORTHONORMAL_TOLERANCE, 0x3a83_126fu32);
+        orthonormal_answers(&mut e, vec![1u8, 1]);
+        let out = e.mem.alloc(4);
+        // EAX is `out` at both RETs (the hkBool result pointer the callers read through).
+        assert_eq!(e.call(0x00e3_b550, &args![0x5000u32, out]).u32(), out);
     }
 
     #[test]

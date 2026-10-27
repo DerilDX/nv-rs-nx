@@ -762,13 +762,15 @@ pub fn fn_0094c7a0(e: &mut Engine, this: Ptr<PlayerCharacter>, spell: Ptr) -> bo
 /// failed with code 5; otherwise it is true when
 /// `PlayerCharacter::IsGodMode` is, and else the call's own result.
 pub fn fn_0094c800(e: &mut Engine, this: Ptr, first: u32, second: u32, out: Ptr, flag: u8) -> bool {
-    let code = e.mem.alloc(4);
-    e.mem.set_u32(code, 0);
-    let ok = e
-        .call(SPELL_CHECK, &args![this, first, second, code, flag])
-        .bool();
-    let reported = e.mem.u32(code);
-    e.mem.free(code);
+    // The exe's frame (`SUB ESP,0x10` under `EBP`): the code at +8 (`EBP-0x8`).
+    let (ok, reported) = e.with_stack(0x10, |e, frame| {
+        let code = frame.addr() + 8;
+        e.mem.set_u32(code, 0);
+        let ok = e
+            .call(SPELL_CHECK, &args![this, first, second, code, flag])
+            .bool();
+        (ok, e.mem.u32(code))
+    });
     if !out.is_null() {
         e.mem.set_u32(out.addr(), reported);
     }
@@ -904,19 +906,23 @@ pub fn fn_0094ca50(e: &mut Engine, this: Ptr) -> u32 {
 // The parent-cell change handler
 // ---------------------------------------------------------------------
 
-/// Stack frame of `0094cae0`.
-const FRAME_CORNER_A: u32 = 0x00;
-const FRAME_CORNER_B: u32 = 0x08;
-const FRAME_CORNER_C: u32 = 0x10;
-const FRAME_CORNER_D: u32 = 0x18;
-const FRAME_REGION_LIST: u32 = 0x20;
-const FRAME_PLAYER_POINT: u32 = 0x28;
-const FRAME_REGION_VARIABLE: u32 = 0x30;
-const FRAME_ITEM_VARIABLE: u32 = 0x34;
-const FRAME_POSITION_COPY: u32 = 0x38;
-const FRAME_OUT_BUFFER: u32 = 0x48;
-const FRAME_CINFO: u32 = 0x68;
-const FRAME_SIZE: u32 = FRAME_CINFO + 0xe0;
+/// Stack frame of `0094cae0`: the distances below its 16-byte aligned `EBP` (`SUB ESP,0x25c`
+/// under the exception record and `EBX`, then `ESI` and the record link; the music pair is
+/// the by-value argument copy built under that, after the pushed 1).
+const FRAME_CORNER_A: u32 = 0x1ac;
+const FRAME_CORNER_B: u32 = 0x1b4;
+const FRAME_CORNER_C: u32 = 0x1bc;
+const FRAME_CORNER_D: u32 = 0x1c4;
+const FRAME_REGION_LIST: u32 = 0x1cc;
+const FRAME_PLAYER_POINT: u32 = 0x1f4;
+const FRAME_REGION_VARIABLE: u32 = 0x1d8;
+const FRAME_ITEM_VARIABLE: u32 = 0x1ec;
+const FRAME_POSITION_COPY: u32 = 0x15c;
+const FRAME_DISTANCE_COPY: u32 = 0x234;
+const FRAME_OUT_BUFFER: u32 = 0x150;
+const FRAME_CINFO: u32 = 0x120;
+const FRAME_MUSIC_PAIR: u32 = 0x280;
+const FRAME_SIZE: u32 = 0x280;
 
 /// The region data of a region (`009611e0` gives the data list, `004f35b0`
 /// finds the entry of the given kind).
@@ -996,444 +1002,444 @@ pub fn fn_0094cae0(e: &mut Engine, this: Ptr<PlayerCharacter>, cell: Ptr) {
         return;
     }
 
-    let frame = e.mem.alloc(FRAME_SIZE);
-    let list_local = frame + FRAME_REGION_LIST;
-    let player_point = frame + FRAME_PLAYER_POINT;
-    let region_variable = frame + FRAME_REGION_VARIABLE;
-    let item_variable = frame + FRAME_ITEM_VARIABLE;
+    e.with_stack(FRAME_SIZE + 0x10, |e, raw| {
+        let ebp = (raw.addr() + FRAME_SIZE + 0xf) & !0xf;
+        let list_local = ebp - FRAME_REGION_LIST;
+        let player_point = ebp - FRAME_PLAYER_POINT;
+        let region_variable = ebp - FRAME_REGION_VARIABLE;
+        let item_variable = ebp - FRAME_ITEM_VARIABLE;
 
-    if !e.call(0x0042_5fd0, &args![cell]).bool() {
-        e.call(0x0093_a7a0, &args![player, 0u32]);
-    }
-    e.call(0x0057_43f0, &args![]);
-    let music = e.call(0x0054_74b0, &args![cell, 0u32]).u32();
-    e.mem.set_u32(player + 0x7b4, music);
-    let interior = e.call(0x0045_43c0, &args![cell]).u32();
-    if interior != 0 {
-        let lighting = e.call(0x0045_cd60, &args![interior]).u32();
-        e.call(0x0048_93c0, &args![lighting, 1u32]);
-    }
-    e.vcall(player, 0x1fc, &args![0u32]);
+        if !e.call(0x0042_5fd0, &args![cell]).bool() {
+            e.call(0x0093_a7a0, &args![player, 0u32]);
+        }
+        e.call(0x0057_43f0, &args![]);
+        let music = e.call(0x0054_74b0, &args![cell, 0u32]).u32();
+        e.mem.set_u32(player + 0x7b4, music);
+        let interior = e.call(0x0045_43c0, &args![cell]).u32();
+        if interior != 0 {
+            let lighting = e.call(0x0045_cd60, &args![interior]).u32();
+            e.call(0x0048_93c0, &args![lighting, 1u32]);
+        }
+        e.vcall(player, 0x1fc, &args![0u32]);
 
-    // Decals for the two values `00622bb0` and `00622ba0` give.
-    for getter in [0x0062_2bb0u32, 0x0062_2ba0] {
-        let current = e.call(PARENT_CELL_OF, &args![player]).u32();
-        if current != 0 && {
+        // Decals for the two values `00622bb0` and `00622ba0` give.
+        for getter in [0x0062_2bb0u32, 0x0062_2ba0] {
             let current = e.call(PARENT_CELL_OF, &args![player]).u32();
-            e.call(0x0045_43c0, &args![current]).u32() != 0
-        } {
-            let value = e.call(getter, &args![]).f32();
-            if e.call(0x0062_2a70, &args![value, 0u32]).u32() != 0 {
+            if current != 0 && {
                 let current = e.call(PARENT_CELL_OF, &args![player]).u32();
-                let lighting = e.call(0x0045_43c0, &args![current]).u32();
+                e.call(0x0045_43c0, &args![current]).u32() != 0
+            } {
                 let value = e.call(getter, &args![]).f32();
-                let decal = e.call(0x0062_2a70, &args![value, 1u32]).u32();
-                e.call(0x0062_31a0, &args![decal, lighting]);
+                if e.call(0x0062_2a70, &args![value, 0u32]).u32() != 0 {
+                    let current = e.call(PARENT_CELL_OF, &args![player]).u32();
+                    let lighting = e.call(0x0045_43c0, &args![current]).u32();
+                    let value = e.call(getter, &args![]).f32();
+                    let decal = e.call(0x0062_2a70, &args![value, 1u32]).u32();
+                    e.call(0x0062_31a0, &args![decal, lighting]);
+                }
             }
         }
-    }
 
-    // The camera body.
-    if e.call(0x0082_2510, &args![player + 0xdec, 0u32]).bool() {
-        let block = e.call(0x00aa_13e0, &args![0x14u32]).u32();
-        let sphere = if block != 0 {
-            fn_0094dbb0(e, Ptr::new(block)).addr()
-        } else {
-            0
-        };
-        let radius = e.global::<f32>(CAMERA_SPHERE_RADIUS);
-        e.call(0x0056_ea00, &args![sphere, radius]);
-        let cinfo = frame + FRAME_CINFO;
-        e.call(0x00c8_f510, &args![cinfo]);
-        e.call(0x0056_f110, &args![cinfo, sphere]);
-        let flags: u32 = 0x0003_0000 | 0x21;
-        e.call(0x0056_f0f0, &args![cinfo, flags]);
-        let body_block = e.call(0x00aa_13e0, &args![0x1cu32]).u32();
-        let body = if body_block != 0 {
-            e.call(0x0056_d380, &args![body_block, cinfo]).u32()
-        } else {
-            0
-        };
-        e.call(SMART_POINTER_ASSIGN, &args![player + 0xdec, body]);
-        let body_ptr = e.call(0x0055_9450, &args![player + 0xdec]).u32();
-        e.call(0x0056_1580, &args![body_ptr, 1u32]);
-        let body_ptr = e.call(0x0055_9450, &args![player + 0xdec]).u32();
-        e.vcall(body_ptr, 0xe4, &args![4u32]);
-        let body_ptr = e.call(0x0055_9450, &args![player + 0xdec]).u32();
-        let motion = e.call(0x004a_e700, &args![body_ptr]).u32();
-        fn_0094db80(e, Ptr::new(motion), 9);
-        let out_buffer = frame + FRAME_OUT_BUFFER;
-        e.call(LIST_NODE_ITEM_SLOT, &args![out_buffer]);
-        let position = e.vcall(player, 0x1f4, &args![]).u32();
-        let copy = frame + FRAME_POSITION_COPY;
-        for word in 0..3 {
-            let value = e.mem.u32(position + 4 * word);
-            e.mem.set_u32(copy + 4 * word, value);
-        }
-        e.call(0x004a_3e00, &args![out_buffer, copy]);
-        let body_ptr = e.call(0x0055_9450, &args![player + 0xdec]).u32();
-        e.call(0x0056_10f0, &args![body_ptr, copy]);
-        e.call(0x0056_d730, &args![cinfo]);
-    }
-    let body_ptr = e.call(0x0055_9450, &args![player + 0xdec]).u32();
-    let current = e.call(PARENT_CELL_OF, &args![player]).u32();
-    let current_interior = e.call(0x0045_43c0, &args![current]).u32();
-    e.vcall(body_ptr, 0x9c, &args![current_interior]);
-
-    // Whether the player is in a state that keeps the sky as it is.
-    let mut flag = e.call(0x0043_7bd0, &args![player]).bool();
-    if !flag {
-        flag = e.vcall(player, 0x22c, &args![0u32]).bool();
-    }
-    if !flag {
-        flag = e.vcall(player, 0x2e8, &args![]).bool();
-    }
-    if !flag {
-        flag = e.vcall(player, 0x230, &args![]).bool();
-    }
-    let reset = !flag && !e.call(0x005a_1e50, &args![player]).bool();
-    if reset {
-        e.vcall(player, 0x494, &args![]);
-    }
-    let loader = e.global::<u32>(MODEL_LOADER_POINTER);
-    e.call(0x0044_6b50, &args![loader, 0u32]);
-    let climate = e.call(0x0054_75b0, &args![cell]).u32();
-    let sky = e.call(0x0046_dd00, &args![]).u32();
-    e.call(0x0063_c8f0, &args![sky, climate, 0u32]);
-    let weather = e.call(0x0054_7680, &args![cell]).u32();
-    let weather = e.call(0x0050_0940, &args![weather]).u32();
-    e.call(0x00b4_f430, &args![weather]);
-    let world_space = e.call(0x0054_ddd0, &args![cell]).u32();
-    let mut found_border = false;
-    e.mem.set_u8(player + 0x79c, 0);
-
-    let border_regions = e.mem.u32(player + 0x7b0);
-    if border_regions != 0 {
-        e.call(0x005e_03d0, &args![border_regions]);
-        let border_regions = e.mem.u32(player + 0x7b0);
-        if border_regions != 0 {
-            e.vcall(border_regions, 0, &args![1u32]);
-        }
-        e.mem.set_u32(player + 0x7b0, 0);
-    }
-
-    // The four corners of the cell.
-    let cell_x = e.call(0x0054_4c30, &args![cell]).i32();
-    let cell_y = e.call(0x0054_4c60, &args![cell]).i32();
-    let cell_size: f64 = e.global(CELL_SIZE);
-    let west = (cell_x << 12) as f32;
-    let east = (west as f64 + cell_size) as f32;
-    let south = (cell_y << 12) as f32;
-    let north = (south as f64 + cell_size) as f32;
-    for (corner, x, y) in [
-        (FRAME_CORNER_A, west, south),
-        (FRAME_CORNER_B, west, north),
-        (FRAME_CORNER_C, east, south),
-        (FRAME_CORNER_D, east, north),
-    ] {
-        e.call(0x004f_7070, &args![frame + corner, x, y]);
-    }
-
-    e.call(LIST_CLEAR, &args![player + 0x774]);
-    e.set_global(CURRENT_REGION_WITH_SOUNDS, 0u32);
-    e.call(0x0096_a2d0, &args![list_local]);
-
-    // The regions the player was in.
-    let mut node = if player.wrapping_add(0x764) == 0 {
-        0
-    } else {
-        player + 0x768
-    };
-    while node != 0 {
-        let slot = list_item_slot(e, node);
-        if e.mem.u32(slot) == 0 {
-            break;
-        }
-        let slot = list_item_slot(e, node);
-        let region = e.mem.u32(slot);
-        e.mem.set_u32(region_variable, region);
-        if region != 0 {
-            e.call(0x005a_e3d0, &args![list_local, region_variable]);
-        }
-        node = list_next(e, node);
-    }
-    e.call(LIST_CLEAR, &args![player + 0x768]);
-
-    // The regions of the new cell.
-    let mut best = 0u32;
-    let region_list = e.call(0x0054_7110, &args![cell, 1u32]).u32();
-    let mut region_node = if region_list != 0 { region_list + 4 } else { 0 };
-    while region_node != 0 {
-        let slot = list_item_slot(e, region_node);
-        let item = e.mem.u32(slot);
-        if item == 0 {
-            break;
-        }
-        e.mem.set_u32(item_variable, item);
-        let position = e.call(0x0089_1170, &args![player]).u32();
-        e.call(0x004f_7030, &args![player_point, position + 0x10]);
-
-        let skip = e.call(0x0044_0d80, &args![item]).bool() || {
-            let form = e.call(0x007a_f430, &args![item]).u32();
-            let wrong_world = form != 0 && {
-                let again = e.call(0x007a_f430, &args![item]).u32();
-                let world = e.call(0x0057_5d70, &args![player]).u32();
-                again != world
+        // The camera body.
+        if e.call(0x0082_2510, &args![player + 0xdec, 0u32]).bool() {
+            let block = e.call(0x00aa_13e0, &args![0x14u32]).u32();
+            let sphere = if block != 0 {
+                fn_0094dbb0(e, Ptr::new(block)).addr()
+            } else {
+                0
             };
-            wrong_world || {
-                let regions = e.call(0x0044_1110, &args![item]).u32();
-                regions == 0 || {
-                    let regions = e.call(0x0044_1110, &args![item]).u32();
-                    list_is_empty(e, regions)
-                }
-            }
-        };
-        if skip {
-            region_node = list_next(e, region_node);
-            continue;
-        }
-
-        let mut done = false;
-        let mut entry_node = e.call(0x0044_1110, &args![item]).u32();
-        while !done && entry_node != 0 {
-            let slot = list_item_slot(e, entry_node);
-            let entry = e.mem.u32(slot);
-            if entry == 0 {
-                break;
-            }
-            if e.call(0x004f_8360, &args![entry, player_point]).bool() {
-                e.call(0x004f_6600, &args![player + 0x764, item]);
-                if e.call(0x005f_65d0, &args![list_local, item_variable])
-                    .bool()
-                {
-                    e.call(0x0090_5330, &args![list_local, item_variable]);
-                }
-                let data = region_data(e, item, 7);
-                if data != 0 {
-                    if region_data_flag(e, data) {
-                        let replace = if best == 0 {
-                            true
-                        } else if best == data {
-                            false
-                        } else {
-                            let old = region_data_priority(e, best);
-                            let new = region_data_priority(e, data);
-                            old < new
-                        };
-                        if replace {
-                            e.call(LIST_CLEAR, &args![player + 0x774]);
-                            best = data;
-                        }
-                    }
-                    if best == 0 || best == data {
-                        let mut sound_node = e.call(0x0048_d150, &args![data]).u32();
-                        while sound_node != 0 {
-                            let slot = list_item_slot(e, sound_node);
-                            if e.mem.u32(slot) == 0 {
-                                break;
-                            }
-                            let slot = list_item_slot(e, sound_node);
-                            e.call(0x005a_e3d0, &args![player + 0x774, slot]);
-                            sound_node = list_next(e, sound_node);
-                        }
-                        if e.vcall(data, 0x30, &args![]).u32() != 0 {
-                            e.set_global(CURRENT_REGION_WITH_SOUNDS, data);
-                        }
-                    }
-                }
-                if e.call(0x0054_9580, &args![item]).bool() {
-                    found_border = true;
-                    let corners = [
-                        FRAME_CORNER_A,
-                        FRAME_CORNER_B,
-                        FRAME_CORNER_C,
-                        FRAME_CORNER_D,
-                    ];
-                    let mut all = true;
-                    for corner in corners {
-                        if !e.call(0x004f_8360, &args![entry, frame + corner]).bool() {
-                            all = false;
-                            break;
-                        }
-                    }
-                    if all {
-                        e.mem.set_u8(player + 0x79c, 1);
-                    }
-                }
-                let occupied = e.mem.u32(player + 0x760);
-                if occupied != 0 {
-                    let occupied_data = region_data(e, occupied, 3);
-                    let new_data = region_data(e, item, 3);
-                    if new_data != 0 {
-                        let mut change = false;
-                        if occupied_data == 0 {
-                            change = true;
-                        } else {
-                            let new_flag = region_data_flag(e, new_data);
-                            if new_flag && !region_data_flag(e, occupied_data) {
-                                change = true;
-                            } else {
-                                let new_flag = region_data_flag(e, new_data);
-                                let old_flag = region_data_flag(e, occupied_data);
-                                if new_flag == old_flag {
-                                    let new_priority = region_data_priority(e, new_data);
-                                    let old_priority = region_data_priority(e, occupied_data);
-                                    if new_priority > old_priority {
-                                        change = true;
-                                    }
-                                }
-                            }
-                        }
-                        if change {
-                            e.call(0x0093_a7a0, &args![player, item]);
-                        }
-                    }
-                } else {
-                    e.call(0x0093_a7a0, &args![player, item]);
-                }
-                done = true;
-            }
-            entry_node = list_next(e, entry_node);
-        }
-        if e.call(0x0054_9580, &args![item]).bool() {
-            if e.mem.u32(player + 0x7b0) == 0 {
-                let block = e.call(OPERATOR_NEW, &args![0x10u32]).u32();
-                let array = if block != 0 {
-                    e.call(0x0096_a640, &args![block, 1u32, 1u32]).u32()
-                } else {
-                    0
-                };
-                e.mem.set_u32(player + 0x7b0, array);
-            }
-            let array = e.mem.u32(player + 0x7b0);
-            e.call(0x0096_a610, &args![array, item_variable]);
-        }
-        region_node = list_next(e, region_node);
-    }
-
-    // The border check.
-    let border_enabled = {
-        let at = e.call(0x0040_8d60, &args![BORDER_REGION_SETTING]).u32();
-        e.mem.u8(at) != 0
-    };
-    if border_enabled
-        && world_space != 0
-        && e.call(0x0058_6260, &args![world_space]).bool()
-        && !{
-            let holder = e.global::<u32>(SKY_HOLDER_POINTER);
-            e.call(0x0045_1530, &args![holder]).bool()
-        }
-        && !found_border
-    {
-        let mut exterior_cell = 0u32;
-        let mut world = 0u32;
-        let location = e.mem.u32(player + 0x7ac);
-        if location != 0 {
-            let kind = e.call(FORM_TYPE_OF, &args![location]).i32();
-            if kind == 0x39 {
-                exterior_cell = location;
-            } else if kind == 0x41 {
-                world = location;
-            }
-        }
-        let left_exterior = exterior_cell != 0 && exterior_cell != cell;
-        let other_world =
-            !left_exterior && world != 0 && world != e.call(0x0054_ddd0, &args![cell]).u32();
-        if left_exterior || other_world {
-            e.mem.set_u8(player + 0x79d, 1);
-        } else {
+            let radius = e.global::<f32>(CAMERA_SPHERE_RADIUS);
+            e.call(0x0056_ea00, &args![sphere, radius]);
+            let cinfo = ebp - FRAME_CINFO;
+            e.call(0x00c8_f510, &args![cinfo]);
+            e.call(0x0056_f110, &args![cinfo, sphere]);
+            let flags: u32 = 0x0003_0000 | 0x21;
+            e.call(0x0056_f0f0, &args![cinfo, flags]);
+            let body_block = e.call(0x00aa_13e0, &args![0x1cu32]).u32();
+            let body = if body_block != 0 {
+                e.call(0x0056_d380, &args![body_block, cinfo]).u32()
+            } else {
+                0
+            };
+            e.call(SMART_POINTER_ASSIGN, &args![player + 0xdec, body]);
+            let body_ptr = e.call(0x0055_9450, &args![player + 0xdec]).u32();
+            e.call(0x0056_1580, &args![body_ptr, 1u32]);
+            let body_ptr = e.call(0x0055_9450, &args![player + 0xdec]).u32();
+            e.vcall(body_ptr, 0xe4, &args![4u32]);
+            let body_ptr = e.call(0x0055_9450, &args![player + 0xdec]).u32();
+            let motion = e.call(0x004a_e700, &args![body_ptr]).u32();
+            fn_0094db80(e, Ptr::new(motion), 9);
+            let out_buffer = ebp - FRAME_OUT_BUFFER;
+            e.call(LIST_NODE_ITEM_SLOT, &args![out_buffer]);
             let position = e.vcall(player, 0x1f4, &args![]).u32();
-            let copy = frame + FRAME_POSITION_COPY;
+            let copy = ebp - FRAME_POSITION_COPY;
             for word in 0..3 {
                 let value = e.mem.u32(position + 4 * word);
                 e.mem.set_u32(copy + 4 * word, value);
             }
-            e.call(0x0045_78c0, &args![copy, player + 0x7a0]);
-            let distance = e.call(0x0045_7990, &args![copy]).f64();
-            let limit: f64 = e.global(BORDER_DISTANCE_LIMIT);
-            if distance > limit {
-                e.mem.set_u8(player + 0x79d, 1);
+            e.call(0x004a_3e00, &args![out_buffer, copy]);
+            let body_ptr = e.call(0x0055_9450, &args![player + 0xdec]).u32();
+            e.call(0x0056_10f0, &args![body_ptr, copy]);
+            e.call(0x0056_d730, &args![cinfo]);
+        }
+        let body_ptr = e.call(0x0055_9450, &args![player + 0xdec]).u32();
+        let current = e.call(PARENT_CELL_OF, &args![player]).u32();
+        let current_interior = e.call(0x0045_43c0, &args![current]).u32();
+        e.vcall(body_ptr, 0x9c, &args![current_interior]);
+
+        // Whether the player is in a state that keeps the sky as it is.
+        let mut flag = e.call(0x0043_7bd0, &args![player]).bool();
+        if !flag {
+            flag = e.vcall(player, 0x22c, &args![0u32]).bool();
+        }
+        if !flag {
+            flag = e.vcall(player, 0x2e8, &args![]).bool();
+        }
+        if !flag {
+            flag = e.vcall(player, 0x230, &args![]).bool();
+        }
+        let reset = !flag && !e.call(0x005a_1e50, &args![player]).bool();
+        if reset {
+            e.vcall(player, 0x494, &args![]);
+        }
+        let loader = e.global::<u32>(MODEL_LOADER_POINTER);
+        e.call(0x0044_6b50, &args![loader, 0u32]);
+        let climate = e.call(0x0054_75b0, &args![cell]).u32();
+        let sky = e.call(0x0046_dd00, &args![]).u32();
+        e.call(0x0063_c8f0, &args![sky, climate, 0u32]);
+        let weather = e.call(0x0054_7680, &args![cell]).u32();
+        let weather = e.call(0x0050_0940, &args![weather]).u32();
+        e.call(0x00b4_f430, &args![weather]);
+        let world_space = e.call(0x0054_ddd0, &args![cell]).u32();
+        let mut found_border = false;
+        e.mem.set_u8(player + 0x79c, 0);
+
+        let border_regions = e.mem.u32(player + 0x7b0);
+        if border_regions != 0 {
+            e.call(0x005e_03d0, &args![border_regions]);
+            let border_regions = e.mem.u32(player + 0x7b0);
+            if border_regions != 0 {
+                e.vcall(border_regions, 0, &args![1u32]);
             }
+            e.mem.set_u32(player + 0x7b0, 0);
         }
-    }
 
-    // The music type of the occupied region.
-    let occupied = e.mem.u32(player + 0x760);
-    let music_data = if occupied != 0 {
-        region_data(e, occupied, 4)
-    } else {
-        0
-    };
-    let music_value = if music_data != 0 {
-        e.vcall(music_data, 0x2c, &args![]).u32()
-    } else {
-        0
-    };
-    let pair = e.mem.alloc(8);
-    e.call(0x0040_c0e0, &args![pair, music_value]);
-    let first = e.mem.u32(pair);
-    let second = e.mem.u32(pair + 4);
-    e.mem.free(pair);
-    let occupied = e.mem.u32(player + 0x760);
-    e.call(0x0070_5420, &args![occupied, first, second, 1u32]);
-    e.call(0x0094_7d80, &args![player]);
-    e.call(0x0094_80c0, &args![player]);
-
-    // The regions that were left.
-    let mut node = list_local;
-    while node != 0 {
-        let slot = list_item_slot(e, node);
-        if e.mem.u32(slot) == 0 {
-            break;
+        // The four corners of the cell.
+        let cell_x = e.call(0x0054_4c30, &args![cell]).i32();
+        let cell_y = e.call(0x0054_4c60, &args![cell]).i32();
+        let cell_size: f64 = e.global(CELL_SIZE);
+        let west = (cell_x << 12) as f32;
+        let east = (west as f64 + cell_size) as f32;
+        let south = (cell_y << 12) as f32;
+        let north = (south as f64 + cell_size) as f32;
+        for (corner, x, y) in [
+            (FRAME_CORNER_A, west, south),
+            (FRAME_CORNER_B, west, north),
+            (FRAME_CORNER_C, east, south),
+            (FRAME_CORNER_D, east, north),
+        ] {
+            e.call(0x004f_7070, &args![ebp - corner, x, y]);
         }
-        let slot = list_item_slot(e, node);
-        let region = e.mem.u32(slot);
-        if region != 0 {
-            let data = region_data(e, region, 8);
-            if data != 0 {
-                e.call(0x004f_2480, &args![data, 0u32, 0u32]);
+
+        e.call(LIST_CLEAR, &args![player + 0x774]);
+        e.set_global(CURRENT_REGION_WITH_SOUNDS, 0u32);
+        e.call(0x0096_a2d0, &args![list_local]);
+
+        // The regions the player was in.
+        let mut node = if player.wrapping_add(0x764) == 0 {
+            0
+        } else {
+            player + 0x768
+        };
+        while node != 0 {
+            let slot = list_item_slot(e, node);
+            if e.mem.u32(slot) == 0 {
+                break;
             }
+            let slot = list_item_slot(e, node);
+            let region = e.mem.u32(slot);
+            e.mem.set_u32(region_variable, region);
+            if region != 0 {
+                e.call(0x005a_e3d0, &args![list_local, region_variable]);
+            }
+            node = list_next(e, node);
         }
-        node = list_next(e, node);
-    }
+        e.call(LIST_CLEAR, &args![player + 0x768]);
 
-    // The regions entered: add their references to the cell.
-    let mut node = if player.wrapping_add(0x764) == 0 {
-        0
-    } else {
-        player + 0x768
-    };
-    while node != 0 {
-        let slot = list_item_slot(e, node);
-        if e.mem.u32(slot) == 0 {
-            break;
-        }
-        let slot = list_item_slot(e, node);
-        let region = e.mem.u32(slot);
-        if region != 0 {
-            let data = region_data(e, region, 8);
-            if data != 0 {
-                let mut reference_node = e.call(0x0041_3f40, &args![data]).u32();
-                while reference_node != 0 {
-                    let slot = list_item_slot(e, reference_node);
-                    if e.mem.u32(slot) != 0 {
-                        let slot = list_item_slot(e, reference_node);
-                        let reference = e.mem.u32(slot);
-                        let parent = e.call(PARENT_CELL_OF, &args![player]).u32();
-                        e.call(0x0054_8230, &args![parent, reference, 0u32]);
-                        let slot = list_item_slot(e, reference_node);
-                        let reference = e.mem.u32(slot);
-                        e.call(0x004f_24e0, &args![reference, 1u32, 0u32]);
+        // The regions of the new cell.
+        let mut best = 0u32;
+        let region_list = e.call(0x0054_7110, &args![cell, 1u32]).u32();
+        let mut region_node = if region_list != 0 { region_list + 4 } else { 0 };
+        while region_node != 0 {
+            let slot = list_item_slot(e, region_node);
+            let item = e.mem.u32(slot);
+            if item == 0 {
+                break;
+            }
+            e.mem.set_u32(item_variable, item);
+            let position = e.call(0x0089_1170, &args![player]).u32();
+            e.call(0x004f_7030, &args![player_point, position + 0x10]);
+
+            let skip = e.call(0x0044_0d80, &args![item]).bool() || {
+                let form = e.call(0x007a_f430, &args![item]).u32();
+                let wrong_world = form != 0 && {
+                    let again = e.call(0x007a_f430, &args![item]).u32();
+                    let world = e.call(0x0057_5d70, &args![player]).u32();
+                    again != world
+                };
+                wrong_world || {
+                    let regions = e.call(0x0044_1110, &args![item]).u32();
+                    regions == 0 || {
+                        let regions = e.call(0x0044_1110, &args![item]).u32();
+                        list_is_empty(e, regions)
                     }
-                    reference_node = list_next(e, reference_node);
+                }
+            };
+            if skip {
+                region_node = list_next(e, region_node);
+                continue;
+            }
+
+            let mut done = false;
+            let mut entry_node = e.call(0x0044_1110, &args![item]).u32();
+            while !done && entry_node != 0 {
+                let slot = list_item_slot(e, entry_node);
+                let entry = e.mem.u32(slot);
+                if entry == 0 {
+                    break;
+                }
+                if e.call(0x004f_8360, &args![entry, player_point]).bool() {
+                    e.call(0x004f_6600, &args![player + 0x764, item]);
+                    if e.call(0x005f_65d0, &args![list_local, item_variable])
+                        .bool()
+                    {
+                        e.call(0x0090_5330, &args![list_local, item_variable]);
+                    }
+                    let data = region_data(e, item, 7);
+                    if data != 0 {
+                        if region_data_flag(e, data) {
+                            let replace = if best == 0 {
+                                true
+                            } else if best == data {
+                                false
+                            } else {
+                                let old = region_data_priority(e, best);
+                                let new = region_data_priority(e, data);
+                                old < new
+                            };
+                            if replace {
+                                e.call(LIST_CLEAR, &args![player + 0x774]);
+                                best = data;
+                            }
+                        }
+                        if best == 0 || best == data {
+                            let mut sound_node = e.call(0x0048_d150, &args![data]).u32();
+                            while sound_node != 0 {
+                                let slot = list_item_slot(e, sound_node);
+                                if e.mem.u32(slot) == 0 {
+                                    break;
+                                }
+                                let slot = list_item_slot(e, sound_node);
+                                e.call(0x005a_e3d0, &args![player + 0x774, slot]);
+                                sound_node = list_next(e, sound_node);
+                            }
+                            if e.vcall(data, 0x30, &args![]).u32() != 0 {
+                                e.set_global(CURRENT_REGION_WITH_SOUNDS, data);
+                            }
+                        }
+                    }
+                    if e.call(0x0054_9580, &args![item]).bool() {
+                        found_border = true;
+                        let corners = [
+                            FRAME_CORNER_A,
+                            FRAME_CORNER_B,
+                            FRAME_CORNER_C,
+                            FRAME_CORNER_D,
+                        ];
+                        let mut all = true;
+                        for corner in corners {
+                            if !e.call(0x004f_8360, &args![entry, ebp - corner]).bool() {
+                                all = false;
+                                break;
+                            }
+                        }
+                        if all {
+                            e.mem.set_u8(player + 0x79c, 1);
+                        }
+                    }
+                    let occupied = e.mem.u32(player + 0x760);
+                    if occupied != 0 {
+                        let occupied_data = region_data(e, occupied, 3);
+                        let new_data = region_data(e, item, 3);
+                        if new_data != 0 {
+                            let mut change = false;
+                            if occupied_data == 0 {
+                                change = true;
+                            } else {
+                                let new_flag = region_data_flag(e, new_data);
+                                if new_flag && !region_data_flag(e, occupied_data) {
+                                    change = true;
+                                } else {
+                                    let new_flag = region_data_flag(e, new_data);
+                                    let old_flag = region_data_flag(e, occupied_data);
+                                    if new_flag == old_flag {
+                                        let new_priority = region_data_priority(e, new_data);
+                                        let old_priority = region_data_priority(e, occupied_data);
+                                        if new_priority > old_priority {
+                                            change = true;
+                                        }
+                                    }
+                                }
+                            }
+                            if change {
+                                e.call(0x0093_a7a0, &args![player, item]);
+                            }
+                        }
+                    } else {
+                        e.call(0x0093_a7a0, &args![player, item]);
+                    }
+                    done = true;
+                }
+                entry_node = list_next(e, entry_node);
+            }
+            if e.call(0x0054_9580, &args![item]).bool() {
+                if e.mem.u32(player + 0x7b0) == 0 {
+                    let block = e.call(OPERATOR_NEW, &args![0x10u32]).u32();
+                    let array = if block != 0 {
+                        e.call(0x0096_a640, &args![block, 1u32, 1u32]).u32()
+                    } else {
+                        0
+                    };
+                    e.mem.set_u32(player + 0x7b0, array);
+                }
+                let array = e.mem.u32(player + 0x7b0);
+                e.call(0x0096_a610, &args![array, item_variable]);
+            }
+            region_node = list_next(e, region_node);
+        }
+
+        // The border check.
+        let border_enabled = {
+            let at = e.call(0x0040_8d60, &args![BORDER_REGION_SETTING]).u32();
+            e.mem.u8(at) != 0
+        };
+        if border_enabled
+            && world_space != 0
+            && e.call(0x0058_6260, &args![world_space]).bool()
+            && !{
+                let holder = e.global::<u32>(SKY_HOLDER_POINTER);
+                e.call(0x0045_1530, &args![holder]).bool()
+            }
+            && !found_border
+        {
+            let mut exterior_cell = 0u32;
+            let mut world = 0u32;
+            let location = e.mem.u32(player + 0x7ac);
+            if location != 0 {
+                let kind = e.call(FORM_TYPE_OF, &args![location]).i32();
+                if kind == 0x39 {
+                    exterior_cell = location;
+                } else if kind == 0x41 {
+                    world = location;
+                }
+            }
+            let left_exterior = exterior_cell != 0 && exterior_cell != cell;
+            let other_world =
+                !left_exterior && world != 0 && world != e.call(0x0054_ddd0, &args![cell]).u32();
+            if left_exterior || other_world {
+                e.mem.set_u8(player + 0x79d, 1);
+            } else {
+                let position = e.vcall(player, 0x1f4, &args![]).u32();
+                let copy = ebp - FRAME_DISTANCE_COPY;
+                for word in 0..3 {
+                    let value = e.mem.u32(position + 4 * word);
+                    e.mem.set_u32(copy + 4 * word, value);
+                }
+                e.call(0x0045_78c0, &args![copy, player + 0x7a0]);
+                let distance = e.call(0x0045_7990, &args![copy]).f64();
+                let limit: f64 = e.global(BORDER_DISTANCE_LIMIT);
+                if distance > limit {
+                    e.mem.set_u8(player + 0x79d, 1);
                 }
             }
         }
-        node = list_next(e, node);
-    }
-    e.call(LIST_CLEAR, &args![list_local]);
-    e.call(0x0046_ffb0, &args![list_local]);
-    e.mem.free(frame);
+
+        // The music type of the occupied region.
+        let occupied = e.mem.u32(player + 0x760);
+        let music_data = if occupied != 0 {
+            region_data(e, occupied, 4)
+        } else {
+            0
+        };
+        let music_value = if music_data != 0 {
+            e.vcall(music_data, 0x2c, &args![]).u32()
+        } else {
+            0
+        };
+        let pair = ebp - FRAME_MUSIC_PAIR;
+        e.call(0x0040_c0e0, &args![pair, music_value]);
+        let first = e.mem.u32(pair);
+        let second = e.mem.u32(pair + 4);
+        let occupied = e.mem.u32(player + 0x760);
+        e.call(0x0070_5420, &args![occupied, first, second, 1u32]);
+        e.call(0x0094_7d80, &args![player]);
+        e.call(0x0094_80c0, &args![player]);
+
+        // The regions that were left.
+        let mut node = list_local;
+        while node != 0 {
+            let slot = list_item_slot(e, node);
+            if e.mem.u32(slot) == 0 {
+                break;
+            }
+            let slot = list_item_slot(e, node);
+            let region = e.mem.u32(slot);
+            if region != 0 {
+                let data = region_data(e, region, 8);
+                if data != 0 {
+                    e.call(0x004f_2480, &args![data, 0u32, 0u32]);
+                }
+            }
+            node = list_next(e, node);
+        }
+
+        // The regions entered: add their references to the cell.
+        let mut node = if player.wrapping_add(0x764) == 0 {
+            0
+        } else {
+            player + 0x768
+        };
+        while node != 0 {
+            let slot = list_item_slot(e, node);
+            if e.mem.u32(slot) == 0 {
+                break;
+            }
+            let slot = list_item_slot(e, node);
+            let region = e.mem.u32(slot);
+            if region != 0 {
+                let data = region_data(e, region, 8);
+                if data != 0 {
+                    let mut reference_node = e.call(0x0041_3f40, &args![data]).u32();
+                    while reference_node != 0 {
+                        let slot = list_item_slot(e, reference_node);
+                        if e.mem.u32(slot) != 0 {
+                            let slot = list_item_slot(e, reference_node);
+                            let reference = e.mem.u32(slot);
+                            let parent = e.call(PARENT_CELL_OF, &args![player]).u32();
+                            e.call(0x0054_8230, &args![parent, reference, 0u32]);
+                            let slot = list_item_slot(e, reference_node);
+                            let reference = e.mem.u32(slot);
+                            e.call(0x004f_24e0, &args![reference, 1u32, 0u32]);
+                        }
+                        reference_node = list_next(e, reference_node);
+                    }
+                }
+            }
+            node = list_next(e, node);
+        }
+        e.call(LIST_CLEAR, &args![list_local]);
+        e.call(0x0046_ffb0, &args![list_local]);
+    });
 }
 
 // Translated from 0094db80 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1505,10 +1511,12 @@ pub fn player_character_return_to_last_known_good_position(
     }
 
     if use_position_functions {
-        let (target, function) = if world != 0 {
-            (world, 0x0093_cce0u32)
+        // The exe's frame (`SUB ESP,0x64` under `EBP`) keeps the stored position at
+        // `EBP-0x4c` (+0x18) on the world path and at `EBP-0x58` (+0xc) on the cell path.
+        let (target, function, stored_at) = if world != 0 {
+            (world, 0x0093_cce0u32, 0x18)
         } else if cell != 0 {
-            (cell, 0x0093_c200u32)
+            (cell, 0x0093_c200u32, 0xc)
         } else {
             return;
         };
@@ -1518,14 +1526,15 @@ pub fn player_character_return_to_last_known_good_position(
             e.mem.u32(position + 4),
             e.mem.u32(position + 8),
         ];
-        let stored = e.mem.alloc(12);
-        let known = fn_0094df30(e, this, Ptr::new(stored));
-        let known = [
-            e.mem.u32(known.addr()),
-            e.mem.u32(known.addr() + 4),
-            e.mem.u32(known.addr() + 8),
-        ];
-        e.mem.free(stored);
+        let known = e.with_stack(0x64, |e, frame| {
+            let stored = frame.addr() + stored_at;
+            let known = fn_0094df30(e, this, Ptr::new(stored));
+            [
+                e.mem.u32(known.addr()),
+                e.mem.u32(known.addr() + 4),
+                e.mem.u32(known.addr() + 8),
+            ]
+        });
         e.call(
             function,
             &args![
@@ -1580,12 +1589,14 @@ pub fn player_character_return_to_last_known_good_position(
     for body in bodies {
         e.call(0x00c6_bd00, &args![body, 1u32]);
     }
-    for body in bodies {
-        let zero = e.mem.alloc(12);
-        e.call(0x0043_d410, &args![zero, 0.0f32, 0u32, 0u32]);
-        e.call(0x00a5_9c60, &args![body, zero]);
-        e.mem.free(zero);
-    }
+    // The same frame: the zero vectors at `EBP-0x20` (+0x44) and `EBP-0x14` (+0x50).
+    e.with_stack(0x64, |e, frame| {
+        for (body, zero_at) in bodies.into_iter().zip([0x44, 0x50]) {
+            let zero = frame.addr() + zero_at;
+            e.call(0x0043_d410, &args![zero, 0.0f32, 0u32, 0u32]);
+            e.call(0x00a5_9c60, &args![body, zero]);
+        }
+    });
 }
 
 // Translated from 0094df30 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1702,206 +1713,209 @@ pub fn fn_0094df80(e: &mut Engine, this: Ptr<PlayerCharacter>) {
 /// C++ exception unwinding and the stack cookie are not translated.
 pub fn player_character_load_3d(e: &mut Engine, this: Ptr<PlayerCharacter>, flag: u8) -> u32 {
     let player = this.addr();
-    let scope = e.mem.alloc(0x34);
-    e.call(
-        0x0040_4eb0,
-        &args![scope, 0x34u32, 1u32, SOURCE_FILE_NAME, 0x2458u32],
-    );
-    let form = e.call(0x007a_f430, &args![player]).u32();
-    let load_state = e.global::<u32>(LOAD_STATE_POINTER);
-    let skip = e.call(0x0042_ce10, &args![load_state]).bool() || e.global::<u8>(0x011d_8907) != 0;
-    if !skip {
-        let mut nothing_worn = true;
-        let inventory = e.call(0x004b_f220, &args![player]).u32();
-        if inventory != 0 {
-            for slot in 0..0x14u32 {
-                let worn = e.call(0x004c_8c10, &args![inventory, slot, 0u32]).u32();
-                if worn != 0 {
-                    nothing_worn = false;
-                    e.call(0x0044_59e0, &args![worn, 1u32]);
-                    break;
-                }
-            }
-        }
-        if nothing_worn {
-            e.call(0x0060_47c0, &args![form, player, 1u32, 1u32, 0u32, 0u32]);
-        } else if inventory != 0 {
-            let worn = e.call(0x004c_8c10, &args![inventory, 6u32, 0u32]).u32();
-            if worn == 0 {
-                let base = e.call(BASE_FORM_OF, &args![player]).u32();
-                let item = e
-                    .call(0x004c_8220, &args![inventory, base, 6u32, 1u32])
-                    .u32();
-                if item != 0 {
-                    let name = e.call(WORD_AT_8, &args![item]).u32();
-                    let mut extra = 0;
-                    if e.call(0x0055_9450, &args![item]).u32() != 0 {
-                        let pointer = e.call(0x0055_9450, &args![item]).u32();
-                        let slot = list_item_slot(e, pointer);
-                        extra = e.mem.u32(slot);
+    // The exe's frame (`SUB ESP,0x204` under the exception record, then `ESI`, `EDI` and the
+    // record link): the scope at `EBP-0x40` (+0x1dc), the zero vector at `EBP-0x58` (+0x1c4),
+    // the matrix copy at `EBP-0x3c` (+0x1e0), the rotated matrix at `EBP-0x1c8` (+0x54), the
+    // path buffer at `EBP-0x16c` (+0xb0) and the built word at `EBP-0x1dc` (+0x40).
+    e.with_stack(0x21c, |e, frame| {
+        let scope = frame.addr() + 0x1dc;
+        e.call(
+            0x0040_4eb0,
+            &args![scope, 0x34u32, 1u32, SOURCE_FILE_NAME, 0x2458u32],
+        );
+        let form = e.call(0x007a_f430, &args![player]).u32();
+        let load_state = e.global::<u32>(LOAD_STATE_POINTER);
+        let skip =
+            e.call(0x0042_ce10, &args![load_state]).bool() || e.global::<u8>(0x011d_8907) != 0;
+        if !skip {
+            let mut nothing_worn = true;
+            let inventory = e.call(0x004b_f220, &args![player]).u32();
+            if inventory != 0 {
+                for slot in 0..0x14u32 {
+                    let worn = e.call(0x004c_8c10, &args![inventory, slot, 0u32]).u32();
+                    if worn != 0 {
+                        nothing_worn = false;
+                        e.call(0x0044_59e0, &args![worn, 1u32]);
+                        break;
                     }
-                    e.vcall(player, 0x184, &args![name, 1u32, extra, 0u32]);
-                    e.call(0x0044_59e0, &args![item, 1u32]);
                 }
-            } else {
-                e.call(0x0044_59e0, &args![worn, 1u32]);
+            }
+            if nothing_worn {
+                e.call(0x0060_47c0, &args![form, player, 1u32, 1u32, 0u32, 0u32]);
+            } else if inventory != 0 {
+                let worn = e.call(0x004c_8c10, &args![inventory, 6u32, 0u32]).u32();
+                if worn == 0 {
+                    let base = e.call(BASE_FORM_OF, &args![player]).u32();
+                    let item = e
+                        .call(0x004c_8220, &args![inventory, base, 6u32, 1u32])
+                        .u32();
+                    if item != 0 {
+                        let name = e.call(WORD_AT_8, &args![item]).u32();
+                        let mut extra = 0;
+                        if e.call(0x0055_9450, &args![item]).u32() != 0 {
+                            let pointer = e.call(0x0055_9450, &args![item]).u32();
+                            let slot = list_item_slot(e, pointer);
+                            extra = e.mem.u32(slot);
+                        }
+                        e.vcall(player, 0x184, &args![name, 1u32, extra, 0u32]);
+                        e.call(0x0044_59e0, &args![item, 1u32]);
+                    }
+                } else {
+                    e.call(0x0044_59e0, &args![worn, 1u32]);
+                }
             }
         }
-    }
 
-    let path = setting_text(e, MODEL_PATH_SETTING);
-    let path = e.call(IDENTITY, &args![path, 0u32]).u32();
-    let loader = e.global::<u32>(MODEL_LOADER_POINTER);
-    let model = e
-        .call(
-            0x0044_7080,
-            &args![loader, path, 3u32, 1u32, 0u32, 0u32, 0u32],
-        )
-        .u32();
-    e.call(0x0054_68b0, &args![model, 1u32]);
-    e.call(SMART_POINTER_ASSIGN, &args![player + 0x694, model]);
-    for (name, slot) in [
-        (fn_0094ead0(e), NODE_BY_EAD0_SLOT),
-        (fn_0094eae0(e), NODE_CAMERA_1ST_SLOT),
-        (fn_0094eac0(e), NODE_BIP_SLOT),
-    ] {
-        let node = e.call(0x0055_9450, &args![player + 0x694]).u32();
-        let found = e.vcall(node, 0x9c, &args![name]).u32();
-        e.set_global(slot, found);
-    }
-    if e.global::<u32>(NODE_CAMERA_1ST_SLOT) == 0 {
-        let text = setting_text(e, MODEL_PATH_SETTING);
-        e.call(ERROR, &args![FORMAT_MISSING_CAMERA_1ST, text]);
-    }
-    if e.global::<u32>(NODE_BIP_SLOT) == 0 {
-        let text = setting_text(e, MODEL_PATH_SETTING);
-        e.call(ERROR, &args![FORMAT_MISSING_BIP, text]);
-    }
-    let zero = e.mem.alloc(12);
-    e.call(0x0043_d410, &args![zero, 0.0f32, 0u32, 0u32]);
-    e.call(0x00a5_9c60, &args![model, zero]);
-    e.mem.free(zero);
-    let camera = e.global::<u32>(NODE_CAMERA_1ST_SLOT);
-    let at = e.call(0x0045_bb80, &args![camera]).u32();
-    let height = e.mem.f32(at + 8);
-    e.set(this, PlayerCharacter::fEyeHeight, height);
+        let path = setting_text(e, MODEL_PATH_SETTING);
+        let path = e.call(IDENTITY, &args![path, 0u32]).u32();
+        let loader = e.global::<u32>(MODEL_LOADER_POINTER);
+        let model = e
+            .call(
+                0x0044_7080,
+                &args![loader, path, 3u32, 1u32, 0u32, 0u32, 0u32],
+            )
+            .u32();
+        e.call(0x0054_68b0, &args![model, 1u32]);
+        e.call(SMART_POINTER_ASSIGN, &args![player + 0x694, model]);
+        for (name, slot) in [
+            (fn_0094ead0(e), NODE_BY_EAD0_SLOT),
+            (fn_0094eae0(e), NODE_CAMERA_1ST_SLOT),
+            (fn_0094eac0(e), NODE_BIP_SLOT),
+        ] {
+            let node = e.call(0x0055_9450, &args![player + 0x694]).u32();
+            let found = e.vcall(node, 0x9c, &args![name]).u32();
+            e.set_global(slot, found);
+        }
+        if e.global::<u32>(NODE_CAMERA_1ST_SLOT) == 0 {
+            let text = setting_text(e, MODEL_PATH_SETTING);
+            e.call(ERROR, &args![FORMAT_MISSING_CAMERA_1ST, text]);
+        }
+        if e.global::<u32>(NODE_BIP_SLOT) == 0 {
+            let text = setting_text(e, MODEL_PATH_SETTING);
+            e.call(ERROR, &args![FORMAT_MISSING_BIP, text]);
+        }
+        let zero = frame.addr() + 0x1c4;
+        e.call(0x0043_d410, &args![zero, 0.0f32, 0u32, 0u32]);
+        e.call(0x00a5_9c60, &args![model, zero]);
+        let camera = e.global::<u32>(NODE_CAMERA_1ST_SLOT);
+        let at = e.call(0x0045_bb80, &args![camera]).u32();
+        let height = e.mem.f32(at + 8);
+        e.set(this, PlayerCharacter::fEyeHeight, height);
 
-    let matrix_copy = e.mem.alloc(0x24);
-    let matrix_result = e.mem.alloc(0x24);
-    for word in 0..9u32 {
-        let value = e.mem.u32(LOAD_3D_MATRIX + 4 * word);
-        e.mem.set_u32(matrix_copy + 4 * word, value);
-    }
-    let rotated = e
-        .call(0x0056_fac0, &args![player, matrix_result, matrix_copy])
-        .u32();
-    e.call(0x0043_fa80, &args![model, rotated]);
-    e.mem.free(matrix_result);
-    e.mem.free(matrix_copy);
+        let matrix_copy = frame.addr() + 0x1e0;
+        let matrix_result = frame.addr() + 0x54;
+        for word in 0..9u32 {
+            let value = e.mem.u32(LOAD_3D_MATRIX + 4 * word);
+            e.mem.set_u32(matrix_copy + 4 * word, value);
+        }
+        let rotated = e
+            .call(0x0056_fac0, &args![player, matrix_result, matrix_copy])
+            .u32();
+        e.call(0x0043_fa80, &args![model, rotated]);
 
-    let block = e.call(OPERATOR_NEW, &args![0x2b4u32]).u32();
-    let biped = if block != 0 {
-        e.call(0x004a_aca0, &args![block, player, model]).u32()
-    } else {
-        0
-    };
-    e.set(this, PlayerCharacter::p1stPersonBipedAnim, Ptr::new(biped));
-    let block = e.call(OPERATOR_NEW, &args![0x13cu32]).u32();
-    let animation = if block != 0 {
-        e.call(0x0048_f810, &args![block]).u32()
-    } else {
-        0
-    };
-    e.set(
-        this,
-        PlayerCharacter::p1stPersonAnimation,
-        Ptr::new(animation),
-    );
+        let block = e.call(OPERATOR_NEW, &args![0x2b4u32]).u32();
+        let biped = if block != 0 {
+            e.call(0x004a_aca0, &args![block, player, model]).u32()
+        } else {
+            0
+        };
+        e.set(this, PlayerCharacter::p1stPersonBipedAnim, Ptr::new(biped));
+        let block = e.call(OPERATOR_NEW, &args![0x13cu32]).u32();
+        let animation = if block != 0 {
+            e.call(0x0048_f810, &args![block]).u32()
+        } else {
+            0
+        };
+        e.set(
+            this,
+            PlayerCharacter::p1stPersonAnimation,
+            Ptr::new(animation),
+        );
 
-    let third_person = e.get(this, PlayerCharacter::b3rdPerson);
-    e.set(this, PlayerCharacter::b3rdPerson, true);
-    let node = e.call(0x0087_e060, &args![player, flag]).u32();
-    e.set(this, PlayerCharacter::b3rdPerson, third_person);
+        let third_person = e.get(this, PlayerCharacter::b3rdPerson);
+        e.set(this, PlayerCharacter::b3rdPerson, true);
+        let node = e.call(0x0087_e060, &args![player, flag]).u32();
+        e.set(this, PlayerCharacter::b3rdPerson, third_person);
 
-    let current = e.call(0x0095_0a60, &args![player, 0u32]).u32();
-    e.call(0x0049_6080, &args![current, 0u32, 0.0f32]);
+        let current = e.call(0x0095_0a60, &args![player, 0u32]).u32();
+        e.call(0x0049_6080, &args![current, 0u32, 0.0f32]);
 
-    let path = setting_text(e, MODEL_PATH_SETTING);
-    let path = e.call(IDENTITY, &args![path, 0u32]).u32();
-    let loader = e.global::<u32>(MODEL_LOADER_POINTER);
-    let list = e
-        .call(0x0044_7330, &args![loader, path, 1u32, 0u32, 0xcu32])
-        .u32();
-    let path = setting_text(e, MODEL_PATH_SETTING);
-    let path = e.call(IDENTITY, &args![path, 0u32]).u32();
-    let buffer = e.mem.alloc(0x104);
-    e.call(0x0040_6d30, &args![buffer, 0x104u32, path]);
-    let last_separator = e.call(0x0040_ab30, &args![buffer, 0x5cu32]).u32();
-    let room = 0x103u32.wrapping_sub(last_separator.wrapping_sub(buffer));
-    let idle_manager = e.global::<u32>(IDLE_MANAGER_POINTER);
-    if e.call(0x0083_97d0, &args![player]).bool() {
-        e.call(0x0040_6d30, &args![last_separator, room, TODDLER_SUFFIX]);
+        let path = setting_text(e, MODEL_PATH_SETTING);
+        let path = e.call(IDENTITY, &args![path, 0u32]).u32();
+        let loader = e.global::<u32>(MODEL_LOADER_POINTER);
+        let list = e
+            .call(0x0044_7330, &args![loader, path, 1u32, 0u32, 0xcu32])
+            .u32();
+        let path = setting_text(e, MODEL_PATH_SETTING);
+        let path = e.call(IDENTITY, &args![path, 0u32]).u32();
+        let buffer = frame.addr() + 0xb0;
+        e.call(0x0040_6d30, &args![buffer, 0x104u32, path]);
+        let last_separator = e.call(0x0040_ab30, &args![buffer, 0x5cu32]).u32();
+        let room = 0x103u32.wrapping_sub(last_separator.wrapping_sub(buffer));
+        let idle_manager = e.global::<u32>(IDLE_MANAGER_POINTER);
+        if e.call(0x0083_97d0, &args![player]).bool() {
+            e.call(0x0040_6d30, &args![last_separator, room, TODDLER_SUFFIX]);
+            let root = e
+                .call(0x0060_0700, &args![idle_manager, buffer, 0u32])
+                .u32();
+            let loader = e.global::<u32>(MODEL_LOADER_POINTER);
+            e.call(0x0044_7850, &args![loader, root, list]);
+        }
+        let suffix = if e.call(0x0087_f4c0, &args![player]).i32() == 1 {
+            FEMALE_SUFFIX
+        } else {
+            MALE_SUFFIX
+        };
+        e.call(0x0040_6d30, &args![last_separator, room, suffix]);
         let root = e
             .call(0x0060_0700, &args![idle_manager, buffer, 0u32])
             .u32();
         let loader = e.global::<u32>(MODEL_LOADER_POINTER);
         e.call(0x0044_7850, &args![loader, root, list]);
-    }
-    let suffix = if e.call(0x0087_f4c0, &args![player]).i32() == 1 {
-        FEMALE_SUFFIX
-    } else {
-        MALE_SUFFIX
-    };
-    e.call(0x0040_6d30, &args![last_separator, room, suffix]);
-    let root = e
-        .call(0x0060_0700, &args![idle_manager, buffer, 0u32])
-        .u32();
-    let loader = e.global::<u32>(MODEL_LOADER_POINTER);
-    e.call(0x0044_7850, &args![loader, root, list]);
-    e.mem.free(buffer);
 
-    let animation = e.get(this, PlayerCharacter::p1stPersonAnimation);
-    e.call(0x0048_ffd0, &args![animation, list, model, player, 1u32]);
-    let first = e.call(0x008d_8520, &args![player]).u32();
-    let second = e.call(0x008d_8520, &args![player]).u32();
-    let result = e.vcall(first, 0x148, &args![0u32, 0u32]).u32();
-    e.vcall(second, 0x160, &args![result]);
-    fn_0094eaf0(e, this.cast(), Ptr::new(node), true);
-    if e.global::<u32>(NODE_CAMERA_3RD_SLOT) == 0 {
-        let name = e.call(0x0057_15d0, &args![player]).u32();
-        e.call(ERROR, &args![FORMAT_MISSING_CAMERA_3RD, name]);
-    }
-    e.call(0x008c_2e50, &args![player]);
-    let process = process_of(e, this);
-    e.vcall(process, 0x470, &args![]);
-    e.call(0x008b_0bd0, &args![player, model]);
-    e.vcall(player, 0x1c4, &args![]);
-    let controller = e.call(0x0093_06d0, &args![player]).u32();
-    let proxy = if controller != 0 {
-        e.call(0x0062_1ad0, &args![controller]).u32()
-    } else {
-        0
-    };
-    if proxy != 0 {
-        let out = e.mem.alloc(4);
-        let built = e.call(0x0070_c440, &args![controller, out]).u32();
-        let value = e.call(0x004a_3a20, &args![built]).u32();
-        e.mem.free(out);
-        e.vcall(proxy, 0xd0, &args![node, 1u32, 0u32, value, 0u32]);
-    }
-    e.call(0x0070_59d0, &args![]);
-    if e.get(this, PlayerCharacter::bIsToddler) {
-        e.set(this, PlayerCharacter::bIsToddler, false);
-        e.call(0x0096_97c0, &args![player, 1u32]);
-    }
-    for which in 0..2u32 {
-        let biped = e.call(0x0095_0b00, &args![player, which]).u32();
-        let pointer = e.call(0x0055_9450, &args![biped]).u32();
-        e.call(0x0093_80e0, &args![pointer]);
-    }
-    e.call(0x0040_4ee0, &args![scope]);
-    e.mem.free(scope);
-    node
+        let animation = e.get(this, PlayerCharacter::p1stPersonAnimation);
+        e.call(0x0048_ffd0, &args![animation, list, model, player, 1u32]);
+        let first = e.call(0x008d_8520, &args![player]).u32();
+        let second = e.call(0x008d_8520, &args![player]).u32();
+        // 0094e8ee..0094e91d: the two 0s are pushed before GetCurrentWeapon (slot 0x148, no
+        // stack words); they are SetCurrentWeapon's (slot 0x160) group and force.
+        let result = e.vcall(first, 0x148, &args![]).u32();
+        e.vcall(second, 0x160, &args![result, 0u32, 0u32]);
+        fn_0094eaf0(e, this.cast(), Ptr::new(node), true);
+        if e.global::<u32>(NODE_CAMERA_3RD_SLOT) == 0 {
+            let name = e.call(0x0057_15d0, &args![player]).u32();
+            e.call(ERROR, &args![FORMAT_MISSING_CAMERA_3RD, name]);
+        }
+        e.call(0x008c_2e50, &args![player]);
+        let process = process_of(e, this);
+        e.vcall(process, 0x470, &args![]);
+        e.call(0x008b_0bd0, &args![player, model]);
+        e.vcall(player, 0x1c4, &args![]);
+        let controller = e.call(0x0093_06d0, &args![player]).u32();
+        let proxy = if controller != 0 {
+            e.call(0x0062_1ad0, &args![controller]).u32()
+        } else {
+            0
+        };
+        if proxy != 0 {
+            let out = frame.addr() + 0x40;
+            let built = e.call(0x0070_c440, &args![controller, out]).u32();
+            let value = e.call(0x004a_3a20, &args![built]).u32();
+            e.vcall(proxy, 0xd0, &args![node, 1u32, 0u32, value, 0u32]);
+        }
+        e.call(0x0070_59d0, &args![]);
+        if e.get(this, PlayerCharacter::bIsToddler) {
+            e.set(this, PlayerCharacter::bIsToddler, false);
+            e.call(0x0096_97c0, &args![player, 1u32]);
+        }
+        for which in 0..2u32 {
+            let biped = e.call(0x0095_0b00, &args![player, which]).u32();
+            let pointer = e.call(0x0055_9450, &args![biped]).u32();
+            e.call(0x0093_80e0, &args![pointer]);
+        }
+        e.call(0x0040_4ee0, &args![scope]);
+        node
+    })
 }
 
 // Translated from 0094eac0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2001,21 +2015,23 @@ pub fn build_inv_string_callback(e: &mut Engine, item: Ptr, output: Ptr) -> bool
         let id = form_id_of(e, form);
         let name = e.call(ITEM_CHANGE_GET_FULL_NAME, &args![item]).u32();
         let count = list_next(e, item.addr());
-        let buffer = e.mem.alloc(0x104);
-        e.call(
-            SPRINTF,
-            &args![
-                buffer,
-                0x104u32,
-                FORMAT_INVENTORY_ITEM,
-                prefix,
-                count,
-                name,
-                id
-            ],
-        );
-        e.call(STRING_APPEND, &args![output, buffer]);
-        e.mem.free(buffer);
+        // The exe's frame (`SUB ESP,0x114` under `EBP`): the line at `EBP-0x110` (+4).
+        e.with_stack(0x114, |e, frame| {
+            let buffer = frame.addr() + 4;
+            e.call(
+                SPRINTF,
+                &args![
+                    buffer,
+                    0x104u32,
+                    FORMAT_INVENTORY_ITEM,
+                    prefix,
+                    count,
+                    name,
+                    id
+                ],
+            );
+            e.call(STRING_APPEND, &args![output, buffer]);
+        });
     }
     false
 }
@@ -2070,287 +2086,289 @@ pub fn player_character_export_progress_data(
     reason: i32,
 ) {
     let player = this.addr();
-    let directory = setting_text(e, EXPORT_DIRECTORY_SETTING);
-    let path = e.mem.alloc(0x104);
-    e.call(
-        SPRINTF,
-        &args![path, 0x104u32, FORMAT_EXPORT_PATH, directory],
-    );
-    let block = e.call(OPERATOR_NEW, &args![0x158u32]).u32();
-    let file = if block != 0 {
-        e.call(0x00b0_0260, &args![block, path, 1u32, 0x4000u32, 0u32])
-            .u32()
-    } else {
-        0
-    };
-    e.mem.free(path);
-    if file == 0 || !e.call(0x0089_05f0, &args![file]).bool() {
-        return;
-    }
-    let seek = e.global::<u32>(EXPORT_SEEK_MODE);
-    e.vcall(file, 0x14, &args![0u32, seek]);
-    let text = e.mem.alloc(8);
-    e.call(0x0040_37b0, &args![text]);
-    let _form = e.call(0x007a_f430, &args![player]).u32();
-
-    let owner = player + ACTOR_VALUE_OWNER;
-    if e.mem.i8(BUILD_NAME_BUFFER) != 0 {
-        format_and_write(e, file, text, &args![FORMAT_TEXT, BUILD_NAME_BUFFER]);
-    } else {
-        format_and_write(e, file, text, &args![FORMAT_TEXT, UNKNOWN_TEXT]);
-    }
-    format_and_write(e, file, text, &args![FORMAT_TEXT, GAME_VERSION_TEXT]);
-    let calendar_value = e.call(0x0086_7e30, &args![CALENDAR]).u32();
-    format_and_write(e, file, text, &args![FORMAT_INT, calendar_value]);
-    let reason_name = e
-        .mem
-        .u32(REASON_NAME_TABLE.wrapping_add((reason as u32).wrapping_mul(4)));
-    format_and_write(e, file, text, &args![FORMAT_TEXT, reason_name]);
-    let name = e.call(0x0055_d520, &args![player]).u32();
-    format_and_write(e, file, text, &args![FORMAT_TEXT, name]);
-    let location = e.vcall(player, 0x37c, &args![]).u32();
-    let location_name = name_of_form(e, location);
-    format_and_write(e, file, text, &args![FORMAT_TEXT, location_name]);
-    let sex = e.call(0x0087_f4c0, &args![player]).u32();
-    let sex_name = e.mem.u32(SEX_NAME_TABLE.wrapping_add(sex.wrapping_mul(4)));
-    format_and_write(e, file, text, &args![FORMAT_TEXT, sex_name]);
-    let level = e.call(0x0087_f9f0, &args![player]).u16() as u32;
-    format_and_write(e, file, text, &args![FORMAT_INT, level]);
-    let experience = e.vcall(owner, 0x8, &args![0x18u32]).u32();
-    format_and_write(e, file, text, &args![FORMAT_INT, experience]);
-
-    // The perks, as `"name (id)-rank,name (id)-rank,"`.
-    reset_to_quote(e, text);
-    let mut node = player + 0x87c;
-    while node != 0 && !list_is_empty(e, node) {
-        let slot = list_item_slot(e, node);
-        let entry = e.mem.u32(slot);
-        node = list_next(e, node);
-        if e.mem.u32(entry) != 0 {
-            let rank = e.mem.u8(entry + 4) as u32;
-            let perk = e.mem.u32(entry);
-            let id = form_id_of(e, perk);
-            let perk_name = name_of_form(e, perk);
-            let buffer = e.mem.alloc(0x104);
-            e.call(
-                SPRINTF,
-                &args![buffer, 0x104u32, FORMAT_PERK, perk_name, id, rank],
-            );
-            e.call(STRING_APPEND, &args![text, buffer]);
-            e.mem.free(buffer);
+    // The exe's frame (`SUB ESP,0x39c` under the exception record, then the record link): the
+    // path at `EBP-0x12c` (+0x280), the text at `EBP-0x20` (+0x38c), the perk line at `EBP-0x254`
+    // (+0x158), the quest line at `EBP-0x36c` (+0x40), the two floats at `EBP-0x140` (+0x26c)
+    // and `EBP-0x138` (+0x274).
+    e.with_stack(0x3ac, |e, frame| {
+        let directory = setting_text(e, EXPORT_DIRECTORY_SETTING);
+        let path = frame.addr() + 0x280;
+        e.call(
+            SPRINTF,
+            &args![path, 0x104u32, FORMAT_EXPORT_PATH, directory],
+        );
+        let block = e.call(OPERATOR_NEW, &args![0x158u32]).u32();
+        let file = if block != 0 {
+            e.call(0x00b0_0260, &args![block, path, 1u32, 0x4000u32, 0u32])
+                .u32()
+        } else {
+            0
+        };
+        if file == 0 || !e.call(0x0089_05f0, &args![file]).bool() {
+            return;
         }
-    }
-    e.call(STRING_APPEND, &args![text, TEXT_CLOSE_QUOTE]);
-    write_text(e, file, text);
+        let seek = e.global::<u32>(EXPORT_SEEK_MODE);
+        e.vcall(file, 0x14, &args![0u32, seek]);
+        let text = frame.addr() + 0x38c;
+        e.call(0x0040_37b0, &args![text]);
+        let _form = e.call(0x007a_f430, &args![player]).u32();
 
-    for index in 0..0xeu32 {
-        let value = e.vcall(owner, 0x8, &args![index + 0x20]).u32();
-        format_and_write(e, file, text, &args![FORMAT_INT, value]);
-    }
-    for index in 0..7u32 {
-        let value = e.vcall(owner, 0x0, &args![index + 5]).u32();
-        format_and_write(e, file, text, &args![FORMAT_INT, value]);
-        let value = e.vcall(owner, 0x8, &args![index + 5]).u32();
-        format_and_write(e, file, text, &args![FORMAT_INT, value]);
-    }
-    for index in 0..0x14u32 {
-        let value = e.vcall(owner, 0x0, &args![index + 0xc]).u32();
-        format_and_write(e, file, text, &args![FORMAT_INT, value]);
-        let value = e.vcall(owner, 0x8, &args![index + 0xc]).u32();
-        format_and_write(e, file, text, &args![FORMAT_INT, value]);
-    }
+        let owner = player + ACTOR_VALUE_OWNER;
+        if e.mem.i8(BUILD_NAME_BUFFER) != 0 {
+            format_and_write(e, file, text, &args![FORMAT_TEXT, BUILD_NAME_BUFFER]);
+        } else {
+            format_and_write(e, file, text, &args![FORMAT_TEXT, UNKNOWN_TEXT]);
+        }
+        format_and_write(e, file, text, &args![FORMAT_TEXT, GAME_VERSION_TEXT]);
+        let calendar_value = e.call(0x0086_7e30, &args![CALENDAR]).u32();
+        format_and_write(e, file, text, &args![FORMAT_INT, calendar_value]);
+        let reason_name = e
+            .mem
+            .u32(REASON_NAME_TABLE.wrapping_add((reason as u32).wrapping_mul(4)));
+        format_and_write(e, file, text, &args![FORMAT_TEXT, reason_name]);
+        let name = e.call(0x0055_d520, &args![player]).u32();
+        format_and_write(e, file, text, &args![FORMAT_TEXT, name]);
+        let location = e.vcall(player, 0x37c, &args![]).u32();
+        let location_name = name_of_form(e, location);
+        format_and_write(e, file, text, &args![FORMAT_TEXT, location_name]);
+        let sex = e.call(0x0087_f4c0, &args![player]).u32();
+        let sex_name = e.mem.u32(SEX_NAME_TABLE.wrapping_add(sex.wrapping_mul(4)));
+        format_and_write(e, file, text, &args![FORMAT_TEXT, sex_name]);
+        let level = e.call(0x0087_f9f0, &args![player]).u16() as u32;
+        format_and_write(e, file, text, &args![FORMAT_INT, level]);
+        let experience = e.vcall(owner, 0x8, &args![0x18u32]).u32();
+        format_and_write(e, file, text, &args![FORMAT_INT, experience]);
 
-    // The inventory.
-    let inventory = e.call(0x004b_f220, &args![player]).u32();
-    if inventory != 0 {
+        // The perks, as `"name (id)-rank,name (id)-rank,"`.
         reset_to_quote(e, text);
-        e.call(0x004d_4530, &args![inventory, 0x0094_ec90u32, text, 0u32]);
-        e.call(STRING_APPEND, &args![text, TEXT_CLOSE_QUOTE]);
-    } else {
-        format_into(e, text, &args![TEXT_EMPTY_QUOTES]);
-    }
-    write_text(e, file, text);
-
-    let pair = e.mem.alloc(8);
-    e.call(0x0093_abe0, &args![player, pair, pair + 4]);
-    let first = e.mem.f32(pair) as f64;
-    let second = e.mem.f32(pair + 4) as f64;
-    e.mem.free(pair);
-    format_and_write(e, file, text, &args![FORMAT_TWO_FLOATS, first, second]);
-    let weight = if inventory != 0 {
-        e.call(0x004d_0f40, &args![inventory, 0u32, 0u32]).u32()
-    } else {
-        0
-    };
-    format_and_write(e, file, text, &args![FORMAT_INT, weight]);
-    let value = e.call(0x0057_7d50, &args![player]).u32();
-    format_and_write(e, file, text, &args![FORMAT_INT, value]);
-    let speed = e.vcall(player, 0x43c, &args![]).f64();
-    format_and_write(e, file, text, &args![FORMAT_ONE_FLOAT, speed]);
-
-    // The quest log.
-    reset_to_quote(e, text);
-    let mut node = player + 0x6b0;
-    while node != 0 && !list_is_empty(e, node) {
-        let slot = list_item_slot(e, node);
-        let item = e.mem.u32(slot);
-        node = list_next(e, node);
-        if e.call(0x0060_fd70, &args![item]).bool() && e.call(0x005e_3fa0, &args![item]).u32() != 0
-        {
-            let quest = e.call(0x005e_3fa0, &args![item]).u32();
-            let quest_again = e.call(0x005e_3fa0, &args![item]).u32();
-            let id = form_id_of(e, quest_again);
-            let quest_name = e.vcall(quest, 0x138, &args![]).u32();
-            let buffer = e.mem.alloc(0x104);
-            e.call(
-                SPRINTF,
-                &args![buffer, 0x104u32, FORMAT_QUEST, quest_name, id],
-            );
-            e.call(STRING_APPEND, &args![text, buffer]);
-            e.mem.free(buffer);
-        }
-    }
-    e.call(STRING_APPEND, &args![text, TEXT_CLOSE_QUOTE]);
-    write_text(e, file, text);
-
-    for index in 0..0x2bu32 {
-        let value = e.call(0x005a_3370, &args![index]).u32();
-        format_and_write(e, file, text, &args![FORMAT_INT, value]);
-    }
-
-    // The cell.
-    let cell = e.call(PARENT_CELL_OF, &args![player]).u32();
-    if cell != 0 {
-        if e.call(0x0042_5fd0, &args![cell]).bool() {
-            let id = form_id_of(e, cell);
-            let cell_name = name_of_form(e, cell);
-            format_into(e, text, &args![FORMAT_NAME_ID, cell_name, id]);
-        } else {
-            let world = e.call(0x0054_ddd0, &args![cell]).u32();
-            if world != 0 {
-                let id = form_id_of(e, cell);
-                let y = e.call(0x0054_4c60, &args![cell]).u32();
-                let x = e.call(0x0054_4c30, &args![cell]).u32();
-                let world_name = name_of_form(e, world);
-                format_into(e, text, &args![FORMAT_CELL_WORLD, world_name, x, y, id]);
-            } else {
-                let id = form_id_of(e, cell);
-                let y = e.call(0x0054_4c60, &args![cell]).u32();
-                let x = e.call(0x0054_4c30, &args![cell]).u32();
-                format_into(e, text, &args![FORMAT_CELL_UNKNOWN_WORLD, x, y, id]);
-            }
-        }
-    } else {
-        format_into(e, text, &args![TEXT_NONE]);
-    }
-    write_text(e, file, text);
-
-    if reason == 1 {
-        let extra_list = e.call(EXTRA_LIST_OF, &args![player]).u32();
-        let extra = e.call(GET_EXTRA_DATA, &args![extra_list, 0x5fu32]).u32();
-        if extra != 0 {
-            let cause = e.mem.i32(extra + 0x10);
-            if cause != -1 {
-                let cause_name = e
-                    .mem
-                    .u32(CAUSE_NAME_TABLE.wrapping_add((cause as u32).wrapping_mul(4)));
-                format_into(e, text, &args![FORMAT_TEXT, cause_name]);
-            } else {
-                format_into(e, text, &args![TEXT_NONE]);
-            }
-            write_text(e, file, text);
-            let object = e.mem.u32(extra + 0x14);
-            if object != 0 {
-                let id = form_id_of(e, object);
-                let object_name = e.vcall(object, 0x130, &args![]).u32();
-                let object_text = e.call(0x0044_0e30, &args![object]).u32();
-                format_into(
-                    e,
-                    text,
-                    &args![FORMAT_CAUSE_OBJECT, object_text, object_name, id],
+        let mut node = player + 0x87c;
+        while node != 0 && !list_is_empty(e, node) {
+            let slot = list_item_slot(e, node);
+            let entry = e.mem.u32(slot);
+            node = list_next(e, node);
+            if e.mem.u32(entry) != 0 {
+                let rank = e.mem.u8(entry + 4) as u32;
+                let perk = e.mem.u32(entry);
+                let id = form_id_of(e, perk);
+                let perk_name = name_of_form(e, perk);
+                let buffer = frame.addr() + 0x158;
+                e.call(
+                    SPRINTF,
+                    &args![buffer, 0x104u32, FORMAT_PERK, perk_name, id, rank],
                 );
-            } else {
-                format_into(e, text, &args![TEXT_NONE]);
+                e.call(STRING_APPEND, &args![text, buffer]);
             }
-        } else {
-            format_and_write(e, file, text, &args![TEXT_UNKNOWN_CAUSE]);
-            format_and_write(e, file, text, &args![TEXT_UNKNOWN_OBJECT]);
+        }
+        e.call(STRING_APPEND, &args![text, TEXT_CLOSE_QUOTE]);
+        write_text(e, file, text);
+
+        for index in 0..0xeu32 {
+            let value = e.vcall(owner, 0x8, &args![index + 0x20]).u32();
+            format_and_write(e, file, text, &args![FORMAT_INT, value]);
+        }
+        for index in 0..7u32 {
+            let value = e.vcall(owner, 0x0, &args![index + 5]).u32();
+            format_and_write(e, file, text, &args![FORMAT_INT, value]);
+            let value = e.vcall(owner, 0x8, &args![index + 5]).u32();
+            format_and_write(e, file, text, &args![FORMAT_INT, value]);
+        }
+        for index in 0..0x14u32 {
+            let value = e.vcall(owner, 0x0, &args![index + 0xc]).u32();
+            format_and_write(e, file, text, &args![FORMAT_INT, value]);
+            let value = e.vcall(owner, 0x8, &args![index + 0xc]).u32();
+            format_and_write(e, file, text, &args![FORMAT_INT, value]);
         }
 
-        let killer = e.get(this, PlayerCharacter::pMyKiller).addr();
-        if killer != 0 {
-            let id = form_id_of(e, killer);
-            let killer_name = e.call(0x0055_d520, &args![killer]).u32();
-            format_and_write(e, file, text, &args![FORMAT_NAME_ID, killer_name, id]);
-            if e.call(0x0056_af40, &args![killer]).bool() {
-                let extra_list = e.call(EXTRA_LIST_OF, &args![killer]).u32();
-                let original = e.call(0x0042_16f0, &args![extra_list]).u32();
-                let extra_list = e.call(EXTRA_LIST_OF, &args![killer]).u32();
-                let template = e.call(0x0042_1720, &args![extra_list]).u32();
-                if original != 0 && template != 0 {
-                    let template_id = form_id_of(e, template);
-                    let template_name = e.vcall(template, 0x130, &args![]).u32();
-                    let original_id = form_id_of(e, original);
-                    let original_name = e.vcall(original, 0x130, &args![]).u32();
+        // The inventory.
+        let inventory = e.call(0x004b_f220, &args![player]).u32();
+        if inventory != 0 {
+            reset_to_quote(e, text);
+            e.call(0x004d_4530, &args![inventory, 0x0094_ec90u32, text, 0u32]);
+            e.call(STRING_APPEND, &args![text, TEXT_CLOSE_QUOTE]);
+        } else {
+            format_into(e, text, &args![TEXT_EMPTY_QUOTES]);
+        }
+        write_text(e, file, text);
+
+        let (first_at, second_at) = (frame.addr() + 0x26c, frame.addr() + 0x274);
+        e.call(0x0093_abe0, &args![player, first_at, second_at]);
+        let first = e.mem.f32(first_at) as f64;
+        let second = e.mem.f32(second_at) as f64;
+        format_and_write(e, file, text, &args![FORMAT_TWO_FLOATS, first, second]);
+        let weight = if inventory != 0 {
+            e.call(0x004d_0f40, &args![inventory, 0u32, 0u32]).u32()
+        } else {
+            0
+        };
+        format_and_write(e, file, text, &args![FORMAT_INT, weight]);
+        let value = e.call(0x0057_7d50, &args![player]).u32();
+        format_and_write(e, file, text, &args![FORMAT_INT, value]);
+        let speed = e.vcall(player, 0x43c, &args![]).f64();
+        format_and_write(e, file, text, &args![FORMAT_ONE_FLOAT, speed]);
+
+        // The quest log.
+        reset_to_quote(e, text);
+        let mut node = player + 0x6b0;
+        while node != 0 && !list_is_empty(e, node) {
+            let slot = list_item_slot(e, node);
+            let item = e.mem.u32(slot);
+            node = list_next(e, node);
+            if e.call(0x0060_fd70, &args![item]).bool()
+                && e.call(0x005e_3fa0, &args![item]).u32() != 0
+            {
+                let quest = e.call(0x005e_3fa0, &args![item]).u32();
+                let quest_again = e.call(0x005e_3fa0, &args![item]).u32();
+                let id = form_id_of(e, quest_again);
+                let quest_name = e.vcall(quest, 0x138, &args![]).u32();
+                let buffer = frame.addr() + 0x40;
+                e.call(
+                    SPRINTF,
+                    &args![buffer, 0x104u32, FORMAT_QUEST, quest_name, id],
+                );
+                e.call(STRING_APPEND, &args![text, buffer]);
+            }
+        }
+        e.call(STRING_APPEND, &args![text, TEXT_CLOSE_QUOTE]);
+        write_text(e, file, text);
+
+        for index in 0..0x2bu32 {
+            let value = e.call(0x005a_3370, &args![index]).u32();
+            format_and_write(e, file, text, &args![FORMAT_INT, value]);
+        }
+
+        // The cell.
+        let cell = e.call(PARENT_CELL_OF, &args![player]).u32();
+        if cell != 0 {
+            if e.call(0x0042_5fd0, &args![cell]).bool() {
+                let id = form_id_of(e, cell);
+                let cell_name = name_of_form(e, cell);
+                format_into(e, text, &args![FORMAT_NAME_ID, cell_name, id]);
+            } else {
+                let world = e.call(0x0054_ddd0, &args![cell]).u32();
+                if world != 0 {
+                    let id = form_id_of(e, cell);
+                    let y = e.call(0x0054_4c60, &args![cell]).u32();
+                    let x = e.call(0x0054_4c30, &args![cell]).u32();
+                    let world_name = name_of_form(e, world);
+                    format_into(e, text, &args![FORMAT_CELL_WORLD, world_name, x, y, id]);
+                } else {
+                    let id = form_id_of(e, cell);
+                    let y = e.call(0x0054_4c60, &args![cell]).u32();
+                    let x = e.call(0x0054_4c30, &args![cell]).u32();
+                    format_into(e, text, &args![FORMAT_CELL_UNKNOWN_WORLD, x, y, id]);
+                }
+            }
+        } else {
+            format_into(e, text, &args![TEXT_NONE]);
+        }
+        write_text(e, file, text);
+
+        if reason == 1 {
+            let extra_list = e.call(EXTRA_LIST_OF, &args![player]).u32();
+            let extra = e.call(GET_EXTRA_DATA, &args![extra_list, 0x5fu32]).u32();
+            if extra != 0 {
+                let cause = e.mem.i32(extra + 0x10);
+                if cause != -1 {
+                    let cause_name = e
+                        .mem
+                        .u32(CAUSE_NAME_TABLE.wrapping_add((cause as u32).wrapping_mul(4)));
+                    format_into(e, text, &args![FORMAT_TEXT, cause_name]);
+                } else {
+                    format_into(e, text, &args![TEXT_NONE]);
+                }
+                write_text(e, file, text);
+                let object = e.mem.u32(extra + 0x14);
+                if object != 0 {
+                    let id = form_id_of(e, object);
+                    let object_name = e.vcall(object, 0x130, &args![]).u32();
+                    let object_text = e.call(0x0044_0e30, &args![object]).u32();
                     format_into(
                         e,
                         text,
-                        &args![
-                            FORMAT_LEVELLED_BOTH,
-                            original_name,
-                            original_id,
-                            template_name,
-                            template_id
-                        ],
-                    );
-                } else if original != 0 {
-                    let original_id = form_id_of(e, original);
-                    let original_name = e.vcall(original, 0x130, &args![]).u32();
-                    format_into(
-                        e,
-                        text,
-                        &args![FORMAT_LEVELLED_ORIGINAL_ONLY, original_name, original_id],
-                    );
-                } else if template != 0 {
-                    let template_id = form_id_of(e, template);
-                    let template_name = e.vcall(template, 0x130, &args![]).u32();
-                    format_into(
-                        e,
-                        text,
-                        &args![FORMAT_LEVELLED_TEMPLATE_ONLY, template_name, template_id],
+                        &args![FORMAT_CAUSE_OBJECT, object_text, object_name, id],
                     );
                 } else {
-                    format_into(e, text, &args![TEXT_UNKNOWN_LEVELLED]);
+                    format_into(e, text, &args![TEXT_NONE]);
                 }
             } else {
-                let base = e.call(BASE_FORM_OF, &args![killer]).u32();
-                let base_again = e.call(BASE_FORM_OF, &args![killer]).u32();
-                let id = form_id_of(e, base_again);
-                let base_name = e.vcall(base, 0x130, &args![]).u32();
-                format_into(e, text, &args![FORMAT_NAME_ID, base_name, id]);
+                format_and_write(e, file, text, &args![TEXT_UNKNOWN_CAUSE]);
+                format_and_write(e, file, text, &args![TEXT_UNKNOWN_OBJECT]);
             }
-            write_text(e, file, text);
-            let damage = e.call(0x0056_8ad0, &args![killer]).f64();
-            format_and_write(e, file, text, &args![FORMAT_ONE_FLOAT, damage]);
-            let weapon = e.call(0x008a_1710, &args![killer]).u32();
-            if weapon != 0 {
-                let id = form_id_of(e, weapon);
-                let weapon_name = e.call(0x0040_8da0, &args![weapon + 0x30]).u32();
-                format_into(e, text, &args![FORMAT_NAME_ID, weapon_name, id]);
-            } else {
-                format_into(e, text, &args![TEXT_NO_WEAPON]);
-            }
-            write_text(e, file, text);
-        } else {
-            format_and_write(e, file, text, &args![TEXT_UNKNOWN_KILLER]);
-        }
-    }
 
-    format_and_write(e, file, text, &args![TEXT_LINE_END]);
-    e.call(0x00af_fd10, &args![file]);
-    e.vcall(file, 0, &args![1u32]);
-    e.call(0x0040_37d0, &args![text]);
-    e.mem.free(text);
+            let killer = e.get(this, PlayerCharacter::pMyKiller).addr();
+            if killer != 0 {
+                let id = form_id_of(e, killer);
+                let killer_name = e.call(0x0055_d520, &args![killer]).u32();
+                format_and_write(e, file, text, &args![FORMAT_NAME_ID, killer_name, id]);
+                if e.call(0x0056_af40, &args![killer]).bool() {
+                    let extra_list = e.call(EXTRA_LIST_OF, &args![killer]).u32();
+                    let original = e.call(0x0042_16f0, &args![extra_list]).u32();
+                    let extra_list = e.call(EXTRA_LIST_OF, &args![killer]).u32();
+                    let template = e.call(0x0042_1720, &args![extra_list]).u32();
+                    if original != 0 && template != 0 {
+                        let template_id = form_id_of(e, template);
+                        let template_name = e.vcall(template, 0x130, &args![]).u32();
+                        let original_id = form_id_of(e, original);
+                        let original_name = e.vcall(original, 0x130, &args![]).u32();
+                        format_into(
+                            e,
+                            text,
+                            &args![
+                                FORMAT_LEVELLED_BOTH,
+                                original_name,
+                                original_id,
+                                template_name,
+                                template_id
+                            ],
+                        );
+                    } else if original != 0 {
+                        let original_id = form_id_of(e, original);
+                        let original_name = e.vcall(original, 0x130, &args![]).u32();
+                        format_into(
+                            e,
+                            text,
+                            &args![FORMAT_LEVELLED_ORIGINAL_ONLY, original_name, original_id],
+                        );
+                    } else if template != 0 {
+                        let template_id = form_id_of(e, template);
+                        let template_name = e.vcall(template, 0x130, &args![]).u32();
+                        format_into(
+                            e,
+                            text,
+                            &args![FORMAT_LEVELLED_TEMPLATE_ONLY, template_name, template_id],
+                        );
+                    } else {
+                        format_into(e, text, &args![TEXT_UNKNOWN_LEVELLED]);
+                    }
+                } else {
+                    let base = e.call(BASE_FORM_OF, &args![killer]).u32();
+                    let base_again = e.call(BASE_FORM_OF, &args![killer]).u32();
+                    let id = form_id_of(e, base_again);
+                    let base_name = e.vcall(base, 0x130, &args![]).u32();
+                    format_into(e, text, &args![FORMAT_NAME_ID, base_name, id]);
+                }
+                write_text(e, file, text);
+                let damage = e.call(0x0056_8ad0, &args![killer]).f64();
+                format_and_write(e, file, text, &args![FORMAT_ONE_FLOAT, damage]);
+                let weapon = e.call(0x008a_1710, &args![killer]).u32();
+                if weapon != 0 {
+                    let id = form_id_of(e, weapon);
+                    let weapon_name = e.call(0x0040_8da0, &args![weapon + 0x30]).u32();
+                    format_into(e, text, &args![FORMAT_NAME_ID, weapon_name, id]);
+                } else {
+                    format_into(e, text, &args![TEXT_NO_WEAPON]);
+                }
+                write_text(e, file, text);
+            } else {
+                format_and_write(e, file, text, &args![TEXT_UNKNOWN_KILLER]);
+            }
+        }
+
+        format_and_write(e, file, text, &args![TEXT_LINE_END]);
+        e.call(0x00af_fd10, &args![file]);
+        e.vcall(file, 0, &args![1u32]);
+        e.call(0x0040_37d0, &args![text]);
+    });
 }
 
 // Translated from 0094fce0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2428,20 +2446,26 @@ pub fn player_character_reward_karma(e: &mut Engine, this: Ptr<PlayerCharacter>,
         SOUND_KARMA_UP
     };
 
-    // `BSSoundHandle` locals: the handle and the temporary the lookup fills.
-    let handle = e.mem.alloc(12);
-    e.call(0x0041_a250, &args![handle]);
-    let temporary = e.mem.alloc(12);
-    let audio = e.call(0x0045_3a70, &args![]).u32();
-    let found = e
-        .call(0x00ad_7550, &args![audio, temporary, sound, 0x121u32])
-        .u32();
-    e.call(0x0041_8900, &args![handle, found]);
-    e.call(RELEASE_HANDLE, &args![temporary]);
-    e.mem.free(temporary);
-    e.call(0x00ad_8830, &args![handle, 0u32]);
-    e.call(RELEASE_HANDLE, &args![handle]);
-    e.mem.free(handle);
+    // `BSSoundHandle` locals: the handle and the temporary the lookup fills. The exe's frame
+    // (`SUB ESP,0x4c` under the exception record, then `ESI` and the record link) has a pair
+    // for each branch: `EBP-0x20` (+0x40) and `EBP-0x38` (+0x28) for the loss, `EBP-0x2c`
+    // (+0x34) and `EBP-0x44` (+0x1c) for the gain.
+    e.with_stack(0x60, |e, frame| {
+        let (handle, temporary) = if sound == SOUND_KARMA_DOWN {
+            (frame.addr() + 0x40, frame.addr() + 0x28)
+        } else {
+            (frame.addr() + 0x34, frame.addr() + 0x1c)
+        };
+        e.call(0x0041_a250, &args![handle]);
+        let audio = e.call(0x0045_3a70, &args![]).u32();
+        let found = e
+            .call(0x00ad_7550, &args![audio, temporary, sound, 0x121u32])
+            .u32();
+        e.call(0x0041_8900, &args![handle, found]);
+        e.call(RELEASE_HANDLE, &args![temporary]);
+        e.call(0x00ad_8830, &args![handle, 0u32]);
+        e.call(RELEASE_HANDLE, &args![handle]);
+    });
 
     let upper = setting_int(e, KARMA_UPPER_LIMIT_SETTING);
     let upper_ok = delta <= 0 || karma < upper;
@@ -2890,18 +2914,21 @@ pub fn player_character_resurrect(
     e.vcall(player, 0x1c4, &args![]);
     let controller = e.call(0x0093_06d0, &args![player]).u32();
     if controller != 0 {
-        let out = e.mem.alloc(4);
-        e.call(0x0070_c440, &args![controller, out]);
-        let value = e.call(0x004a_3a20, &args![out]).u32();
-        let block = e.call(OPERATOR_NEW, &args![8u32]).u32();
-        let caster = if block != 0 {
-            let at = e.call(SETTING_FLOAT_POINTER, &args![0x011e_0934u32]).u32();
-            let seconds = e.mem.f32(at);
-            e.call(0x0062_0850, &args![block, seconds, value]).u32()
-        } else {
-            0
-        };
-        e.mem.free(out);
+        // The exe's frame (`SUB ESP,0x50` under the exception record, then the record link):
+        // the built word at `EBP-0x1c` (+0x44).
+        let caster = e.with_stack(0x60, |e, frame| {
+            let out = frame.addr() + 0x44;
+            e.call(0x0070_c440, &args![controller, out]);
+            let value = e.call(0x004a_3a20, &args![out]).u32();
+            let block = e.call(OPERATOR_NEW, &args![8u32]).u32();
+            if block != 0 {
+                let at = e.call(SETTING_FLOAT_POINTER, &args![0x011e_0934u32]).u32();
+                let seconds = e.mem.f32(at);
+                e.call(0x0062_0850, &args![block, seconds, value]).u32()
+            } else {
+                0
+            }
+        });
         e.mem.set_u32(player + 0x21c, caster);
     } else {
         e.mem.set_u32(player + 0x21c, 0);
@@ -3130,216 +3157,211 @@ fn clone_inventory_3d_create(e: &mut Engine, this: Ptr<PlayerCharacter>) -> bool
     e.call(0x00cb_9650, &args![own]);
     let own = fn_00950bb0(e, this, 0);
     let controllers = e.call(0x0043_b230, &args![own]).u32();
-    // `NiPointer` local: the controllers of the player's own 3D.
-    let kept_controllers = e.mem.alloc(4);
-    e.call(0x0063_3c90, &args![kept_controllers, controllers]);
-    e.call(0x00a5_c050, &args![own]);
-    // `NiCloningProcess` local, built with scale 1.0.
-    let cloning = e.mem.alloc(0x40);
-    e.call(0x004a_d050, &args![cloning, 1.0f32]);
-    let clone = e.call(0x00a5_d2c0, &args![own, cloning]).u32();
-    let clone_node = if clone != 0 {
-        e.vcall(clone, 0xc, &args![]).u32()
-    } else {
-        0
-    };
-    if clone_node != 0 {
-        let scene = e.call(0x0045_0b80, &args![1u32]).u32();
-        e.call(0x00b5_f150, &args![scene, clone_node, 0u32]);
-    }
-    let held = pointer_target(e, kept_controllers);
-    e.call(0x00a5_c000, &args![own, held]);
-    let clone_node = if clone != 0 {
-        e.vcall(clone, 0xc, &args![]).u32()
-    } else {
-        0
-    };
-    e.call(SMART_POINTER_ASSIGN, &args![slot, clone_node]);
-    let model = pointer_target(e, slot);
-    e.call(0x00a5_c050, &args![model]);
-    let model = pointer_target(e, slot);
-    e.call(0x0049_9160, &args![model]);
-    let property = e.call(0x0040_df90, &args![]).u32();
-    let model = pointer_target(e, slot);
-    e.call(0x00a5_b230, &args![model, property]);
-    let model = pointer_target(e, slot);
-    e.call(0x00a5_a040, &args![model]);
-    let model = pointer_target(e, slot);
-    e.call(0x00b6_bb30, &args![model, 1.0f32]);
-    let model = pointer_target(e, slot);
-    fn_00951940(e, this.cast(), model);
-    let model = pointer_target(e, slot);
-    e.call(0x0044_0460, &args![model, INVENTORY_MODEL_ARGUMENT]);
-    let model = pointer_target(e, slot);
-    let form = e.call(0x007a_f430, &args![player]).u32();
-    e.call(0x0060_62e0, &args![form, player, model]);
-    let matrix = e.mem.alloc(0x24);
-    let rotated_out = e.mem.alloc(0x24);
-    for word in 0..9u32 {
-        let value = e.mem.u32(LOAD_3D_MATRIX + 4 * word);
-        e.mem.set_u32(matrix + 4 * word, value);
-    }
-    let rotated = e
-        .call(0x0056_fac0, &args![player, rotated_out, matrix])
-        .u32();
-    let model = pointer_target(e, slot);
-    e.call(0x0043_fa80, &args![model, rotated]);
-    e.mem.free(rotated_out);
-    e.mem.free(matrix);
-    let block = e.call(0x00aa_13e0, &args![0x1c0u32]).u32();
-    let made = if block != 0 {
-        e.call(0x0064_9680, &args![block]).u32()
-    } else {
-        0
-    };
-    // `NiPointer` local holding the new object.
-    let holder = e.mem.alloc(4);
-    e.call(0x0063_3c90, &args![holder, made]);
-    let model = pointer_target(e, slot);
-    let name = e.call(0x008d_3f70, &args![]).u32();
-    let found = e.vcall(model, 0x9c, &args![name]).u32();
-    let cast = e.call(0x0065_3270, &args![CAST_TYPE_011D5BF8, found]).u32();
-    if cast != 0 {
-        let held = pointer_target(e, holder);
-        e.vcall(cast, 0x104, &args![held]);
-    }
-    let model = pointer_target(e, slot);
-    let name = e.call(0x008d_3f80, &args![]).u32();
-    let found = e.vcall(model, 0x9c, &args![name]).u32();
-    let cast = e.call(0x0065_3270, &args![CAST_TYPE_011D5BF8, found]).u32();
-    if cast != 0 {
-        let held = pointer_target(e, holder);
-        e.vcall(cast, 0x104, &args![held]);
-        e.call(0x0066_3050, &args![cast, 1u32]);
-    }
-    e.call(SMART_POINTER_ASSIGN, &args![holder, 0u32]);
-    // The children of the nodes named by `00951920` and `00499b70`.
-    for name_getter in [0u32, 1u32] {
-        let model = pointer_target(e, slot);
-        let name = if name_getter == 0 {
-            fn_00951920(e)
-        } else {
-            e.call(0x0049_9b70, &args![]).u32()
-        };
-        let found = e.vcall(model, 0x9c, &args![name]).u32();
-        let node = if found != 0 {
-            e.vcall(found, 0xc, &args![]).u32()
+    // The exe's frame (`SUB ESP,0x354` under the exception record, then `ESI`, `EDI` and the
+    // record link): the kept controllers at `EBP-0x24` (+0x348), the cloning process at
+    // `EBP-0x2a4` (+0xc8), the matrix at `EBP-0x168` (+0x204), the rotated matrix at `EBP-0x2ec`
+    // (+0x80), the holder at `EBP-0x18` (+0x354), the folder at `EBP-0x274` (+0xf8), the path at
+    // `EBP-0x134` (+0x238) and the list words at `EBP-0x2b8` (+0xb4) and `EBP-0x2bc` (+0xb0).
+    e.with_stack(0x36c, |e, frame| {
+        // `NiPointer` local: the controllers of the player's own 3D.
+        let kept_controllers = frame.addr() + 0x348;
+        e.call(0x0063_3c90, &args![kept_controllers, controllers]);
+        e.call(0x00a5_c050, &args![own]);
+        // `NiCloningProcess` local, built with scale 1.0.
+        let cloning = frame.addr() + 0xc8;
+        e.call(0x004a_d050, &args![cloning, 1.0f32]);
+        let clone = e.call(0x00a5_d2c0, &args![own, cloning]).u32();
+        let clone_node = if clone != 0 {
+            e.vcall(clone, 0xc, &args![]).u32()
         } else {
             0
         };
-        if node != 0 {
-            let mut index = 0u32;
-            while index < e.call(0x0043_b480, &args![node]).u32() {
-                e.vcall(node, 0xf0, &args![index]);
-                index += 1;
-            }
+        if clone_node != 0 {
+            let scene = e.call(0x0045_0b80, &args![1u32]).u32();
+            e.call(0x00b5_f150, &args![scene, clone_node, 0u32]);
         }
-    }
-    let model = pointer_target(e, slot);
-    e.call(0x00b6_8770, &args![model, 0u32, 0.0f32, 0u32, 0.0f32, 0u32]);
-    let block = e.call(OPERATOR_NEW, &args![0x13cu32]).u32();
-    let animation = if block != 0 {
-        e.call(0x0048_f810, &args![block]).u32()
-    } else {
-        0
-    };
-    e.mem.set_u32(player + 0x6a0, animation);
-    e.call(0x007a_f430, &args![player]);
-    let model_name = e.call(0x0057_15d0, &args![player]).u32();
-    let folder = e.mem.alloc(0x104);
-    e.call(
-        0x0040_6d00,
-        &args![folder, 0x104u32, FORMAT_MODEL_PATH, model_name],
-    );
-    let separator = e.call(0x0040_ab30, &args![folder, 0x5cu32]).u32();
-    if separator == 0 {
-        e.mem.free(folder);
-        e.call(0x0045_cec0, &args![holder]);
-        e.call(0x004a_d270, &args![cloning]);
-        e.call(0x0045_cec0, &args![kept_controllers]);
-        e.mem.free(holder);
-        e.mem.free(cloning);
-        e.mem.free(kept_controllers);
-        return true;
-    }
-    let remaining = 0x104u32.wrapping_sub(separator.wrapping_sub(folder));
-    e.call(0x0040_6d30, &args![separator, remaining, TEXT_MT_IDLE]);
-    let path = e.mem.alloc(0x104);
-    e.call(
-        0x0040_6d00,
-        &args![path, 0x104u32, FORMAT_DATA_PATH, TEXT_MESHES, folder],
-    );
-    let model_name = e.call(0x0057_15d0, &args![player]).u32();
-    let loader = e.global::<u32>(MODEL_LOADER_POINTER);
-    let files = e
-        .call(0x0044_7300, &args![loader, path, model_name, 0u32])
-        .u32();
-    e.mem.set_u8(separator, 0);
-    for index in 1..12u32 {
-        let idle_name = e.mem.u32(IDLE_NAME_TABLE + 4 * index);
-        for (path_format, name_format) in [
-            (FORMAT_IDLE_PATH, FORMAT_IDLE_NAME),
-            (FORMAT_TORCH_IDLE_PATH, FORMAT_TORCH_IDLE_NAME),
-        ] {
-            e.call(
-                0x0040_6d00,
-                &args![path, 0x104u32, path_format, TEXT_MESHES, folder, idle_name],
-            );
-            let files_object = e.call(0x0050_f6e0, &args![]).u32();
-            let exists = e
-                .call(
-                    0x00af_e0d0,
-                    &args![files_object, path, 0u32, 0u32, 0xffff_ffffu32],
-                )
-                .u32();
-            if exists != 0 {
-                let copy = e.call(OPERATOR_NEW, &args![0x104u32]).u32();
-                let model_name = e.call(0x0057_15d0, &args![player]).u32();
-                e.call(0x0040_6d30, &args![copy, 0x104u32, model_name]);
-                let backslash = e.call(0x0040_ab30, &args![copy, 0x5cu32]).u32();
-                if backslash != 0 {
-                    let name_at = backslash + 1;
-                    let remaining =
-                        0x104u32.wrapping_sub(name_at.wrapping_sub(copy).wrapping_add(1));
-                    e.call(
-                        0x0040_6d00,
-                        &args![name_at, remaining, name_format, idle_name],
-                    );
-                    let word = e.mem.alloc(4);
-                    e.mem.set_u32(word, copy);
-                    e.call(0x0090_5820, &args![files, word]);
-                    e.mem.free(word);
+        let held = pointer_target(e, kept_controllers);
+        e.call(0x00a5_c000, &args![own, held]);
+        let clone_node = if clone != 0 {
+            e.vcall(clone, 0xc, &args![]).u32()
+        } else {
+            0
+        };
+        e.call(SMART_POINTER_ASSIGN, &args![slot, clone_node]);
+        let model = pointer_target(e, slot);
+        e.call(0x00a5_c050, &args![model]);
+        let model = pointer_target(e, slot);
+        e.call(0x0049_9160, &args![model]);
+        let property = e.call(0x0040_df90, &args![]).u32();
+        let model = pointer_target(e, slot);
+        e.call(0x00a5_b230, &args![model, property]);
+        let model = pointer_target(e, slot);
+        e.call(0x00a5_a040, &args![model]);
+        let model = pointer_target(e, slot);
+        e.call(0x00b6_bb30, &args![model, 1.0f32]);
+        let model = pointer_target(e, slot);
+        fn_00951940(e, this.cast(), model);
+        let model = pointer_target(e, slot);
+        e.call(0x0044_0460, &args![model, INVENTORY_MODEL_ARGUMENT]);
+        let model = pointer_target(e, slot);
+        let form = e.call(0x007a_f430, &args![player]).u32();
+        e.call(0x0060_62e0, &args![form, player, model]);
+        let matrix = frame.addr() + 0x204;
+        let rotated_out = frame.addr() + 0x80;
+        for word in 0..9u32 {
+            let value = e.mem.u32(LOAD_3D_MATRIX + 4 * word);
+            e.mem.set_u32(matrix + 4 * word, value);
+        }
+        let rotated = e
+            .call(0x0056_fac0, &args![player, rotated_out, matrix])
+            .u32();
+        let model = pointer_target(e, slot);
+        e.call(0x0043_fa80, &args![model, rotated]);
+        let block = e.call(0x00aa_13e0, &args![0x1c0u32]).u32();
+        let made = if block != 0 {
+            e.call(0x0064_9680, &args![block]).u32()
+        } else {
+            0
+        };
+        // `NiPointer` local holding the new object.
+        let holder = frame.addr() + 0x354;
+        e.call(0x0063_3c90, &args![holder, made]);
+        let model = pointer_target(e, slot);
+        let name = e.call(0x008d_3f70, &args![]).u32();
+        let found = e.vcall(model, 0x9c, &args![name]).u32();
+        let cast = e.call(0x0065_3270, &args![CAST_TYPE_011D5BF8, found]).u32();
+        if cast != 0 {
+            let held = pointer_target(e, holder);
+            e.vcall(cast, 0x104, &args![held]);
+        }
+        let model = pointer_target(e, slot);
+        let name = e.call(0x008d_3f80, &args![]).u32();
+        let found = e.vcall(model, 0x9c, &args![name]).u32();
+        let cast = e.call(0x0065_3270, &args![CAST_TYPE_011D5BF8, found]).u32();
+        if cast != 0 {
+            let held = pointer_target(e, holder);
+            e.vcall(cast, 0x104, &args![held]);
+            e.call(0x0066_3050, &args![cast, 1u32]);
+        }
+        e.call(SMART_POINTER_ASSIGN, &args![holder, 0u32]);
+        // The children of the nodes named by `00951920` and `00499b70`.
+        for name_getter in [0u32, 1u32] {
+            let model = pointer_target(e, slot);
+            let name = if name_getter == 0 {
+                fn_00951920(e)
+            } else {
+                e.call(0x0049_9b70, &args![]).u32()
+            };
+            let found = e.vcall(model, 0x9c, &args![name]).u32();
+            let node = if found != 0 {
+                e.vcall(found, 0xc, &args![]).u32()
+            } else {
+                0
+            };
+            if node != 0 {
+                let mut index = 0u32;
+                while index < e.call(0x0043_b480, &args![node]).u32() {
+                    e.vcall(node, 0xf0, &args![index]);
+                    index += 1;
                 }
             }
         }
-    }
-    let animation = e.mem.u32(player + 0x6a0);
-    let model = pointer_target(e, slot);
-    e.call(0x0048_ffd0, &args![animation, files, model, player, 1u32]);
-    let extra = e.call(0x005d_43c0, &args![player]).u32();
-    e.call(0x0041_8250, &args![extra]);
-    let model = pointer_target(e, slot);
-    e.vcall(model, 0xbc, &args![]);
-    if e.call(0x008d_8520, &args![player]).u32() != 0 {
-        let process = e.call(0x008d_8520, &args![player]).u32();
-        e.vcall(process, 0x580, &args![1u32, 0u32, 0u32]);
-    }
-    fn_00951910(e, saved_flag);
-    let model = pointer_target(e, slot);
-    let name = fn_00951930(e);
-    let found = e.vcall(model, 0x9c, &args![name]).u32();
-    if found != 0 {
-        e.call(0x0045_0f90, &args![found, 1u32]);
-    }
-    e.mem.free(path);
-    e.mem.free(folder);
-    e.call(0x0045_cec0, &args![holder]);
-    e.call(0x004a_d270, &args![cloning]);
-    e.call(0x0045_cec0, &args![kept_controllers]);
-    e.mem.free(holder);
-    e.mem.free(cloning);
-    e.mem.free(kept_controllers);
-    false
+        let model = pointer_target(e, slot);
+        e.call(0x00b6_8770, &args![model, 0u32, 0.0f32, 0u32, 0.0f32, 0u32]);
+        let block = e.call(OPERATOR_NEW, &args![0x13cu32]).u32();
+        let animation = if block != 0 {
+            e.call(0x0048_f810, &args![block]).u32()
+        } else {
+            0
+        };
+        e.mem.set_u32(player + 0x6a0, animation);
+        e.call(0x007a_f430, &args![player]);
+        let model_name = e.call(0x0057_15d0, &args![player]).u32();
+        let folder = frame.addr() + 0xf8;
+        e.call(
+            0x0040_6d00,
+            &args![folder, 0x104u32, FORMAT_MODEL_PATH, model_name],
+        );
+        let separator = e.call(0x0040_ab30, &args![folder, 0x5cu32]).u32();
+        if separator == 0 {
+            e.call(0x0045_cec0, &args![holder]);
+            e.call(0x004a_d270, &args![cloning]);
+            e.call(0x0045_cec0, &args![kept_controllers]);
+            return true;
+        }
+        let remaining = 0x104u32.wrapping_sub(separator.wrapping_sub(folder));
+        e.call(0x0040_6d30, &args![separator, remaining, TEXT_MT_IDLE]);
+        let path = frame.addr() + 0x238;
+        e.call(
+            0x0040_6d00,
+            &args![path, 0x104u32, FORMAT_DATA_PATH, TEXT_MESHES, folder],
+        );
+        let model_name = e.call(0x0057_15d0, &args![player]).u32();
+        let loader = e.global::<u32>(MODEL_LOADER_POINTER);
+        let files = e
+            .call(0x0044_7300, &args![loader, path, model_name, 0u32])
+            .u32();
+        e.mem.set_u8(separator, 0);
+        for index in 1..12u32 {
+            let idle_name = e.mem.u32(IDLE_NAME_TABLE + 4 * index);
+            for (path_format, name_format, word_at) in [
+                (FORMAT_IDLE_PATH, FORMAT_IDLE_NAME, 0xb4),
+                (FORMAT_TORCH_IDLE_PATH, FORMAT_TORCH_IDLE_NAME, 0xb0),
+            ] {
+                e.call(
+                    0x0040_6d00,
+                    &args![path, 0x104u32, path_format, TEXT_MESHES, folder, idle_name],
+                );
+                let files_object = e.call(0x0050_f6e0, &args![]).u32();
+                let exists = e
+                    .call(
+                        0x00af_e0d0,
+                        &args![files_object, path, 0u32, 0u32, 0xffff_ffffu32],
+                    )
+                    .u32();
+                if exists != 0 {
+                    let copy = e.call(OPERATOR_NEW, &args![0x104u32]).u32();
+                    let model_name = e.call(0x0057_15d0, &args![player]).u32();
+                    e.call(0x0040_6d30, &args![copy, 0x104u32, model_name]);
+                    let backslash = e.call(0x0040_ab30, &args![copy, 0x5cu32]).u32();
+                    if backslash != 0 {
+                        let name_at = backslash + 1;
+                        let remaining =
+                            0x104u32.wrapping_sub(name_at.wrapping_sub(copy).wrapping_add(1));
+                        e.call(
+                            0x0040_6d00,
+                            &args![name_at, remaining, name_format, idle_name],
+                        );
+                        let word = frame.addr() + word_at;
+                        e.mem.set_u32(word, copy);
+                        e.call(0x0090_5820, &args![files, word]);
+                    }
+                }
+            }
+        }
+        let animation = e.mem.u32(player + 0x6a0);
+        let model = pointer_target(e, slot);
+        e.call(0x0048_ffd0, &args![animation, files, model, player, 1u32]);
+        let extra = e.call(0x005d_43c0, &args![player]).u32();
+        e.call(0x0041_8250, &args![extra]);
+        let model = pointer_target(e, slot);
+        e.vcall(model, 0xbc, &args![]);
+        if e.call(0x008d_8520, &args![player]).u32() != 0 {
+            let process = e.call(0x008d_8520, &args![player]).u32();
+            e.vcall(process, 0x580, &args![1u32, 0u32, 0u32]);
+        }
+        fn_00951910(e, saved_flag);
+        let model = pointer_target(e, slot);
+        let name = fn_00951930(e);
+        let found = e.vcall(model, 0x9c, &args![name]).u32();
+        if found != 0 {
+            e.call(0x0045_0f90, &args![found, 1u32]);
+        }
+        e.call(0x0045_cec0, &args![holder]);
+        e.call(0x004a_d270, &args![cloning]);
+        e.call(0x0045_cec0, &args![kept_controllers]);
+        false
+    })
 }
 
 /// The destroying branch of `CloneInventory3D`.
@@ -3471,125 +3493,127 @@ pub fn fn_00951a10(e: &mut Engine, this: Ptr<PlayerCharacter>, hide_first_person
             }
         }
     }
-    let own = fn_00950bb0(e, this, 0);
-    e.call(0x0045_0f90, &args![own, u32::from(flag)]);
-    let mut show_scope = false;
-    let mut handled = false;
-    if flag != 0 && e.mem.u8(player + 0x64f) != 0 && e.call(0x008b_bc10, &args![player]).bool() {
-        let process = process_of(e, this);
-        if e.vcall(process, 0x148, &args![]).u32() != 0 {
+    // The exe's frame (`SUB ESP,0xb8` under the exception record, then `ESI` and the record
+    // link): the scope float at `EBP-0x1c` (+0xb0), the rotation at `EBP-0x48` (+0x84), the
+    // rotated matrix at `EBP-0xac` (+0x20), the zero vector at `EBP-0x60` (+0x6c), the sound
+    // handle at `EBP-0x54` (+0x78) when hiding and at `EBP-0x6c` (+0x60) otherwise, and the
+    // controller pointer at `EBP-0x88` (+0x44).
+    e.with_stack(0xcc, |e, frame| {
+        let own = fn_00950bb0(e, this, 0);
+        e.call(0x0045_0f90, &args![own, u32::from(flag)]);
+        let mut show_scope = false;
+        let mut handled = false;
+        if flag != 0 && e.mem.u8(player + 0x64f) != 0 && e.call(0x008b_bc10, &args![player]).bool()
+        {
             let process = process_of(e, this);
-            let item = e.vcall(process, 0x148, &args![]).u32();
-            let form = e.call(0x0044_ddc0, &args![item]).u32();
-            let form = e.call(0x0050_4e60, &args![form]).u32();
-            if e.call(0x0048_cee0, &args![form]).u32() != 0 {
-                handled = true;
+            if e.vcall(process, 0x148, &args![]).u32() != 0 {
                 let process = process_of(e, this);
                 let item = e.vcall(process, 0x148, &args![]).u32();
                 let form = e.call(0x0044_ddc0, &args![item]).u32();
-                let local = e.mem.alloc(4);
-                e.mem.set_f32(local, 0.0);
-                if !e.call(0x004a_d030, &args![form]).bool() {
-                    show_scope = true;
-                } else {
+                let form = e.call(0x0050_4e60, &args![form]).u32();
+                if e.call(0x0048_cee0, &args![form]).u32() != 0 {
+                    handled = true;
                     let process = process_of(e, this);
                     let item = e.vcall(process, 0x148, &args![]).u32();
-                    if e.call(0x004b_d8d0, &args![item, 0xeu32, local]).bool() {
+                    let form = e.call(0x0044_ddc0, &args![item]).u32();
+                    let local = frame.addr() + 0xb0;
+                    e.mem.set_f32(local, 0.0);
+                    if !e.call(0x004a_d030, &args![form]).bool() {
                         show_scope = true;
+                    } else {
+                        let process = process_of(e, this);
+                        let item = e.vcall(process, 0x148, &args![]).u32();
+                        if e.call(0x004b_d8d0, &args![item, 0xeu32, local]).bool() {
+                            show_scope = true;
+                        }
                     }
                 }
-                e.mem.free(local);
             }
         }
-    }
-    if show_scope {
-        e.call(0x0070_9c40, &args![1u32]);
-    }
-    if !handled {
-        let first = fn_00950bb0(e, this, 1);
-        e.call(0x0045_0f90, &args![first, u32::from(flag == 0)]);
-    }
-    e.mem.set_u8(player + 0x64b, u8::from(flag == 0));
-    if flag != 0 {
-        let own = fn_00950bb0(e, this, 0);
-        let argument = e.vcall(player, 0x1f4, &args![]).u32();
-        e.call(0x0044_0460, &args![own, argument]);
-        let rotation = e.mem.alloc(0x24);
-        let rotated_out = e.mem.alloc(0x24);
-        e.call(0x0068_15c0, &args![rotation]);
-        let angle = e.vcall(player, 0x2bc, &args![0u32]).f64() as f32;
-        e.call(0x004a_0c90, &args![rotation, angle]);
-        let rotated = e
-            .call(0x0056_fac0, &args![player, rotated_out, rotation])
-            .u32();
-        e.call(0x0043_fa80, &args![own, rotated]);
-        e.set_global(INVENTORY_ALPHA, 1.0f32);
-        e.call(0x008c_4640, &args![player]);
-        let animation = player_character_get_animation(e, this, 0);
-        if animation != 0 {
-            e.call(0x0049_3900, &args![animation, player]);
-        } else {
-            let vector = e.mem.alloc(12);
-            e.call(0x0043_d410, &args![vector, 0.0f32, 0u32, 0u32]);
-            e.call(0x00a5_9c60, &args![own, vector]);
-            e.mem.free(vector);
+        if show_scope {
+            e.call(0x0070_9c40, &args![1u32]);
         }
-        e.mem.free(rotated_out);
-        e.mem.free(rotation);
-    }
-    // The weapon sounds: the idle and the attack handle of the extra data.
-    let handle = e.mem.alloc(12);
-    e.call(0x0041_a250, &args![handle]);
-    for getter in [0x0041_89c0u32, 0x0041_8a00u32] {
-        let extra = e.call(0x005d_43c0, &args![player]).u32();
-        e.call(getter, &args![extra, handle]);
-        if e.call(0x00ad_8ce0, &args![handle]).bool() {
-            e.call(0x00ad_8fa0, &args![handle, u32::from(flag != 0)]);
+        if !handled {
+            let first = fn_00950bb0(e, this, 1);
+            e.call(0x0045_0f90, &args![first, u32::from(flag == 0)]);
         }
-    }
-    e.call(0x0048_3710, &args![handle]);
-    e.mem.free(handle);
-    e.vcall(player, 0x210, &args![0u32]);
-    if e.call(0x008c_4560, &args![player]).bool() {
-        let own_animation = player_character_get_animation(e, this, u8::from(flag == 0));
-        let other_animation = player_character_get_animation(e, this, flag);
-        let mut sequences = [0u32; 2];
-        for (index, animation) in [own_animation, other_animation].into_iter().enumerate() {
-            let manager = e.call(0x0049_6940, &args![animation]).u32();
-            let manager = e.call(0x0053_7bd0, &args![manager]).u32();
-            let name = e.call(0x0049_9b70, &args![]).u32();
-            let found = e.vcall(manager, 0x8c, &args![name]).u32();
-            sequences[index] = if found != 0 {
-                e.vcall(found, 0xc, &args![]).u32()
+        e.mem.set_u8(player + 0x64b, u8::from(flag == 0));
+        if flag != 0 {
+            let own = fn_00950bb0(e, this, 0);
+            let argument = e.vcall(player, 0x1f4, &args![]).u32();
+            e.call(0x0044_0460, &args![own, argument]);
+            let rotation = frame.addr() + 0x84;
+            let rotated_out = frame.addr() + 0x20;
+            e.call(0x0068_15c0, &args![rotation]);
+            let angle = e.vcall(player, 0x2bc, &args![0u32]).f64() as f32;
+            e.call(0x004a_0c90, &args![rotation, angle]);
+            let rotated = e
+                .call(0x0056_fac0, &args![player, rotated_out, rotation])
+                .u32();
+            e.call(0x0043_fa80, &args![own, rotated]);
+            e.set_global(INVENTORY_ALPHA, 1.0f32);
+            e.call(0x008c_4640, &args![player]);
+            let animation = player_character_get_animation(e, this, 0);
+            if animation != 0 {
+                e.call(0x0049_3900, &args![animation, player]);
             } else {
-                0
-            };
-        }
-        let (from, to) = (sequences[0], sequences[1]);
-        if from != 0 && to != 0 {
-            let mut index = 0u32;
-            while index < e.call(0x0043_b480, &args![from]).u32() {
-                let pointer = e.mem.alloc(4);
-                e.call(0x0063_3c90, &args![pointer, 0u32]);
-                e.vcall(from, 0xec, &args![index, pointer]);
-                if e.call(0x0052_aa80, &args![pointer, 0u32]).bool() {
-                    let target = pointer_target(e, pointer);
-                    e.vcall(to, 0xdc, &args![target, 1u32]);
-                }
-                e.call(0x0045_cec0, &args![pointer]);
-                e.mem.free(pointer);
-                index += 1;
+                let vector = frame.addr() + 0x6c;
+                e.call(0x0043_d410, &args![vector, 0.0f32, 0u32, 0u32]);
+                e.call(0x00a5_9c60, &args![own, vector]);
             }
         }
-    }
-    let mut lighting = e.vcall(player, 0x1d0, &args![]).u32();
-    if flag != 0 {
-        lighting = e.call(0x0043_b4a0, &args![lighting, 0u32]).u32();
-    }
-    e.call(0x0048_3710, &args![player]);
-    e.call(0x008b_0bd0, &args![player, lighting]);
-    let process = e.call(0x008d_8520, &args![player]).u32();
-    e.vcall(process, 0x580, &args![1u32, 1u32, 0u32]);
+        // The weapon sounds: the idle and the attack handle of the extra data.
+        let handle = frame.addr() + if flag != 0 { 0x78 } else { 0x60 };
+        e.call(0x0041_a250, &args![handle]);
+        for getter in [0x0041_89c0u32, 0x0041_8a00u32] {
+            let extra = e.call(0x005d_43c0, &args![player]).u32();
+            e.call(getter, &args![extra, handle]);
+            if e.call(0x00ad_8ce0, &args![handle]).bool() {
+                e.call(0x00ad_8fa0, &args![handle, u32::from(flag != 0)]);
+            }
+        }
+        e.call(0x0048_3710, &args![handle]);
+        e.vcall(player, 0x210, &args![0u32]);
+        if e.call(0x008c_4560, &args![player]).bool() {
+            let own_animation = player_character_get_animation(e, this, u8::from(flag == 0));
+            let other_animation = player_character_get_animation(e, this, flag);
+            let mut sequences = [0u32; 2];
+            for (index, animation) in [own_animation, other_animation].into_iter().enumerate() {
+                let manager = e.call(0x0049_6940, &args![animation]).u32();
+                let manager = e.call(0x0053_7bd0, &args![manager]).u32();
+                let name = e.call(0x0049_9b70, &args![]).u32();
+                let found = e.vcall(manager, 0x8c, &args![name]).u32();
+                sequences[index] = if found != 0 {
+                    e.vcall(found, 0xc, &args![]).u32()
+                } else {
+                    0
+                };
+            }
+            let (from, to) = (sequences[0], sequences[1]);
+            if from != 0 && to != 0 {
+                let mut index = 0u32;
+                while index < e.call(0x0043_b480, &args![from]).u32() {
+                    let pointer = frame.addr() + 0x44;
+                    e.call(0x0063_3c90, &args![pointer, 0u32]);
+                    e.vcall(from, 0xec, &args![index, pointer]);
+                    if e.call(0x0052_aa80, &args![pointer, 0u32]).bool() {
+                        let target = pointer_target(e, pointer);
+                        e.vcall(to, 0xdc, &args![target, 1u32]);
+                    }
+                    e.call(0x0045_cec0, &args![pointer]);
+                    index += 1;
+                }
+            }
+        }
+        let mut lighting = e.vcall(player, 0x1d0, &args![]).u32();
+        if flag != 0 {
+            lighting = e.call(0x0043_b4a0, &args![lighting, 0u32]).u32();
+        }
+        e.call(0x0048_3710, &args![player]);
+        e.call(0x008b_0bd0, &args![player, lighting]);
+        let process = e.call(0x008d_8520, &args![player]).u32();
+        e.vcall(process, 0x580, &args![1u32, 1u32, 0u32]);
+    });
 }
 
 // Translated from 009520f0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -3733,76 +3757,75 @@ pub fn fn_00952290(e: &mut Engine, this: Ptr<PlayerCharacter>) {
         target = e.global::<f32>(ZOOM_FACTOR);
     }
     // Matrices (9 floats), vectors (3 floats) and the temporaries the game
-    // keeps on its stack.
-    let matrix_a = e.mem.alloc(0x24);
-    let matrix_b = e.mem.alloc(0x24);
-    let matrix_c = e.mem.alloc(0x24);
-    let matrix_d = e.mem.alloc(0x24);
-    let scratch_1 = e.mem.alloc(0x24);
-    let scratch_2 = e.mem.alloc(0x24);
-    let up = e.mem.alloc(12);
-    let flat = e.mem.alloc(12);
-    let rotated_up = e.mem.alloc(12);
-    e.call(0x0068_15c0, &args![matrix_a]);
-    e.call(0x0068_15c0, &args![matrix_b]);
-    let pitch = e.vcall(player, 0x2bc, &args![0u32]).f64() as f32;
-    let node = e.global::<u32>(NODE_BY_EAD0_SLOT);
-    if node != 0 {
-        let look = e.call(0x0093_1d70, &args![player]).f32();
-        e.call(0x0052_4ac0, &args![matrix_a, look]);
-    } else {
-        e.call(0x004a_0c90, &args![matrix_a, pitch]);
-        let look = e.call(0x0093_1d70, &args![player]).f32();
-        e.call(0x0052_4ac0, &args![matrix_b, look]);
+    // keeps on its stack: the exe's frame (`SUB ESP,0x12c` under `EBP`, then `ESI` and `EDI`)
+    // has them at `EBP-0x24`, `-0xc0`, `-0x8c`, `-0x68`, `-0xf0`, `-0x120`, `-0x98`, `-0x3c`
+    // and `-0xfc`.
+    e.with_stack(0x134, |e, frame| {
+        let matrix_a = frame.addr() + 0x110;
+        let matrix_b = frame.addr() + 0x74;
+        let matrix_c = frame.addr() + 0xa8;
+        let matrix_d = frame.addr() + 0xcc;
+        let scratch_1 = frame.addr() + 0x44;
+        let scratch_2 = frame.addr() + 0x14;
+        let up = frame.addr() + 0x9c;
+        let flat = frame.addr() + 0xf8;
+        let rotated_up = frame.addr() + 0x38;
+        e.call(0x0068_15c0, &args![matrix_a]);
+        e.call(0x0068_15c0, &args![matrix_b]);
+        let pitch = e.vcall(player, 0x2bc, &args![0u32]).f64() as f32;
+        let node = e.global::<u32>(NODE_BY_EAD0_SLOT);
+        if node != 0 {
+            let look = e.call(0x0093_1d70, &args![player]).f32();
+            e.call(0x0052_4ac0, &args![matrix_a, look]);
+        } else {
+            e.call(0x004a_0c90, &args![matrix_a, pitch]);
+            let look = e.call(0x0093_1d70, &args![player]).f32();
+            e.call(0x0052_4ac0, &args![matrix_b, look]);
+            let product = e
+                .call(0x0043_f8d0, &args![matrix_a, scratch_1, matrix_b])
+                .u32();
+            copy_words(e, product, matrix_a, 9);
+        }
+        e.call(0x0041_6870, &args![up, 0.0f32, 1.0f32, 0.0f32]);
+        e.call(0x0068_15c0, &args![flat]);
+        let rotated = e.call(0x004b_4500, &args![matrix_a, rotated_up, up]).u32();
+        copy_words(e, rotated, up, 3);
+        copy_words(e, up, flat, 3);
+        e.mem.set_f32(flat + 8, 0.0);
+        let mut dot = e.call(0x004b_6190, &args![up, flat]).f32();
+        if f64::from(dot) < e.global::<f64>(MINUS_ONE_DOUBLE) {
+            dot = e.global::<f32>(MINUS_ONE_FLOAT);
+        }
+        if f64::from(dot) > e.global::<f64>(ONE_DOUBLE) {
+            dot = 1.0;
+        }
+        let angle = e.call(0x004f_6e40, &args![dot]).f32();
+        e.set_global(LOOK_ANGLE, angle);
+        let scaled = ((1.0 - f64::from(target)) * f64::from(angle)) as f32;
+        e.set_global(LOOK_ANGLE, scaled);
+        if e.mem.f32(up + 8) < e.mem.f32(flat + 8) {
+            let flipped = (f64::from(scaled) * e.global::<f64>(MINUS_ONE_DOUBLE)) as f32;
+            e.set_global(LOOK_ANGLE, flipped);
+        }
+        e.call(0x0068_15c0, &args![matrix_c]);
+        e.call(0x0068_15c0, &args![matrix_d]);
+        let angle = e.global::<f32>(LOOK_ANGLE);
+        e.call(0x0052_4ac0, &args![matrix_c, angle]);
+        copy_words(e, matrix_a, matrix_d, 9);
         let product = e
-            .call(0x0043_f8d0, &args![matrix_a, scratch_1, matrix_b])
+            .call(0x0043_f8d0, &args![matrix_d, scratch_2, matrix_c])
             .u32();
-        copy_words(e, product, matrix_a, 9);
-    }
-    e.call(0x0041_6870, &args![up, 0.0f32, 1.0f32, 0.0f32]);
-    e.call(0x0068_15c0, &args![flat]);
-    let rotated = e.call(0x004b_4500, &args![matrix_a, rotated_up, up]).u32();
-    copy_words(e, rotated, up, 3);
-    copy_words(e, up, flat, 3);
-    e.mem.set_f32(flat + 8, 0.0);
-    let mut dot = e.call(0x004b_6190, &args![up, flat]).f32();
-    if f64::from(dot) < e.global::<f64>(MINUS_ONE_DOUBLE) {
-        dot = e.global::<f32>(MINUS_ONE_FLOAT);
-    }
-    if f64::from(dot) > e.global::<f64>(ONE_DOUBLE) {
-        dot = 1.0;
-    }
-    let angle = e.call(0x004f_6e40, &args![dot]).f32();
-    e.set_global(LOOK_ANGLE, angle);
-    let scaled = ((1.0 - f64::from(target)) * f64::from(angle)) as f32;
-    e.set_global(LOOK_ANGLE, scaled);
-    if e.mem.f32(up + 8) < e.mem.f32(flat + 8) {
-        let flipped = (f64::from(scaled) * e.global::<f64>(MINUS_ONE_DOUBLE)) as f32;
-        e.set_global(LOOK_ANGLE, flipped);
-    }
-    e.call(0x0068_15c0, &args![matrix_c]);
-    e.call(0x0068_15c0, &args![matrix_d]);
-    let angle = e.global::<f32>(LOOK_ANGLE);
-    e.call(0x0052_4ac0, &args![matrix_c, angle]);
-    copy_words(e, matrix_a, matrix_d, 9);
-    let product = e
-        .call(0x0043_f8d0, &args![matrix_d, scratch_2, matrix_c])
-        .u32();
-    copy_words(e, product, matrix_d, 9);
-    if node != 0 {
-        e.call(0x0043_fa80, &args![node, matrix_d]);
-        e.call(0x004a_0c90, &args![matrix_a, pitch]);
-        let model = pointer_target(e, player + 0x694);
-        e.call(0x0043_fa80, &args![model, matrix_a]);
-    } else {
-        let model = pointer_target(e, player + 0x694);
-        e.call(0x0043_fa80, &args![model, matrix_a]);
-    }
-    for block in [
-        matrix_a, matrix_b, matrix_c, matrix_d, scratch_1, scratch_2, up, flat, rotated_up,
-    ] {
-        e.mem.free(block);
-    }
+        copy_words(e, product, matrix_d, 9);
+        if node != 0 {
+            e.call(0x0043_fa80, &args![node, matrix_d]);
+            e.call(0x004a_0c90, &args![matrix_a, pitch]);
+            let model = pointer_target(e, player + 0x694);
+            e.call(0x0043_fa80, &args![model, matrix_a]);
+        } else {
+            let model = pointer_target(e, player + 0x694);
+            e.call(0x0043_fa80, &args![model, matrix_a]);
+        }
+    });
 }
 
 /// Copies `count` words from `from` to `to` (`REP MOVSD`).
@@ -3934,10 +3957,13 @@ pub fn fn_00952830(
         }
         node = list_next(e, node);
     }
-    let word = e.mem.alloc(4);
-    e.mem.set_u32(word, item);
-    e.call(0x005a_e3d0, &args![this.addr() + TOPIC_LIST, word]);
-    e.mem.free(word);
+    // The exe passes its own argument slot (`EBP+8`): `SUB ESP,0x8` under `EBP`, so the slot
+    // is +0x10 of a frame that reaches it.
+    e.with_stack(0x14, |e, frame| {
+        let word = frame.addr() + 0x10;
+        e.mem.set_u32(word, item);
+        e.call(0x005a_e3d0, &args![this.addr() + TOPIC_LIST, word]);
+    });
     if refresh != 0 {
         let head = e.call(0x0046_4e30, &args![this]).u32();
         e.call(0x0061_a5a0, &args![1u32, head]);
@@ -3983,10 +4009,13 @@ pub fn player_character_add_quest_stage_item(
             _same_quest = true;
         }
     }
-    let word = e.mem.alloc(4);
-    e.mem.set_u32(word, item);
-    e.call(0x005a_e3d0, &args![player + QUEST_LOG_LIST, word]);
-    e.mem.free(word);
+    // The exe passes its own argument slot (`EBP+8`): `SUB ESP,0x10` and `ESI` under `EBP`, so
+    // the slot is +0x1c of a frame that reaches it.
+    e.with_stack(0x20, |e, frame| {
+        let word = frame.addr() + 0x1c;
+        e.mem.set_u32(word, item);
+        e.call(0x005a_e3d0, &args![player + QUEST_LOG_LIST, word]);
+    });
     if !e.call(0x005a_c740, &args![]).bool() {
         return true;
     }
@@ -4054,11 +4083,14 @@ pub fn fn_00952a20(e: &mut Engine, this: Ptr<PlayerCharacter>, target: u32) {
         worth_adding = !e.call(LIST_IS_EMPTY, &args![list]).bool();
     }
     if worth_adding && !present {
-        let word = e.mem.alloc(4);
-        e.mem.set_u32(word, target);
-        let list = e.call(0x0079_bc30, &args![player]).u32();
-        e.call(0x005a_e3d0, &args![list, word]);
-        e.mem.free(word);
+        // The exe passes its own argument slot (`EBP+8`): `SUB ESP,0x18` under `EBP`, so the
+        // slot is +0x20 of a frame that reaches it.
+        e.with_stack(0x24, |e, frame| {
+            let word = frame.addr() + 0x20;
+            e.mem.set_u32(word, target);
+            let list = e.call(0x0079_bc30, &args![player]).u32();
+            e.call(0x005a_e3d0, &args![list, word]);
+        });
     }
     let owner = e.call(0x0044_edb0, &args![target]).u32();
     if owner == e.get(this, PlayerCharacter::pActiveQuest).addr() {
@@ -5063,10 +5095,12 @@ pub fn fn_00954610(
         let body = e.vcall(reference, 0x1d0, &args![]).u32();
         if body != 0 {
             e.call(0x00c6_a040, &args![body, 0u32, 1u32, 1u32]);
-            e.with_stack(0x30, |e, frame| {
-                let scratch = frame.addr();
-                let zero_point = frame.addr() + 0x0c;
-                let position = frame.addr() + 0x18;
+            // The exe's frame (`SUB ESP,0x40` under `EBP`): the difference at `EBP-0x3c` (+4), the
+            // zero point at `EBP-0x30` (+0x10), the position at `EBP-0x24` (+0x1c).
+            e.with_stack(0x40, |e, frame| {
+                let scratch = frame.addr() + 4;
+                let zero_point = frame.addr() + 0x10;
+                let position = frame.addr() + 0x1c;
                 e.call(0x0043_d410, &args![zero_point, 0u32, 0u32, 0u32]);
                 e.call(0x00a5_9c60, &args![body, zero_point]);
                 e.call(0x00c6_a040, &args![body, 1u32, 1u32, 1u32]);
@@ -5085,10 +5119,12 @@ pub fn fn_00954610(
                 e.call(0x00c6_a270, &args![body, 1u32, 1u32, 0u32]);
             });
         } else {
-            let word = e.mem.alloc(4);
-            e.mem.set_u32(word, reference);
-            e.call(0x005a_e3d0, &args![player + 0x84c, word]);
-            e.mem.free(word);
+            // The same frame: the reference word at `EBP-0x8` (+0x38).
+            e.with_stack(0x40, |e, frame| {
+                let word = frame.addr() + 0x38;
+                e.mem.set_u32(word, reference);
+                e.call(0x005a_e3d0, &args![player + 0x84c, word]);
+            });
             fn_00954910(e, Ptr::new(reference), 1);
             e.call(0x0056_4d20, &args![reference, 1u32]);
         }
@@ -5631,33 +5667,35 @@ pub fn fn_00955620(e: &mut Engine, this: Ptr<PlayerCharacter>, flags: u32) {
     } else {
         e.vcall(marker, 0x1f4, &args![]).u32()
     };
-    let position = e.mem.alloc(12);
-    for i in 0..3 {
-        let word = e.mem.u32(position_source + i * 4);
-        e.mem.set_u32(position + i * 4, word);
-    }
-    for (offset, size) in [
-        (0x64au32, 1u32),
-        (0x64d, 1),
-        (0x651, 1),
-        (0x652, 1),
-        (0x654, 4),
-        (0x660, 4),
-        (0x664, 4),
-        (0x668, 4),
-        (0x66c, 1),
-        (0x6cc, 1),
-        (0x6d0, 4),
-        (0x6d4, 4),
-        (0x6d8, 1),
-        (0x6dc, 4),
-        (0x6e8, 1),
-        (0x6e4, 4),
-    ] {
-        save_data(e, player, player + offset, size);
-    }
-    save_data(e, player, position, 0xc);
-    e.mem.free(position);
+    // The exe's frame (`SUB ESP,0x228` under `EBP`): the position copy at `EBP-0x40` (+0x1e8).
+    e.with_stack(0x228, |e, frame| {
+        let position = frame.addr() + 0x1e8;
+        for i in 0..3 {
+            let word = e.mem.u32(position_source + i * 4);
+            e.mem.set_u32(position + i * 4, word);
+        }
+        for (offset, size) in [
+            (0x64au32, 1u32),
+            (0x64d, 1),
+            (0x651, 1),
+            (0x652, 1),
+            (0x654, 4),
+            (0x660, 4),
+            (0x664, 4),
+            (0x668, 4),
+            (0x66c, 1),
+            (0x6cc, 1),
+            (0x6d0, 4),
+            (0x6d4, 4),
+            (0x6d8, 1),
+            (0x6dc, 4),
+            (0x6e8, 1),
+            (0x6e4, 4),
+        ] {
+            save_data(e, player, player + offset, size);
+        }
+        save_data(e, player, position, 0xc);
+    });
     for (offset, size) in [(0x698u32, 4u32), (0x67c, 4), (0x734, 4)] {
         save_data(e, player, player + offset, size);
     }
@@ -5678,10 +5716,12 @@ pub fn fn_00955620(e: &mut Engine, this: Ptr<PlayerCharacter>, flags: u32) {
         save_data(e, player, player + 0x7a0, 0xc);
     }
     if save_version(e) >= 0x39 {
-        let buffer = e.mem.alloc(0xb0);
-        e.call(0x004d_5f60, &args![buffer]);
-        save_data(e, player, buffer, 0xac);
-        e.mem.free(buffer);
+        // The same frame: the block at `EBP-0xf0` (+0x138).
+        e.with_stack(0x228, |e, frame| {
+            let buffer = frame.addr() + 0x138;
+            e.call(0x004d_5f60, &args![buffer]);
+            save_data(e, player, buffer, 0xac);
+        });
         save_data(e, player, player + 0x744, 0x14);
     }
     if save_version(e) >= 0x3f {
@@ -5838,19 +5878,22 @@ pub fn fn_00955620(e: &mut Engine, this: Ptr<PlayerCharacter>, flags: u32) {
         let table = player + 0x854;
         let count = form_id_of(e, table);
         save_value(e, player, count & 0xffff, 2);
-        let iterator = e.mem.alloc(12);
-        let value = iterator + 4;
-        let flag = iterator + 8;
-        let cursor = e.call(0x004b_9ba0, &args![table]).u32();
-        e.mem.set_u32(iterator, cursor);
-        while e.mem.u32(iterator) != 0 {
-            e.mem.set_u32(value, 0);
-            e.mem.set_u8(flag, 0);
-            e.call(0x0096_a400, &args![table, iterator, value, flag]);
-            save_numeric_id(e, player, value, 4);
-            save_data(e, player, flag, 1);
-        }
-        e.mem.free(iterator);
+        // The same frame: the cursor at `EBP-0x168` (+0xc0), the value at `EBP-0x174` (+0xb4), the
+        // flag byte at `EBP-0x175` (+0xb3).
+        e.with_stack(0x228, |e, frame| {
+            let iterator = frame.addr() + 0xc0;
+            let value = frame.addr() + 0xb4;
+            let flag = frame.addr() + 0xb3;
+            let cursor = e.call(0x004b_9ba0, &args![table]).u32();
+            e.mem.set_u32(iterator, cursor);
+            while e.mem.u32(iterator) != 0 {
+                e.mem.set_u32(value, 0);
+                e.mem.set_u8(flag, 0);
+                e.call(0x0096_a400, &args![table, iterator, value, flag]);
+                save_numeric_id(e, player, value, 4);
+                save_data(e, player, flag, 1);
+            }
+        });
     }
     if save_version(e) >= 0x73 {
         let count_position = save_position(e);
@@ -6165,337 +6208,334 @@ pub fn fn_00956f70(e: &mut Engine, this: Ptr<PlayerCharacter>, flags: u32, secon
         let animation = e.mem.u32(player + 0x690);
         e.call(0x0049_ab00, &args![this, animation]);
     }
-    let position = e.mem.alloc(12);
-    e.call(LIST_NODE_ITEM_SLOT, &args![position]);
-    for (offset, size) in [
-        (0x64au32, 1u32),
-        (0x64d, 1),
-        (0x651, 1),
-        (0x652, 1),
-        (0x654, 4),
-        (0x660, 4),
-        (0x664, 4),
-        (0x668, 4),
-        (0x66c, 1),
-        (0x6cc, 1),
-        (0x6d0, 4),
-        (0x6d4, 4),
-        (0x6d8, 1),
-        (0x6dc, 4),
-        (0x6e8, 1),
-        (0x6e4, 4),
-    ] {
-        load_data(e, player, player + offset, size);
-    }
-    load_data(e, player, position, 0xc);
-    for (offset, size) in [(0x698u32, 4u32), (0x67c, 4), (0x734, 4)] {
-        load_data(e, player, player + offset, size);
-    }
-    load_raw(e, player + 0x738, 4);
-    for (offset, size) in [
-        (0x658u32, 1u32),
-        (0x65c, 4),
-        (0x75c, 1),
-        (0x75e, 1),
-        (0x730, 4),
-    ] {
-        load_data(e, player, player + offset, size);
-    }
-    if save_version(e) >= 0x1d {
-        load_data(e, player, player + 0x790, 4);
-    }
-    if save_version(e) >= 0x22 {
-        load_data(e, player, player + 0x680, 1);
-    }
-    if save_version(e) >= 0x28 && save_version(e) < 0x2d {
-        load_skip(e, 1);
-        load_data(e, player, player + 0x7a0, 0xc);
-        load_data(e, player, player + 0x7a0, 0xc);
-    }
-    if save_version(e) >= 0x35 && save_version(e) < 0x71 {
-        load_skip(e, 4);
-    }
-    if save_version(e) >= 0x39 {
-        let buffer = e.mem.alloc(0xb0);
-        load_data(e, player, buffer, 0xac);
-        e.call(0x004d_5f20, &args![buffer]);
-        e.mem.free(buffer);
-        load_data(e, player, player + 0x744, 0x14);
-    }
-    if save_version(e) >= 0x3f {
-        load_data(e, player, player + 0x7c4, 1);
-    }
-    if save_version(e) >= 0x40 {
-        load_raw(e, player + 0x63c, 4);
-        load_data(e, player, player + 0x640, 4);
-        load_data(e, player, player + 0x644, 4);
-    }
-    if save_version(e) >= 0x49 {
-        load_data(e, player, player + 0x200, 4);
-        load_data(e, player, player + 0x240, 1);
-    }
-    if save_version(e) >= 0x4a && save_version(e) < 0x59 {
-        load_skip(e, 8);
-    }
-    if save_version(e) >= 0x59 && save_version(e) < 0x5a {
-        load_skip(e, 4);
-    }
-    save_version(e);
-    if save_version(e) >= 0x71 {
-        load_data(e, player, player + 0x64e, 1);
-        load_data(e, player, player + 0x66d, 1);
-        load_data(e, player, player + 0x794, 4);
-        load_numeric_id(e, player, player + 0x7f4, 4);
-    }
-    if save_version(e) >= 0x78 {
-        let iron_sights = load_value(e, player, 1);
-        e.call(0x008b_b650, &args![this, iron_sights, 0u32, 0u32]);
-    }
-    if save_version(e) >= 0x7a {
-        load_data(e, player, VANITY_RESTORED_VALUE, 4);
-    }
-    if save_version(e) >= 0x7a {
-        let count = load_value(e, player, 4) as i32;
-        let mut index = 0;
-        while index < count {
-            let block = e.call(OPERATOR_NEW, &args![0xcu32]).u32();
-            let entry = if block == 0 {
-                0
-            } else {
-                e.call(0x0073_3f50, &args![block]).u32()
-            };
-            load_data(e, player, entry, 4);
-            load_data(e, player, entry + 4, 4);
-            load_data(e, player, entry + 8, 2);
-            let list = e.mem.u32(player + 0x610);
-            let slot = e.mem.alloc(4);
-            e.mem.set_u32(slot, entry);
-            e.call(0x0090_5820, &args![list, slot]);
-            e.mem.free(slot);
-            index += 1;
+    // The exe's frame (`SUB ESP,0x31c` under the exception record, then the record link): the
+    // position at `EBP-0x38` (+0x2f4), the block at `EBP-0xfc` (+0x230), the list words at
+    // `EBP-0x104` (+0x228), `EBP-0x114` (+0x218), `EBP-0x320` (+0xc), `EBP-0x1a0` (+0x18c),
+    // `EBP-0x1c4` (+0x168) and `EBP-0x1dc` (+0x150), the name at `EBP-0x2ec` (+0x40).
+    e.with_stack(0x32c, |e, frame| {
+        let position = frame.addr() + 0x2f4;
+        e.call(LIST_NODE_ITEM_SLOT, &args![position]);
+        for (offset, size) in [
+            (0x64au32, 1u32),
+            (0x64d, 1),
+            (0x651, 1),
+            (0x652, 1),
+            (0x654, 4),
+            (0x660, 4),
+            (0x664, 4),
+            (0x668, 4),
+            (0x66c, 1),
+            (0x6cc, 1),
+            (0x6d0, 4),
+            (0x6d4, 4),
+            (0x6d8, 1),
+            (0x6dc, 4),
+            (0x6e8, 1),
+            (0x6e4, 4),
+        ] {
+            load_data(e, player, player + offset, size);
         }
-        if e.global::<u32>(LOADED_PERK_FLAG) != 0 {
-            e.call(0x0096_9ac0, &args![this]);
+        load_data(e, player, position, 0xc);
+        for (offset, size) in [(0x698u32, 4u32), (0x67c, 4), (0x734, 4)] {
+            load_data(e, player, player + offset, size);
         }
-    }
-    if save_version(e) >= 0x7a {
-        let first_list = e.mem.u32(player + 0x614);
-        e.call(LIST_CLEAR, &args![first_list]);
-        let second_list = e.mem.u32(player + 0x618);
-        e.call(LIST_CLEAR, &args![second_list]);
-        for list_offset in [0x614u32, 0x618] {
+        load_raw(e, player + 0x738, 4);
+        for (offset, size) in [
+            (0x658u32, 1u32),
+            (0x65c, 4),
+            (0x75c, 1),
+            (0x75e, 1),
+            (0x730, 4),
+        ] {
+            load_data(e, player, player + offset, size);
+        }
+        if save_version(e) >= 0x1d {
+            load_data(e, player, player + 0x790, 4);
+        }
+        if save_version(e) >= 0x22 {
+            load_data(e, player, player + 0x680, 1);
+        }
+        if save_version(e) >= 0x28 && save_version(e) < 0x2d {
+            load_skip(e, 1);
+            load_data(e, player, player + 0x7a0, 0xc);
+            load_data(e, player, player + 0x7a0, 0xc);
+        }
+        if save_version(e) >= 0x35 && save_version(e) < 0x71 {
+            load_skip(e, 4);
+        }
+        if save_version(e) >= 0x39 {
+            let buffer = frame.addr() + 0x230;
+            load_data(e, player, buffer, 0xac);
+            e.call(0x004d_5f20, &args![buffer]);
+            load_data(e, player, player + 0x744, 0x14);
+        }
+        if save_version(e) >= 0x3f {
+            load_data(e, player, player + 0x7c4, 1);
+        }
+        if save_version(e) >= 0x40 {
+            load_raw(e, player + 0x63c, 4);
+            load_data(e, player, player + 0x640, 4);
+            load_data(e, player, player + 0x644, 4);
+        }
+        if save_version(e) >= 0x49 {
+            load_data(e, player, player + 0x200, 4);
+            load_data(e, player, player + 0x240, 1);
+        }
+        if save_version(e) >= 0x4a && save_version(e) < 0x59 {
+            load_skip(e, 8);
+        }
+        if save_version(e) >= 0x59 && save_version(e) < 0x5a {
+            load_skip(e, 4);
+        }
+        save_version(e);
+        if save_version(e) >= 0x71 {
+            load_data(e, player, player + 0x64e, 1);
+            load_data(e, player, player + 0x66d, 1);
+            load_data(e, player, player + 0x794, 4);
+            load_numeric_id(e, player, player + 0x7f4, 4);
+        }
+        if save_version(e) >= 0x78 {
+            let iron_sights = load_value(e, player, 1);
+            e.call(0x008b_b650, &args![this, iron_sights, 0u32, 0u32]);
+        }
+        if save_version(e) >= 0x7a {
+            load_data(e, player, VANITY_RESTORED_VALUE, 4);
+        }
+        if save_version(e) >= 0x7a {
             let count = load_value(e, player, 4) as i32;
             let mut index = 0;
             while index < count {
-                let id = load_value(e, player, 4);
-                let form = e.call(0x0048_39c0, &args![id]).u32();
-                let list = e.mem.u32(player + list_offset);
-                let slot = e.mem.alloc(4);
-                e.mem.set_u32(slot, form);
+                let block = e.call(OPERATOR_NEW, &args![0xcu32]).u32();
+                let entry = if block == 0 {
+                    0
+                } else {
+                    e.call(0x0073_3f50, &args![block]).u32()
+                };
+                load_data(e, player, entry, 4);
+                load_data(e, player, entry + 4, 4);
+                load_data(e, player, entry + 8, 2);
+                let list = e.mem.u32(player + 0x610);
+                let slot = frame.addr() + 0x228;
+                e.mem.set_u32(slot, entry);
                 e.call(0x0090_5820, &args![list, slot]);
-                e.mem.free(slot);
+                index += 1;
+            }
+            if e.global::<u32>(LOADED_PERK_FLAG) != 0 {
+                e.call(0x0096_9ac0, &args![this]);
+            }
+        }
+        if save_version(e) >= 0x7a {
+            let first_list = e.mem.u32(player + 0x614);
+            e.call(LIST_CLEAR, &args![first_list]);
+            let second_list = e.mem.u32(player + 0x618);
+            e.call(LIST_CLEAR, &args![second_list]);
+            for list_offset in [0x614u32, 0x618] {
+                let count = load_value(e, player, 4) as i32;
+                let mut index = 0;
+                while index < count {
+                    let id = load_value(e, player, 4);
+                    let form = e.call(0x0048_39c0, &args![id]).u32();
+                    let list = e.mem.u32(player + list_offset);
+                    let slot = frame.addr() + 0x218;
+                    e.mem.set_u32(slot, form);
+                    e.call(0x0090_5820, &args![list, slot]);
+                    index += 1;
+                }
+            }
+            for offset in [0x61cu32, 0x620, 0x624, 0x628, 0x62c] {
+                load_data(e, player, player + offset, 4);
+            }
+        }
+        let id = load_id_value(e, player);
+        e.mem.set_u32(player + 0x208, id);
+        let id = load_id_value(e, player);
+        e.set_global(SAVED_FORM_011E0784, id);
+        player_character_set_selected_spell(e, this, 0);
+        let id = load_id_value(e, player);
+        e.mem.set_u32(player + 0x6ec, id);
+        let id = load_id_value(e, player);
+        e.mem.set_u32(player + 0x214, id);
+        let id = load_id_value(e, player);
+        e.mem.set_u32(player + 0x218, id);
+        let id = load_id_value(e, player);
+        let region = load_cast_form(e, id, RTTI_LOAD_REGION);
+        e.call(0x0093_a7a0, &args![this, region]);
+        let id = load_id_value(e, player);
+        e.mem.set_u32(player + 0x6f0, id);
+        let id = load_id_value(e, player);
+        e.mem.set_u32(player + 0x73c, id);
+        let id = load_id_value(e, player);
+        e.mem.set_u32(player + 0x758, id);
+        if save_version(e) >= 0x28 && save_version(e) < 0x2d {
+            let id = load_id_value(e, player);
+            let form = e.call(0x0048_39c0, &args![id]).u32();
+            e.mem.set_u32(player + 0x7ac, form);
+        }
+        if save_version(e) >= 0x40 {
+            let id = load_id_value(e, player);
+            e.mem.set_u32(player + 0x638, id);
+        }
+        if save_version(e) >= 0x42 {
+            let id = load_id_value(e, player);
+            e.set_global(SAVED_FORM_011E078C, id);
+        }
+        if save_version(e) >= 0x57 {
+            let id = load_id_value(e, player);
+            let form = load_cast_form(e, id, RTTI_LOAD_FORM_0604);
+            e.mem.set_u32(player + 0x604, form);
+        }
+        if save_version(e) >= 0x60 {
+            let id = load_id_value(e, player);
+            let place = e.call(0x0048_39c0, &args![id]).u32();
+            e.mem.set_u32(player + 0x6f4, 0);
+            if place != 0 {
+                let x = e.mem.f32(position);
+                let y = e.mem.f32(position + 4);
+                let z = e.mem.f32(position + 8);
+                player_character_set_player_map_marker(e, this, x, y, z, place);
+            }
+        }
+        if save_version(e) >= 0x63 {
+            let count = load_value(e, player, 2);
+            let mut index = 0;
+            while index < count {
+                load_id_value(e, player);
                 index += 1;
             }
         }
-        for offset in [0x61cu32, 0x620, 0x624, 0x628, 0x62c] {
-            load_data(e, player, player + offset, 4);
-        }
-    }
-    let id = load_id_value(e, player);
-    e.mem.set_u32(player + 0x208, id);
-    let id = load_id_value(e, player);
-    e.set_global(SAVED_FORM_011E0784, id);
-    player_character_set_selected_spell(e, this, 0);
-    let id = load_id_value(e, player);
-    e.mem.set_u32(player + 0x6ec, id);
-    let id = load_id_value(e, player);
-    e.mem.set_u32(player + 0x214, id);
-    let id = load_id_value(e, player);
-    e.mem.set_u32(player + 0x218, id);
-    let id = load_id_value(e, player);
-    let region = load_cast_form(e, id, RTTI_LOAD_REGION);
-    e.call(0x0093_a7a0, &args![this, region]);
-    let id = load_id_value(e, player);
-    e.mem.set_u32(player + 0x6f0, id);
-    let id = load_id_value(e, player);
-    e.mem.set_u32(player + 0x73c, id);
-    let id = load_id_value(e, player);
-    e.mem.set_u32(player + 0x758, id);
-    if save_version(e) >= 0x28 && save_version(e) < 0x2d {
-        let id = load_id_value(e, player);
-        let form = e.call(0x0048_39c0, &args![id]).u32();
-        e.mem.set_u32(player + 0x7ac, form);
-    }
-    if save_version(e) >= 0x40 {
-        let id = load_id_value(e, player);
-        e.mem.set_u32(player + 0x638, id);
-    }
-    if save_version(e) >= 0x42 {
-        let id = load_id_value(e, player);
-        e.set_global(SAVED_FORM_011E078C, id);
-    }
-    if save_version(e) >= 0x57 {
-        let id = load_id_value(e, player);
-        let form = load_cast_form(e, id, RTTI_LOAD_FORM_0604);
-        e.mem.set_u32(player + 0x604, form);
-    }
-    if save_version(e) >= 0x60 {
-        let id = load_id_value(e, player);
-        let place = e.call(0x0048_39c0, &args![id]).u32();
-        e.mem.set_u32(player + 0x6f4, 0);
-        if place != 0 {
-            let x = e.mem.f32(position);
-            let y = e.mem.f32(position + 4);
-            let z = e.mem.f32(position + 8);
-            player_character_set_player_map_marker(e, this, x, y, z, place);
-        }
-    }
-    if save_version(e) >= 0x63 {
-        let count = load_value(e, player, 2);
-        let mut index = 0;
-        while index < count {
-            load_id_value(e, player);
-            index += 1;
-        }
-    }
-    if save_version(e) >= 0x6c {
-        let id = load_id_value(e, player);
-        let object = load_cast_form(e, id, RTTI_LOAD_REGION_DATA);
-        let region = e.mem.u32(player + 0x760);
-        if region != 0 && object != 0 {
-            e.call(0x0070_37c0, &args![region, object]);
-        }
-    }
-    if save_version(e) >= 0x6f {
-        e.call(0x0043_8af0, &args![player + 0x854]);
-        let count = load_value(e, player, 2);
-        let mut index = 0;
-        while index < count {
+        if save_version(e) >= 0x6c {
             let id = load_id_value(e, player);
-            let flag = load_value(e, player, 1);
-            if id != 0 {
-                e.call(0x0084_d310, &args![player + 0x854, id, flag]);
+            let object = load_cast_form(e, id, RTTI_LOAD_REGION_DATA);
+            let region = e.mem.u32(player + 0x760);
+            if region != 0 && object != 0 {
+                e.call(0x0070_37c0, &args![region, object]);
             }
-            index += 1;
         }
-    }
-    if save_version(e) >= 0x73 {
-        let count = load_value(e, player, 2);
-        let mut index = 0;
-        while index < count {
-            let id = load_id_value(e, player);
-            let slot = e.mem.alloc(4);
-            e.mem.set_u32(slot, id);
-            e.call(LIST_APPEND, &args![0x011e_0ae8u32, slot]);
-            e.mem.free(slot);
-            index += 1;
-        }
-    }
-    let progress = e.mem.u32(player + 0x210);
-    e.call(0x0080_5d40, &args![progress, this]);
-    e.call(
-        0x008d_5550,
-        &args![player + CHARACTER_PROGRESSION, flags, second],
-    );
-    let id = load_id_value(e, player);
-    if id != 0 {
-        let quest = load_cast_form(e, id, RTTI_LOAD_QUEST);
-        e.mem.set_u32(player + 0x6b8, quest);
-        if quest != 0 {
-            e.call(0x0060_f110, &args![quest, player + 0x6c4, player + 0x6bc]);
-        }
-    } else {
-        e.mem.set_u32(player + 0x6b8, 0);
-    }
-    e.call(LIST_CLEAR, &args![player + 0x6a8]);
-    let count = load_value(e, player, 2);
-    let mut index = 0;
-    while index < count {
-        let id = load_id_value(e, player);
-        let topic = load_cast_form(e, id, RTTI_LOAD_TOPIC);
-        if topic != 0 {
-            let slot = e.mem.alloc(4);
-            e.mem.set_u32(slot, topic);
-            e.call(LIST_APPEND, &args![player + 0x6a8, slot]);
-            e.mem.free(slot);
-        }
-        index += 1;
-    }
-    let head = e.call(0x0046_4e30, &args![this]).u32();
-    e.call(0x0061_a5a0, &args![1u32, head]);
-    e.call(LIST_CLEAR, &args![player + 0x6b0]);
-    let count = load_value(e, player, 2);
-    let mut index = 0;
-    while index < count {
-        let id = load_id_value(e, player);
-        let stage_done = load_value(e, player, 1);
-        let stage = load_value(e, player, 1);
-        let quest = load_cast_form(e, id, RTTI_LOAD_QUEST);
-        if quest != 0 {
-            let entry = e.call(0x0060_db40, &args![quest, stage_done]).u32();
-            if entry != 0 {
-                let item = e.call(0x0060_f2c0, &args![entry, stage]).u32();
-                if item != 0 {
-                    let slot = e.mem.alloc(4);
-                    e.mem.set_u32(slot, item);
-                    e.call(0x0090_5820, &args![player + 0x6b0, slot]);
-                    e.mem.free(slot);
+        if save_version(e) >= 0x6f {
+            e.call(0x0043_8af0, &args![player + 0x854]);
+            let count = load_value(e, player, 2);
+            let mut index = 0;
+            while index < count {
+                let id = load_id_value(e, player);
+                let flag = load_value(e, player, 1);
+                if id != 0 {
+                    e.call(0x0084_d310, &args![player + 0x854, id, flag]);
                 }
+                index += 1;
             }
         }
-        index += 1;
-    }
-    e.call(LIST_CLEAR, &args![player + 0x6bc]);
-    let count = load_value(e, player, 2);
-    let mut index = 0;
-    while index < count {
-        let id = load_id_value(e, player);
-        let delta = load_value(e, player, 4);
-        let quest = load_cast_form(e, id, RTTI_LOAD_QUEST);
-        if quest != 0 {
-            let target = e.call(0x0060_c8e0, &args![quest, delta]).u32();
-            if target != 0 {
-                let slot = e.mem.alloc(4);
-                e.mem.set_u32(slot, target);
-                e.call(0x0090_5820, &args![player + 0x6bc, slot]);
-                e.mem.free(slot);
+        if save_version(e) >= 0x73 {
+            let count = load_value(e, player, 2);
+            let mut index = 0;
+            while index < count {
+                let id = load_id_value(e, player);
+                let slot = frame.addr() + 0xc;
+                e.mem.set_u32(slot, id);
+                e.call(LIST_APPEND, &args![0x011e_0ae8u32, slot]);
+                index += 1;
             }
         }
-        index += 1;
-    }
-    let base = e.call(0x007a_f430, &args![this]).u32();
-    e.call(0x0060_9f60, &args![base, this]);
-    let length = load_value(e, player, 1);
-    let name = e.mem.alloc(0x104);
-    e.mem.set_u32(name, 0);
-    load_data(e, player, name, length);
-    let base = e.call(0x007a_f430, &args![this]).u32();
-    e.call(0x0048_9100, &args![base + 0xd0, name]);
-    e.mem.free(name);
-    if save_version(e) >= 0x2c {
-        let base_object = e.call(BASE_FORM_OF, &args![this]).u32();
-        let at = e.call(SETTING_INT_POINTER, &args![0x011d_0a9cu32]).u32();
-        let wanted = e.mem.u32(at);
-        let holder = e.global::<u32>(0x011c_3f2c);
-        let matching = e.call(0x0046_15a0, &args![holder, wanted]).u32();
-        let id = load_id_value(e, player);
-        let fire_node = load_cast_form(e, id, RTTI_LOAD_FIRE_NODE);
-        if fire_node != 0 {
-            e.call(0x0060_1c70, &args![base_object, fire_node]);
-        }
-        if fire_node != 0 && fire_node == matching {
-            e.call(0x005f_7050, &args![fire_node]);
-        }
-    }
-    if save_version(e) >= 0x45 {
+        let progress = e.mem.u32(player + 0x210);
+        e.call(0x0080_5d40, &args![progress, this]);
+        e.call(
+            0x008d_5550,
+            &args![player + CHARACTER_PROGRESSION, flags, second],
+        );
         let id = load_id_value(e, player);
         if id != 0 {
-            let form = load_cast_form(e, id, RTTI_LOAD_FIRE_NODE);
-            e.mem.set_u32(player + 0x740, form);
+            let quest = load_cast_form(e, id, RTTI_LOAD_QUEST);
+            e.mem.set_u32(player + 0x6b8, quest);
+            if quest != 0 {
+                e.call(0x0060_f110, &args![quest, player + 0x6c4, player + 0x6bc]);
+            }
+        } else {
+            e.mem.set_u32(player + 0x6b8, 0);
         }
-    }
-    e.mem.free(position);
-    load_block_end(e, second_start, second_length, 0x37c8);
+        e.call(LIST_CLEAR, &args![player + 0x6a8]);
+        let count = load_value(e, player, 2);
+        let mut index = 0;
+        while index < count {
+            let id = load_id_value(e, player);
+            let topic = load_cast_form(e, id, RTTI_LOAD_TOPIC);
+            if topic != 0 {
+                let slot = frame.addr() + 0x18c;
+                e.mem.set_u32(slot, topic);
+                e.call(LIST_APPEND, &args![player + 0x6a8, slot]);
+            }
+            index += 1;
+        }
+        let head = e.call(0x0046_4e30, &args![this]).u32();
+        e.call(0x0061_a5a0, &args![1u32, head]);
+        e.call(LIST_CLEAR, &args![player + 0x6b0]);
+        let count = load_value(e, player, 2);
+        let mut index = 0;
+        while index < count {
+            let id = load_id_value(e, player);
+            let stage_done = load_value(e, player, 1);
+            let stage = load_value(e, player, 1);
+            let quest = load_cast_form(e, id, RTTI_LOAD_QUEST);
+            if quest != 0 {
+                let entry = e.call(0x0060_db40, &args![quest, stage_done]).u32();
+                if entry != 0 {
+                    let item = e.call(0x0060_f2c0, &args![entry, stage]).u32();
+                    if item != 0 {
+                        let slot = frame.addr() + 0x168;
+                        e.mem.set_u32(slot, item);
+                        e.call(0x0090_5820, &args![player + 0x6b0, slot]);
+                    }
+                }
+            }
+            index += 1;
+        }
+        e.call(LIST_CLEAR, &args![player + 0x6bc]);
+        let count = load_value(e, player, 2);
+        let mut index = 0;
+        while index < count {
+            let id = load_id_value(e, player);
+            let delta = load_value(e, player, 4);
+            let quest = load_cast_form(e, id, RTTI_LOAD_QUEST);
+            if quest != 0 {
+                let target = e.call(0x0060_c8e0, &args![quest, delta]).u32();
+                if target != 0 {
+                    let slot = frame.addr() + 0x150;
+                    e.mem.set_u32(slot, target);
+                    e.call(0x0090_5820, &args![player + 0x6bc, slot]);
+                }
+            }
+            index += 1;
+        }
+        let base = e.call(0x007a_f430, &args![this]).u32();
+        e.call(0x0060_9f60, &args![base, this]);
+        let length = load_value(e, player, 1);
+        let name = frame.addr() + 0x40;
+        e.mem.set_u32(name, 0);
+        load_data(e, player, name, length);
+        let base = e.call(0x007a_f430, &args![this]).u32();
+        e.call(0x0048_9100, &args![base + 0xd0, name]);
+        if save_version(e) >= 0x2c {
+            let base_object = e.call(BASE_FORM_OF, &args![this]).u32();
+            let at = e.call(SETTING_INT_POINTER, &args![0x011d_0a9cu32]).u32();
+            let wanted = e.mem.u32(at);
+            let holder = e.global::<u32>(0x011c_3f2c);
+            let matching = e.call(0x0046_15a0, &args![holder, wanted]).u32();
+            let id = load_id_value(e, player);
+            let fire_node = load_cast_form(e, id, RTTI_LOAD_FIRE_NODE);
+            if fire_node != 0 {
+                e.call(0x0060_1c70, &args![base_object, fire_node]);
+            }
+            if fire_node != 0 && fire_node == matching {
+                e.call(0x005f_7050, &args![fire_node]);
+            }
+        }
+        if save_version(e) >= 0x45 {
+            let id = load_id_value(e, player);
+            if id != 0 {
+                let form = load_cast_form(e, id, RTTI_LOAD_FIRE_NODE);
+                e.mem.set_u32(player + 0x740, form);
+            }
+        }
+        load_block_end(e, second_start, second_length, 0x37c8);
+    });
 }
 
 // Translated from 00958990 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -6587,34 +6627,36 @@ pub fn fn_00958990(e: &mut Engine, this: Ptr<PlayerCharacter>, first: u32, secon
     }
     save_version(e);
     if save_version(e) >= 0x73 {
-        let mut node = 0x011e_0ae8;
-        let mut previous = 0;
-        while node != 0 && !list_is_empty(e, node) {
-            let item_slot = list_item_slot(e, node);
-            let id = e.mem.u32(item_slot);
-            let mut resolved = 0;
-            if id != 0 {
-                resolved = load_cast_form(e, id, RTTI_LOAD_FORM_0604);
-                let word = e.mem.alloc(4);
-                e.mem.set_u32(word, resolved);
-                e.call(0x0072_6c60, &args![node, word]);
-                e.mem.free(word);
-            }
-            if resolved == 0 {
-                if previous == 0 {
-                    e.call(0x0063_f7b0, &args![node]);
-                } else {
-                    let word = e.mem.alloc(4);
-                    e.mem.set_u32(word, id);
-                    e.call(0x0090_5330, &args![previous, word]);
-                    e.mem.free(word);
-                    node = list_next(e, previous);
+        // The exe's frame (`SUB ESP,0x6c` under `EBP`): the resolved form at `EBP-0x58` (+0x14),
+        // the id to remove at `EBP-0x60` (+0xc).
+        e.with_stack(0x6c, |e, frame| {
+            let mut node = 0x011e_0ae8;
+            let mut previous = 0;
+            while node != 0 && !list_is_empty(e, node) {
+                let item_slot = list_item_slot(e, node);
+                let id = e.mem.u32(item_slot);
+                let mut resolved = 0;
+                if id != 0 {
+                    resolved = load_cast_form(e, id, RTTI_LOAD_FORM_0604);
+                    let word = frame.addr() + 0x14;
+                    e.mem.set_u32(word, resolved);
+                    e.call(0x0072_6c60, &args![node, word]);
                 }
-            } else {
-                previous = node;
-                node = list_next(e, node);
+                if resolved == 0 {
+                    if previous == 0 {
+                        e.call(0x0063_f7b0, &args![node]);
+                    } else {
+                        let word = frame.addr() + 0xc;
+                        e.mem.set_u32(word, id);
+                        e.call(0x0090_5330, &args![previous, word]);
+                        node = list_next(e, previous);
+                    }
+                } else {
+                    previous = node;
+                    node = list_next(e, node);
+                }
             }
-        }
+        });
     }
     let progress = e.mem.u32(player + 0x210);
     e.call(0x0080_60e0, &args![progress, this]);
@@ -6791,10 +6833,12 @@ pub fn fn_009590f0(e: &mut Engine, this: Ptr<PlayerCharacter>, buffer: u32) {
     }
     buffer_write(e, buffer, player + 0x4ac, 4);
     e.call(0x008d_33a0, &args![this, buffer]);
-    let flag_holder = e.mem.alloc(8);
-    let flags = e.call(0x0042_8110, &args![buffer, flag_holder]).u32();
-    let wanted = e.call(0x0042_80f0, &args![flags, 0x1000_0000u32]).bool();
-    e.mem.free(flag_holder);
+    // The exe's frame (`SUB ESP,0x13c` under `EBP`): the flag holder at `EBP-0x124` (+0x18).
+    let wanted = e.with_stack(0x13c, |e, frame| {
+        let flag_holder = frame.addr() + 0x18;
+        let flags = e.call(0x0042_8110, &args![buffer, flag_holder]).u32();
+        e.call(0x0042_80f0, &args![flags, 0x1000_0000u32]).bool()
+    });
     if wanted {
         let start = buffer_start_sized(e, buffer);
         let before = form_id_of(e, buffer);
@@ -6831,14 +6875,16 @@ pub fn fn_009590f0(e: &mut Engine, this: Ptr<PlayerCharacter>, buffer: u32) {
     } else {
         e.vcall(marker, 0x1f4, &args![]).u32()
     };
-    let position = e.mem.alloc(12);
-    for i in 0..3 {
-        let word = e.mem.u32(position_source + i * 4);
-        e.mem.set_u32(position + i * 4, word);
-    }
-    buffer_write(e, buffer, player + 0x6e4, 4);
-    buffer_write(e, buffer, position, 0xc);
-    e.mem.free(position);
+    // The same frame: the position copy at `EBP-0xc` (+0x130).
+    e.with_stack(0x13c, |e, frame| {
+        let position = frame.addr() + 0x130;
+        for i in 0..3 {
+            let word = e.mem.u32(position_source + i * 4);
+            e.mem.set_u32(position + i * 4, word);
+        }
+        buffer_write(e, buffer, player + 0x6e4, 4);
+        buffer_write(e, buffer, position, 0xc);
+    });
     for (offset, size) in [
         (0x698u32, 4u32),
         (0x67c, 4),
@@ -7138,10 +7184,13 @@ pub fn fn_0095a3b0(e: &mut Engine, this: Ptr<PlayerCharacter>, buffer: u32) {
     }
     buffer_read(e, buffer, player + 0x4ac, 4);
     e.call(0x008d_33f0, &args![this, buffer]);
-    let flag_holder = e.mem.alloc(8);
-    let flags = e.call(0x0042_8110, &args![buffer, flag_holder]).u32();
-    let wanted = e.call(0x0042_80f0, &args![flags, 0x1000_0000u32]).bool();
-    e.mem.free(flag_holder);
+    // The exe's frame (`SUB ESP,0x1f0` under the exception record, then the record link): the
+    // flag holder at `EBP-0x134` (+0xcc).
+    let wanted = e.with_stack(0x200, |e, frame| {
+        let flag_holder = frame.addr() + 0xcc;
+        let flags = e.call(0x0042_8110, &args![buffer, flag_holder]).u32();
+        e.call(0x0042_80f0, &args![flags, 0x1000_0000u32]).bool()
+    });
     if wanted {
         let base = e.call(0x007a_f430, &args![this]).u32();
         let statistics = e.global::<u32>(STATISTICS_OBJECT);
@@ -7176,10 +7225,15 @@ pub fn fn_0095a3b0(e: &mut Engine, this: Ptr<PlayerCharacter>, buffer: u32) {
         e.vcall(holder, 0x468, &args![8u32]);
     }
     buffer_read(e, buffer, player + 0x7c6, 1);
-    let position = e.mem.alloc(12);
-    e.call(LIST_NODE_ITEM_SLOT, &args![position]);
-    buffer_read(e, buffer, player + 0x6e4, 4);
-    buffer_read(e, buffer, position, 0xc);
+    // The same frame: the position at `EBP-0x1c` (+0x1e4); its words are kept for the map
+    // marker below.
+    let position = e.with_stack(0x200, |e, frame| {
+        let position = frame.addr() + 0x1e4;
+        e.call(LIST_NODE_ITEM_SLOT, &args![position]);
+        buffer_read(e, buffer, player + 0x6e4, 4);
+        buffer_read(e, buffer, position, 0xc);
+        [0u32, 4, 8].map(|at| e.mem.u32(position + at))
+    });
     for (offset, size) in [
         (0x698u32, 4u32),
         (0x67c, 4),
@@ -7245,12 +7299,9 @@ pub fn fn_0095a3b0(e: &mut Engine, this: Ptr<PlayerCharacter>, buffer: u32) {
     let place = e.call(0x0048_39c0, &args![id]).u32();
     e.mem.set_u32(player + 0x6f4, 0);
     if place != 0 {
-        let x = e.mem.f32(position);
-        let y = e.mem.f32(position + 4);
-        let z = e.mem.f32(position + 8);
+        let [x, y, z] = position.map(f32::from_bits);
         player_character_set_player_map_marker(e, this, x, y, z, place);
     }
-    e.mem.free(position);
     let region = buffer_read_form(e, buffer, RTTI_LOAD_REGION);
     e.mem.set_u32(player + 0x760, region);
     let region_data = buffer_read_form(e, buffer, RTTI_LOAD_REGION_DATA);
@@ -7499,14 +7550,16 @@ pub fn fn_0095a3b0(e: &mut Engine, this: Ptr<PlayerCharacter>, buffer: u32) {
     }
     if buffer_version(e, buffer) >= 0x17 {
         let hardcore_flag = 1u32;
-        let word = e.mem.alloc(4);
-        e.mem.set_u8(word, 0);
-        e.mem.set_u8(word + 1, hardcore_flag as u8);
-        buffer_read(e, buffer, word, 1);
-        buffer_read(e, buffer, word + 1, 1);
-        let hardcore = u32::from(e.mem.u8(word));
-        let enabled = e.mem.u8(word + 1);
-        e.mem.free(word);
+        // The same frame: the hardcore byte at `EBP-0x11d` (+0xe3), the enabled byte at
+        // `EBP-0x11e` (+0xe2).
+        let (hardcore, enabled) = e.with_stack(0x200, |e, frame| {
+            let (hardcore_at, enabled_at) = (frame.addr() + 0xe3, frame.addr() + 0xe2);
+            e.mem.set_u8(hardcore_at, 0);
+            e.mem.set_u8(enabled_at, hardcore_flag as u8);
+            buffer_read(e, buffer, hardcore_at, 1);
+            buffer_read(e, buffer, enabled_at, 1);
+            (u32::from(e.mem.u8(hardcore_at)), e.mem.u8(enabled_at))
+        });
         e.call(0x0096_9e90, &args![this, hardcore, 1u32]);
         if enabled == 0 {
             e.call(0x005d_e9b0, &args![this]);
@@ -7702,21 +7755,27 @@ pub fn fn_0095c0a0(e: &mut Engine, this: Ptr<PlayerCharacter>, buffer: u32) {
         play_heartbeat(e, player, HEARTBEAT_SOUND_BLP);
     }
     if e.vcall(player, 0x1d0, &args![]).u32() != 0 {
-        let flag_holder = e.mem.alloc(16);
-        let flags = e.call(0x0042_8110, &args![buffer, flag_holder]).u32();
-        let first = e.call(0x0042_80f0, &args![flags, 0x0800_0020u32]).bool();
-        if !first {
-            let flags = e.call(0x0042_ce30, &args![buffer, flag_holder + 8]).u32();
-            if e.call(0x0042_80f0, &args![flags, 0x0800_0020u32]).bool() {
-                let base = e.call(BASE_FORM_OF, &args![this]).u32();
-                e.call(0x0060_47c0, &args![base, this, 1u32, 1u32, 0u32, 1u32]);
-                let process = process_of(e, this);
-                if process != 0 && e.vcall(process, 0x478, &args![]).bool() {
-                    e.vcall(process, 0x464, &args![this]);
+        // The exe's frame (`SUB ESP,0x90` under the exception record, then the record link): the
+        // flag holders at `EBP-0x5c` (+0x44) and `EBP-0x60` (+0x40).
+        e.with_stack(0xa0, |e, frame| {
+            let flags = e
+                .call(0x0042_8110, &args![buffer, frame.addr() + 0x44])
+                .u32();
+            let first = e.call(0x0042_80f0, &args![flags, 0x0800_0020u32]).bool();
+            if !first {
+                let flags = e
+                    .call(0x0042_ce30, &args![buffer, frame.addr() + 0x40])
+                    .u32();
+                if e.call(0x0042_80f0, &args![flags, 0x0800_0020u32]).bool() {
+                    let base = e.call(BASE_FORM_OF, &args![this]).u32();
+                    e.call(0x0060_47c0, &args![base, this, 1u32, 1u32, 0u32, 1u32]);
+                    let process = process_of(e, this);
+                    if process != 0 && e.vcall(process, 0x478, &args![]).bool() {
+                        e.vcall(process, 0x464, &args![this]);
+                    }
                 }
             }
-        }
-        e.mem.free(flag_holder);
+        });
     }
 }
 
@@ -7734,10 +7793,13 @@ pub fn fn_0095c0a0(e: &mut Engine, this: Ptr<PlayerCharacter>, buffer: u32) {
 pub fn fn_0095c730(e: &mut Engine, this: Ptr<PlayerCharacter>, buffer: u32) {
     let player = this.addr();
     e.call(0x008d_34d0, &args![this, buffer]);
-    let flag_holder = e.mem.alloc(8);
-    let flags = e.call(0x0042_8110, &args![buffer, flag_holder]).u32();
-    let wanted = e.call(0x0042_80f0, &args![flags, 0x10u32]).bool();
-    e.mem.free(flag_holder);
+    // The exe's frame (`SUB ESP,0x14` under `EBP`): the flag holder at `EBP-0x4` (+0x10).
+    let wanted = e.with_stack(0x14, |e, frame| {
+        let flags = e
+            .call(0x0042_8110, &args![buffer, frame.addr() + 0x10])
+            .u32();
+        e.call(0x0042_80f0, &args![flags, 0x10u32]).bool()
+    });
     if wanted {
         let field_of_view = e.call(0x0059_8040, &args![this]).f32();
         e.call(0x0056_7490, &args![this, field_of_view]);
@@ -7821,18 +7883,24 @@ pub fn fn_0095c730(e: &mut Engine, this: Ptr<PlayerCharacter>, buffer: u32) {
 pub fn fn_0095c9c0(e: &mut Engine, this: Ptr<PlayerCharacter>, buffer: u32) {
     let player = this.addr();
     e.call(0x008d_34f0, &args![this, buffer]);
-    let flag_holder = e.mem.alloc(16);
-    let flags = e.call(0x0042_ce30, &args![buffer, flag_holder]).u32();
-    let wanted = e.call(0x0042_80f0, &args![flags, 0x1000_0000u32]).bool();
-    if wanted && e.mem.u32(player + 0x690) != 0 {
-        let animation = e.mem.u32(player + 0x690);
-        e.call(0x0049_bb70, &args![animation, buffer]);
-    }
-    let biped = e.call(0x0095_0bb0, &args![this, 0u32]).u32();
-    e.call(0x00c8_1db0, &args![biped, 0u32]);
-    let flags = e.call(0x0042_ce30, &args![buffer, flag_holder + 8]).u32();
-    let wanted = e.call(0x0042_80f0, &args![flags, 0x10u32]).bool();
-    e.mem.free(flag_holder);
+    // The exe's frame (`SUB ESP,0x44` under `EBP`): the flag holders at `EBP-0x20` (+0x24) and
+    // `EBP-0x24` (+0x20).
+    let wanted = e.with_stack(0x44, |e, frame| {
+        let flags = e
+            .call(0x0042_ce30, &args![buffer, frame.addr() + 0x24])
+            .u32();
+        let wanted = e.call(0x0042_80f0, &args![flags, 0x1000_0000u32]).bool();
+        if wanted && e.mem.u32(player + 0x690) != 0 {
+            let animation = e.mem.u32(player + 0x690);
+            e.call(0x0049_bb70, &args![animation, buffer]);
+        }
+        let biped = e.call(0x0095_0bb0, &args![this, 0u32]).u32();
+        e.call(0x00c8_1db0, &args![biped, 0u32]);
+        let flags = e
+            .call(0x0042_ce30, &args![buffer, frame.addr() + 0x20])
+            .u32();
+        e.call(0x0042_80f0, &args![flags, 0x10u32]).bool()
+    });
     if wanted {
         e.call(0x0056_7490, &args![this, 1.0f32]);
     }
@@ -10118,6 +10186,11 @@ mod tests {
         // The process: slot 0x148 (0, 0) feeds slot 0x160.
         assert_eq!(world.entry_calls.borrow().len(), 1);
         assert_eq!(world.entry_calls.borrow()[0][1], 0x77);
+        assert_eq!(
+            world.entry_calls.borrow()[0][2..],
+            [0, 0],
+            "group and force"
+        );
         assert_eq!(world.process_calls.borrow().len(), 1);
 
         // The lighting and the character controller proxy.
@@ -13619,5 +13692,502 @@ mod tests {
         // The topics are rebuilt and the marker removed.
         assert_eq!(*appended.borrow(), vec![(p + 0x6a8, 0x81)]);
         assert_eq!(calls_to(&e, 0x005a_ae20), vec![vec![buffer]]);
+    }
+
+    // ---- the exe's stack frames ----
+
+    /// The block the next `with_stack(size)` takes (the last freed block of that size), with
+    /// the call log switched on.
+    fn next_frame(e: &mut Engine, size: u32) -> u32 {
+        let frame = e.mem.alloc(size);
+        e.mem.free(frame);
+        start_log(e);
+        frame
+    }
+
+    /// `EBP` of an exe frame that aligns it to 16 bytes, `below` bytes of locals under it.
+    fn aligned_ebp(raw: u32, below: u32) -> u32 {
+        (raw + below + 0xf) & !0xf
+    }
+
+    #[test]
+    fn the_spell_check_code_is_at_frame_offset_8() {
+        let mut e = engine();
+        let player = new_player(&mut e);
+        double(&mut e, IS_GOD_MODE, eax(0));
+        let frame = next_frame(&mut e, 0x10);
+        fn_0094c800(&mut e, player.cast(), 1, 2, Ptr::NULL, 3);
+        assert_eq!(
+            calls_to(&e, SPELL_CHECK),
+            vec![vec![player.addr(), 1, 2, frame + 8, 3]]
+        );
+    }
+
+    #[test]
+    fn the_parent_cell_handler_keeps_its_locals_under_an_aligned_ebp() {
+        let mut e = engine();
+        let (player, _) = cell_environment(&mut e, 0x1111);
+        double(&mut e, 0x0054_4c30, eax(2));
+        double(&mut e, 0x0054_4c60, eax(3));
+        let raw = next_frame(&mut e, 0x280 + 0x10);
+        fn_0094cae0(&mut e, player, Ptr::new(0x5000));
+        let ebp = aligned_ebp(raw, 0x280);
+        let corners: Vec<u32> = calls_to(&e, 0x004f_7070).iter().map(|w| w[0]).collect();
+        assert_eq!(
+            corners,
+            vec![ebp - 0x1ac, ebp - 0x1b4, ebp - 0x1bc, ebp - 0x1c4]
+        );
+        assert_eq!(calls_to(&e, 0x0096_a2d0), vec![vec![ebp - 0x1cc]]);
+        // The music pair is the by-value argument copy under the pushed 1.
+        assert_eq!(calls_to(&e, 0x0040_c0e0)[0][0], ebp - 0x280);
+        // The distance check copies the position to EBP-0x234.
+        let mut e = engine();
+        let (player, world) = border_environment(&mut e);
+        e.mem.set_u32(player.addr() + 0x7ac, world);
+        double(&mut e, FORM_TYPE_OF, eax(0x41));
+        let raw = next_frame(&mut e, 0x280 + 0x10);
+        fn_0094cae0(&mut e, player, Ptr::new(0x5000));
+        let ebp = aligned_ebp(raw, 0x280);
+        assert_eq!(calls_to(&e, 0x0045_78c0)[0][0], ebp - 0x234);
+        assert_eq!(calls_to(&e, 0x0045_7990), vec![vec![ebp - 0x234]]);
+    }
+
+    #[test]
+    fn returning_keeps_the_stored_position_and_the_zero_vectors_in_the_frame() {
+        let mut e = engine();
+        let player = new_player(&mut e);
+        e.mem.set_f32(player.addr() + 0x7a0, 10.0);
+        e.mem.set_u32(player.addr() + 0x7ac, 0x6000);
+        e.register(0x0040_3df0, |_, a| eax(a[0] + 4));
+        let wanted = e.mem.alloc(12);
+        double(&mut e, 0x0043_0830, eax(wanted));
+        // A cell: the stored position at EBP-0x58 (+0xc of the 0x64-byte frame).
+        double(&mut e, FORM_TYPE_OF, eax(0x39));
+        let frame = next_frame(&mut e, 0x64);
+        e.mem.set_f32(frame + 0xc, 0.0);
+        player_character_return_to_last_known_good_position(&mut e, player, true);
+        assert_eq!(e.mem.f32(frame + 0xc), 10.0);
+        // A world space: at EBP-0x4c (+0x18).
+        double(&mut e, FORM_TYPE_OF, eax(0x41));
+        let frame = next_frame(&mut e, 0x64);
+        e.mem.set_f32(frame + 0x18, 0.0);
+        player_character_return_to_last_known_good_position(&mut e, player, true);
+        assert_eq!(e.mem.f32(frame + 0x18), 10.0);
+        // Directly: the zero vectors of the two bodies at EBP-0x20 and EBP-0x14.
+        let bodies = [0xb100, 0xb200];
+        e.register_double(0x0095_0bb0, move |_, a| eax(bodies[a[1] as usize]));
+        let frame = next_frame(&mut e, 0x64);
+        player_character_return_to_last_known_good_position(&mut e, player, false);
+        let zeros: Vec<u32> = calls_to(&e, 0x0043_d410).iter().map(|w| w[0]).collect();
+        assert_eq!(zeros, vec![frame + 0x44, frame + 0x50]);
+        assert_eq!(
+            calls_to(&e, 0x00a5_9c60),
+            vec![vec![0xb100, frame + 0x44], vec![0xb200, frame + 0x50]]
+        );
+    }
+
+    #[test]
+    fn loading_the_3d_keeps_its_locals_at_the_exe_offsets() {
+        let mut e = engine();
+        let world = load_world(&mut e, vec![]);
+        let player = world.player;
+        e.set(player, PlayerCharacter::b3rdPerson, false);
+        let frame = next_frame(&mut e, 0x21c);
+        player_character_load_3d(&mut e, player, 5);
+        assert_eq!(calls_to(&e, 0x0040_4eb0)[0][0], frame + 0x1dc);
+        assert_eq!(calls_to(&e, 0x0040_4ee0), vec![vec![frame + 0x1dc]]);
+        assert_eq!(calls_to(&e, 0x0043_d410)[0][0], frame + 0x1c4);
+        assert_eq!(
+            calls_to(&e, 0x0056_fac0),
+            vec![vec![player.addr(), frame + 0x54, frame + 0x1e0]]
+        );
+        assert_eq!(calls_to(&e, 0x0040_6d30)[0][0], frame + 0xb0);
+        assert_eq!(calls_to(&e, 0x0070_c440), vec![vec![0x6600, frame + 0x40]]);
+    }
+
+    #[test]
+    fn the_inventory_callback_line_is_at_frame_offset_4() {
+        let mut e = engine();
+        list_helpers(&mut e);
+        let item = e.mem.alloc(0x20);
+        let output = e.mem.alloc(8);
+        let frame = next_frame(&mut e, 0x114);
+        build_inv_string_callback(&mut e, Ptr::new(item), Ptr::new(output));
+        assert_eq!(calls_to(&e, SPRINTF)[0][0], frame + 4);
+        assert_eq!(calls_to(&e, STRING_APPEND), vec![vec![output, frame + 4]]);
+    }
+
+    #[test]
+    fn the_progress_export_keeps_its_locals_at_the_exe_offsets() {
+        let mut e = engine();
+        let world = export_world(&mut e);
+        let player = world.player;
+        // One perk and one quest, for one line of each.
+        let perk = e.mem.alloc(0x20);
+        let entry = e.mem.alloc(8);
+        e.mem.set_u32(entry, perk);
+        e.mem.set_u32(player.addr() + 0x87c, entry);
+        let inventory = e.mem.alloc(0x40);
+        double(&mut e, 0x004b_f220, eax(inventory));
+        let quest_item = e.mem.alloc(8);
+        let quest = named_object(&mut e);
+        double(&mut e, 0x0060_fd70, eax(1));
+        double(&mut e, 0x005e_3fa0, eax(quest));
+        e.mem.set_u32(player.addr() + 0x6b0, quest_item);
+        let frame = next_frame(&mut e, 0x3ac);
+        player_character_export_progress_data(&mut e, player, 0);
+        let lines: Vec<u32> = calls_to(&e, SPRINTF).iter().map(|w| w[0]).collect();
+        assert_eq!(lines, vec![frame + 0x280, frame + 0x158, frame + 0x40]);
+        assert_eq!(calls_to(&e, 0x0040_37b0), vec![vec![frame + 0x38c]]);
+        assert_eq!(calls_to(&e, 0x0040_37d0), vec![vec![frame + 0x38c]]);
+        assert_eq!(
+            calls_to(&e, 0x0093_abe0),
+            vec![vec![player.addr(), frame + 0x26c, frame + 0x274]]
+        );
+    }
+
+    #[test]
+    fn the_karma_sound_handles_use_the_frame_pair_of_their_branch() {
+        // A loss: the handle at EBP-0x20 (+0x40), the temporary at EBP-0x38 (+0x28).
+        let mut e = engine();
+        let (player, _) = karma_world(&mut e, 10);
+        let frame = next_frame(&mut e, 0x60);
+        player_character_reward_karma(&mut e, player, -5);
+        assert_eq!(calls_to(&e, 0x0041_a250), vec![vec![frame + 0x40]]);
+        assert_eq!(calls_to(&e, 0x00ad_7550)[0][1], frame + 0x28);
+        assert_eq!(calls_to(&e, 0x00ad_8830), vec![vec![frame + 0x40, 0]]);
+        // A gain: EBP-0x2c (+0x34) and EBP-0x44 (+0x1c).
+        let mut e = engine();
+        let (player, _) = karma_world(&mut e, 10);
+        let frame = next_frame(&mut e, 0x60);
+        player_character_reward_karma(&mut e, player, 5);
+        assert_eq!(calls_to(&e, 0x0041_a250), vec![vec![frame + 0x34]]);
+        assert_eq!(calls_to(&e, 0x00ad_7550)[0][1], frame + 0x1c);
+    }
+
+    #[test]
+    fn resurrecting_builds_the_controller_word_at_frame_offset_0x44() {
+        let mut e = engine();
+        let player = new_player(&mut e);
+        slot(&mut e, player.addr(), 0x1c4, eax(0));
+        let high = e.mem.alloc(16);
+        slot(&mut e, high, 4, eax(0));
+        double(&mut e, 0x008d_7510, eax(high));
+        double(&mut e, 0x0093_06d0, eax(0x0600_0700));
+        let setting = word_block(&mut e, &[0]);
+        double(&mut e, SETTING_FLOAT_POINTER, eax(setting));
+        double(&mut e, OPERATOR_NEW, eax(0x0600_0900));
+        let frame = next_frame(&mut e, 0x60);
+        player_character_resurrect(&mut e, player, 0, 0, 0);
+        assert_eq!(
+            calls_to(&e, 0x0070_c440),
+            vec![vec![0x0600_0700, frame + 0x44]]
+        );
+        assert_eq!(calls_to(&e, 0x004a_3a20), vec![vec![frame + 0x44]]);
+    }
+
+    #[test]
+    fn the_inventory_clone_keeps_its_locals_at_the_exe_offsets() {
+        let mut e = engine();
+        let (player, _, _) = clone_scenario(&mut e, true);
+        let frame = next_frame(&mut e, 0x36c);
+        player_character_clone_inventory_3d(&mut e, player, 1);
+        let pointers: Vec<u32> = calls_to(&e, 0x0063_3c90).iter().map(|w| w[0]).collect();
+        assert_eq!(pointers, vec![frame + 0x348, frame + 0x354]);
+        assert_eq!(calls_to(&e, 0x004a_d050)[0][0], frame + 0xc8);
+        assert_eq!(calls_to(&e, 0x004a_d270), vec![vec![frame + 0xc8]]);
+        assert_eq!(
+            calls_to(&e, 0x0056_fac0),
+            vec![vec![player.addr(), frame + 0x80, frame + 0x204]]
+        );
+        let paths = calls_to(&e, 0x0040_6d00);
+        assert_eq!((paths[0][0], paths[1][0]), (frame + 0xf8, frame + 0x238));
+        let words = calls_to(&e, 0x0090_5820);
+        assert_eq!((words[0][1], words[1][1]), (frame + 0xb4, frame + 0xb0));
+        assert_eq!(
+            calls_to(&e, 0x0045_cec0),
+            vec![vec![frame + 0x354], vec![frame + 0x348]]
+        );
+    }
+
+    #[test]
+    fn the_3d_switch_keeps_its_locals_at_the_exe_offsets() {
+        // Showing the own 3D: the sound handle at EBP-0x6c (+0x60 of the 0xcc-byte frame).
+        let mut e = engine();
+        let player = switch_scenario(&mut e);
+        let frame = next_frame(&mut e, 0xcc);
+        fn_00951a10(&mut e, player, 0);
+        assert_eq!(calls_to(&e, 0x0041_a250), vec![vec![frame + 0x60]]);
+        assert_eq!(calls_to(&e, 0x0048_3710)[0], vec![frame + 0x60]);
+        // Showing the first person model: the rotation at +0x84, the rotated matrix at +0x20,
+        // the zero vector at +0x6c and the sound handle at EBP-0x54 (+0x78).
+        let mut e = engine();
+        let player = switch_scenario(&mut e);
+        let frame = next_frame(&mut e, 0xcc);
+        fn_00951a10(&mut e, player, 1);
+        assert_eq!(calls_to(&e, 0x0068_15c0), vec![vec![frame + 0x84]]);
+        assert_eq!(
+            calls_to(&e, 0x0056_fac0),
+            vec![vec![player.addr(), frame + 0x20, frame + 0x84]]
+        );
+        assert_eq!(calls_to(&e, 0x0043_d410)[0][0], frame + 0x6c);
+        assert_eq!(calls_to(&e, 0x0041_a250), vec![vec![frame + 0x78]]);
+    }
+
+    #[test]
+    fn the_zoom_matrices_and_vectors_are_at_the_exe_offsets() {
+        let mut e = engine();
+        let player = zoom_scenario(&mut e);
+        e.set_global(ZOOM_FACTOR, 0.5f32);
+        let frame = next_frame(&mut e, 0x134);
+        fn_00952290(&mut e, player);
+        let (a, b, c, d) = (frame + 0x110, frame + 0x74, frame + 0xa8, frame + 0xcc);
+        let (up, flat) = (frame + 0x9c, frame + 0xf8);
+        assert_eq!(
+            calls_to(&e, 0x0068_15c0),
+            vec![vec![a], vec![b], vec![flat], vec![c], vec![d]]
+        );
+        assert_eq!(
+            calls_to(&e, 0x0043_f8d0),
+            vec![vec![a, frame + 0x44, b], vec![d, frame + 0x14, c]]
+        );
+        assert_eq!(calls_to(&e, 0x0041_6870)[0][0], up);
+        assert_eq!(calls_to(&e, 0x004b_4500), vec![vec![a, frame + 0x38, up]]);
+        assert_eq!(calls_to(&e, 0x004b_6190), vec![vec![up, flat]]);
+    }
+
+    #[test]
+    fn the_list_adders_pass_their_own_argument_slot() {
+        let mut e = engine();
+        let player = new_player(&mut e);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let log = seen.clone();
+        e.register_double(0x005a_e3d0, move |e, a| {
+            log.borrow_mut().push((a[1], e.mem.u32(a[1])));
+            Ret::default()
+        });
+        // 00952830: `SUB ESP,0x8`, the slot at +0x10.
+        let frame = next_frame(&mut e, 0x14);
+        assert!(fn_00952830(&mut e, player, 0xc0c, 0, 1));
+        // 009528c0: `SUB ESP,0x10` and `ESI`, the slot at +0x1c.
+        let quest_frame = next_frame(&mut e, 0x20);
+        player_character_add_quest_stage_item(&mut e, player, 0xb0b);
+        // 00952a20: `SUB ESP,0x18`, the slot at +0x20.
+        double(&mut e, 0x005d_43e0, eax(0x0600_0100));
+        let target_frame = next_frame(&mut e, 0x24);
+        fn_00952a20(&mut e, player, 0xa0a);
+        assert_eq!(
+            *seen.borrow(),
+            vec![
+                (frame + 0x10, 0xc0c),
+                (quest_frame + 0x1c, 0xb0b),
+                (target_frame + 0x20, 0xa0a)
+            ]
+        );
+    }
+
+    #[test]
+    fn dropping_keeps_its_locals_in_the_0x40_byte_frame() {
+        // With a body: the zero point at +0x10, the position at +0x1c, the difference at +4.
+        let mut e = engine();
+        let player = new_player(&mut e);
+        e.set_global(PLAYER_POINTER, 0x0600_5000u32);
+        let item = e.mem.alloc(8);
+        slot(&mut e, item, 0xe4, eax(0));
+        double(&mut e, FORM_TYPE_OF, eax(0x11));
+        let reference = e.mem.alloc(0x20);
+        slot(&mut e, reference, 0x1d0, eax(0x900));
+        let position = e.mem.alloc(12);
+        slot(&mut e, reference, 0x1f4, eax(position));
+        recording_slot(&mut e, player.addr(), 0x17c, eax(reference));
+        let frame = next_frame(&mut e, 0x40);
+        fn_00954610(&mut e, player, item, 0, 0, 0, 0);
+        assert_eq!(calls_to(&e, 0x0043_d410)[0][0], frame + 0x10);
+        assert_eq!(calls_to(&e, 0x00a5_9c60), vec![vec![0x900, frame + 0x10]]);
+        assert_eq!(calls_to(&e, 0x0043_9ef0)[0][..2], [frame + 0x1c, frame + 4]);
+        assert_eq!(
+            calls_to(&e, 0x0063_c8a0),
+            vec![vec![frame + 0x1c, frame + 4]]
+        );
+        // Without one: the reference word at EBP-0x8 (+0x38).
+        slot(&mut e, reference, 0x1d0, eax(0));
+        let frame = next_frame(&mut e, 0x40);
+        fn_00954610(&mut e, player, item, 0, 0, 0, 0);
+        assert_eq!(calls_to(&e, 0x005a_e3d0)[0][1], frame + 0x38);
+        assert_eq!(e.mem.u32(frame + 0x38), reference);
+    }
+
+    #[test]
+    fn the_old_save_keeps_its_locals_in_the_0x228_byte_frame() {
+        let mut e = engine();
+        save_settings(&mut e);
+        list_helpers(&mut e);
+        double(&mut e, 0x0082_5c00, eax(0x0600_2000));
+        let player = new_player(&mut e);
+        let p = player.addr();
+        e.set_global(SAVE_LOAD_GAME, 0x1111u32);
+        version(&mut e, 0x6f);
+        double(&mut e, 0x004b_9ba0, eax(0x0600_2100));
+        e.register(0x0096_a400, |e, a| {
+            e.mem.set_u32(a[1], 0);
+            Ret::default()
+        });
+        let frame = next_frame(&mut e, 0x228);
+        fn_00955620(&mut e, player, 0);
+        // The position copy at EBP-0x40, the block at EBP-0xf0.
+        assert!(calls_to(&e, 0x0048_4ce0).contains(&vec![p, frame + 0x1e8, 0xc]));
+        assert_eq!(calls_to(&e, 0x004d_5f60), vec![vec![frame + 0x138]]);
+        assert!(calls_to(&e, 0x0048_4ce0).contains(&vec![p, frame + 0x138, 0xac]));
+        // The cursor at EBP-0x168, the value at EBP-0x174, the flag at EBP-0x175.
+        assert_eq!(
+            calls_to(&e, 0x0096_a400),
+            vec![vec![p + 0x854, frame + 0xc0, frame + 0xb4, frame + 0xb3]]
+        );
+    }
+
+    #[test]
+    fn the_old_load_keeps_its_locals_in_the_0x32c_byte_frame() {
+        let mut e = engine();
+        save_settings(&mut e);
+        let player = new_player(&mut e);
+        e.set_global(SAVE_LOAD_GAME, 0x1111u32);
+        version(&mut e, 0x39);
+        e.register(0x0048_39c0, |_, a| eax(a[0] + 0x2000));
+        e.register(DYNAMIC_CAST, |_, a| eax(a[0]));
+        let frame = next_frame(&mut e, 0x32c);
+        fn_00956f70(&mut e, player, 0, 0x55);
+        // The position at EBP-0x38, the block at EBP-0xfc, the name at EBP-0x2ec.
+        assert_eq!(calls_to(&e, LIST_NODE_ITEM_SLOT)[0], vec![frame + 0x2f4]);
+        assert_eq!(calls_to(&e, 0x004d_5f20), vec![vec![frame + 0x230]]);
+        assert_eq!(calls_to(&e, 0x0048_9100)[0][1], frame + 0x40);
+    }
+
+    #[test]
+    fn the_second_load_pass_keeps_its_list_words_in_the_frame() {
+        let mut e = engine();
+        list_helpers(&mut e);
+        let player = new_player(&mut e);
+        let process = e.mem.alloc(8);
+        e.set(player, PlayerCharacter::pCurrentProcess, Ptr::new(process));
+        slot(&mut e, process, 0x58, eax(0));
+        e.set_global(SAVE_LOAD_GAME, 0x1111u32);
+        version(&mut e, 0x73);
+        // The first entry resolves, the second does not and is removed after it.
+        e.mem.set_u32(0x011e_0ae8, 0xb0b);
+        let second = node(&mut e, 0xa0a, 0);
+        e.mem.set_u32(0x011e_0aec, second);
+        e.register(0x0048_39c0, |_, a| eax(a[0]));
+        e.register(DYNAMIC_CAST, |_, a| {
+            eax(if a[0] == 0xa0a { 0 } else { a[0] })
+        });
+        e.register(0x0090_5330, |e, a| {
+            let next = e.mem.u32(a[0] + 4);
+            let after = e.mem.u32(next + 4);
+            e.mem.set_u32(a[0] + 4, after);
+            eax(0)
+        });
+        let frame = next_frame(&mut e, 0x6c);
+        fn_00958990(&mut e, player, 0, 0);
+        // The looked-up form at EBP-0x58 (+0x14) for both entries, the removed id at EBP-0x60
+        // (+0xc).
+        let words: Vec<u32> = calls_to(&e, 0x0072_6c60).iter().map(|w| w[1]).collect();
+        assert_eq!(words, vec![frame + 0x14; 2]);
+        assert_eq!(
+            calls_to(&e, 0x0090_5330),
+            vec![vec![0x011e_0ae8, frame + 0xc]]
+        );
+        assert_eq!(e.mem.u32(frame + 0xc), 0xa0a);
+    }
+
+    #[test]
+    fn the_buffer_save_keeps_its_locals_in_the_0x13c_byte_frame() {
+        let mut e = engine();
+        list_helpers(&mut e);
+        let player = new_player(&mut e);
+        record_buffer_saves(&mut e);
+        e.register(FORM_ID_OF, |_, a| eax(a[0] + 1));
+        let buffer = 0x0600_4000;
+        let frame = next_frame(&mut e, 0x13c);
+        fn_009590f0(&mut e, player, buffer);
+        // The flag holder at EBP-0x124, the position copy at EBP-0xc.
+        assert_eq!(calls_to(&e, 0x0042_8110), vec![vec![buffer, frame + 0x18]]);
+        assert!(calls_to(&e, 0x0086_5e50).contains(&vec![buffer, frame + 0x130, 0xc, 0]));
+    }
+
+    #[test]
+    fn the_buffer_load_keeps_its_locals_in_the_0x200_byte_frame() {
+        let mut e = engine();
+        list_helpers(&mut e);
+        let player = new_player(&mut e);
+        let buffer = load_buffer(&mut e, 0x1b);
+        e.register(0x0048_39c0, |_, a| eax(a[0] + 0x1000));
+        e.register(DYNAMIC_CAST, |_, a| eax(a[0]));
+        let frame = next_frame(&mut e, 0x200);
+        fn_0095a3b0(&mut e, player, buffer);
+        // The flag holder at EBP-0x134, the position at EBP-0x1c, the hardcore bytes at
+        // EBP-0x11d and EBP-0x11e.
+        assert_eq!(calls_to(&e, 0x0042_8110), vec![vec![buffer, frame + 0xcc]]);
+        let reads = calls_to(&e, 0x0086_4980);
+        assert!(reads.contains(&vec![buffer, frame + 0x1e4, 0xc]));
+        let bytes: Vec<u32> = reads.iter().filter(|w| w[2] == 1).map(|w| w[1]).collect();
+        let at = bytes.iter().position(|b| *b == frame + 0xe3).unwrap();
+        assert_eq!(bytes[at + 1], frame + 0xe2);
+    }
+
+    #[test]
+    fn the_buffer_load_passes_keep_their_flag_holders_in_their_frames() {
+        // 0095c0a0 (0xa0 bytes): the holders at EBP-0x5c (+0x44) and EBP-0x60 (+0x40).
+        let mut e = engine();
+        list_helpers(&mut e);
+        float_settings(&mut e);
+        let player = new_player(&mut e);
+        let p = player.addr();
+        let buffer = load_buffer(&mut e, 5);
+        e.register(0x0084_aa90, |_, _| eax(0));
+        e.register(0x0048_39c0, |_, a| eax(a[0]));
+        e.register(DYNAMIC_CAST, |_, a| eax(a[0]));
+        slot(&mut e, p + 0xa4, 0xc, st0(1.0));
+        slot(&mut e, p + 0xa4, 0x20, st0(1.0));
+        slot(&mut e, p, 0x1d0, eax(0x77));
+        let frame = next_frame(&mut e, 0xa0);
+        fn_0095c0a0(&mut e, player, buffer);
+        assert_eq!(calls_to(&e, 0x0042_8110), vec![vec![buffer, frame + 0x44]]);
+        assert_eq!(calls_to(&e, 0x0042_ce30), vec![vec![buffer, frame + 0x40]]);
+
+        // 0095c730 (0x14 bytes): the holder at EBP-0x4 (+0x10).
+        let mut e = engine();
+        let player = new_player(&mut e);
+        let buffer = e.mem.alloc(8);
+        double(&mut e, 0x0095_0bb0, eax(0));
+        let holder = e.mem.alloc(8);
+        double(&mut e, 0x008d_8520, eax(holder));
+        slot(&mut e, holder, 0x400, eax(0));
+        slot(&mut e, player.addr(), 0x3f4, eax(0));
+        let frame = next_frame(&mut e, 0x14);
+        fn_0095c730(&mut e, player, buffer);
+        assert_eq!(calls_to(&e, 0x0042_8110), vec![vec![buffer, frame + 0x10]]);
+    }
+
+    #[test]
+    fn the_revert_keeps_its_flag_holders_in_the_0x44_byte_frame() {
+        let mut e = engine();
+        list_helpers(&mut e);
+        float_settings(&mut e);
+        let player = new_player(&mut e);
+        let buffer = e.mem.alloc(8);
+        e.set_global(0x011c_3f2cu32, 0x0600_9000u32);
+        let list = node(&mut e, 0x81, 0);
+        double(&mut e, 0x0046_12e0, eax(list));
+        e.register(0x0063_f7b0, |e, a| {
+            e.mem.set_u32(a[0], 0);
+            eax(0)
+        });
+        let frame = next_frame(&mut e, 0x44);
+        fn_0095c9c0(&mut e, player, buffer);
+        // The holders at EBP-0x20 (+0x24) and EBP-0x24 (+0x20).
+        assert_eq!(
+            calls_to(&e, 0x0042_ce30),
+            vec![vec![buffer, frame + 0x24], vec![buffer, frame + 0x20]]
+        );
     }
 }

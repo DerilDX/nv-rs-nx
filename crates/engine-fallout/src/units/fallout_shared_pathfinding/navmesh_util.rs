@@ -3521,9 +3521,11 @@ pub fn fn_006987d0(
                                     )
                                     .bool();
                                 if bounds_overlap {
+                                    // 00698cb7..00698cc5: the triangle is pushed first, then the
+                                    // out point (EBP-0x114): GetCenter(out, triangle).
                                     let accepted = e.call(
                                         GET_CENTER,
-                                        &args![this, triangle_index, scratch.byte_add(0xac)],
+                                        &args![this, scratch.byte_add(0xac), triangle_index],
                                     );
                                     let center = accepted.ptr::<()>();
                                     let center_inside = e
@@ -4660,8 +4662,8 @@ mod tests {
         let captured_center_calls = center_calls.clone();
         e.register_double(GET_CENTER, move |e, a| {
             *captured_center_calls.borrow_mut() += 1;
-            write_point(e, a[2], [0.0; 3]);
-            ret(a[2])
+            write_point(e, a[1], [0.0; 3]);
+            ret(a[1])
         });
         let center_hits = Rc::new(RefCell::new(0u32));
         let captured_center_hits = center_hits.clone();

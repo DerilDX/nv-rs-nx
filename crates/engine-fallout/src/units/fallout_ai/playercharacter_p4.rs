@@ -729,125 +729,132 @@ pub fn fn_00967da0(e: &mut Engine, this: Ptr<PlayerCharacter>) -> u32 {
         let mut hostile_free = true;
         let mut all_clear = true;
         let other_total = e.call(GROUP_MEMBER_COUNT, &args![other]).u32();
-        let out = e.mem.alloc(4);
-        for other_index in 0..other_total {
-            let candidate = e.call(GROUP_MEMBER_AT, &args![other, other_index]).u32();
-            e.mem.set_u32(out, 0);
-            if e.call(
-                GET_SHOULD_ATTACK_ACTOR,
-                &args![candidate, this, 0u32, out, 1u32],
-            )
-            .bool()
-            {
-                hostile_free = false;
-                break;
-            }
-            if all_clear && free_members != 0 {
-                for member_index in 0..member_total {
-                    let member = e.call(GROUP_MEMBER_AT, &args![group, member_index]).u32();
-                    if member == e.global::<u32>(PLAYER_POINTER) || force_next_update(e, member) {
-                        continue;
-                    }
-                    if e.call(
-                        GET_SHOULD_ATTACK_ACTOR,
-                        &args![candidate, member, 0u32, out, 1u32],
-                    )
-                    .bool()
-                        || e.call(
+        // The exe's 0xe8-byte frame: the verdict word at EBP-0x60 (+0x88).
+        e.with_stack(0xe8, |e, frame| {
+            let out = frame.addr() + 0x88;
+            for other_index in 0..other_total {
+                let candidate = e.call(GROUP_MEMBER_AT, &args![other, other_index]).u32();
+                e.mem.set_u32(out, 0);
+                if e.call(
+                    GET_SHOULD_ATTACK_ACTOR,
+                    &args![candidate, this, 0u32, out, 1u32],
+                )
+                .bool()
+                {
+                    hostile_free = false;
+                    break;
+                }
+                if all_clear && free_members != 0 {
+                    for member_index in 0..member_total {
+                        let member = e.call(GROUP_MEMBER_AT, &args![group, member_index]).u32();
+                        if member == e.global::<u32>(PLAYER_POINTER) || force_next_update(e, member)
+                        {
+                            continue;
+                        }
+                        if e.call(
                             GET_SHOULD_ATTACK_ACTOR,
-                            &args![member, candidate, 0u32, out, 1u32],
+                            &args![candidate, member, 0u32, out, 1u32],
                         )
                         .bool()
-                    {
-                        all_clear = false;
-                        break;
+                            || e.call(
+                                GET_SHOULD_ATTACK_ACTOR,
+                                &args![member, candidate, 0u32, out, 1u32],
+                            )
+                            .bool()
+                        {
+                            all_clear = false;
+                            break;
+                        }
                     }
                 }
             }
-        }
-        e.mem.free(out);
+        });
         if !hostile_free {
             continue;
         }
         let mut nearest = 0u32;
         let mut nearest_distance: f32 = e.global(NEAREST_ACTOR_START);
-        let work = e.mem.alloc(0x18);
-        let position = e.vcall(this.addr(), 0x1f4, &args![]).u32();
-        for word in 0..3 {
-            let value = e.mem.u32(position + 4 * word);
-            e.mem.set_u32(work + 4 * word, value);
-        }
-        if group != 0 {
-            for member_index in 0..member_total {
-                let member = e.call(GROUP_MEMBER_AT, &args![group, member_index]).u32();
-                if all_clear
-                    || force_next_update(e, member)
-                    || member == e.global::<u32>(PLAYER_POINTER)
-                {
-                    e.call(GROUP_REMOVE_TARGET, &args![other, member]);
-                } else if created != 0 {
-                    e.call(GROUP_ADD_MEMBER, &args![created, member]);
-                }
+        // The same frame: the position copy at EBP-0x54 (+0x94), the difference
+        // at EBP-0x8c (+0x5c).
+        e.with_stack(0xe8, |e, frame| {
+            let work = frame.addr() + 0x94;
+            let difference = frame.addr() + 0x5c;
+            let position = e.vcall(this.addr(), 0x1f4, &args![]).u32();
+            for word in 0..3 {
+                let value = e.mem.u32(position + 4 * word);
+                e.mem.set_u32(work + 4 * word, value);
             }
-        } else {
-            e.call(GROUP_REMOVE_TARGET, &args![other, this]);
-        }
-        let mut target_index = 0u32;
-        while target_index < e.call(GROUP_TARGET_COUNT, &args![other]).u32() {
-            let target = fn_00968630(e, Ptr::new(other), target_index);
-            if target != 0
-                && force_next_update(e, target)
-                && !e.call(IS_ANGRY_WITH_PLAYER, &args![target]).bool()
-            {
-                e.call(GROUP_REMOVE_TARGET, &args![other, target]);
-                target_index = target_index.wrapping_sub(1);
-                e.vcall(target, 0x434, &args![0u32]);
-            }
-            target_index = target_index.wrapping_add(1);
-        }
-        for other_index in 0..other_total {
-            let candidate = e.call(GROUP_MEMBER_AT, &args![other, other_index]).u32();
-            handled += 1;
             if group != 0 {
-                e.call(GROUP_REMOVE_TARGET, &args![group, candidate]);
-            }
-            if all_clear && created != 0 {
-                e.call(GROUP_REMOVE_TARGET, &args![created, candidate]);
-            }
-            let candidate_position = e.vcall(candidate, 0x1f4, &args![]).u32();
-            e.call(POINT_SUBTRACT, &args![work, work + 0xc, candidate_position]);
-            let distance = e.call(POINT_LENGTH, &args![work + 0xc]).f32();
-            if distance < nearest_distance {
-                nearest = candidate;
-                nearest_distance = distance;
-            }
-            // Take the candidate's entry out of the list `971fd0` gave.
-            let mut current = entries;
-            let mut previous = 0u32;
-            while current != 0 && !e.call(LIST_IS_EMPTY, &args![current]).bool() {
-                let item = node_item(e, current);
-                let mut remove = false;
-                if item == 0 {
-                    remove = true;
-                } else if e.call(WORD_AT_8, &args![item]).u32() == candidate {
-                    e.call(ENTRY_DESTROY, &args![item, 1u32]);
-                    remove = true;
-                }
-                if remove {
-                    if previous != 0 {
-                        let slot = e.call(NODE_ITEM_SLOT, &args![current]).u32();
-                        e.call(LIST_REMOVE, &args![previous, slot]);
-                        current = node_next(e, previous);
-                    } else {
-                        e.call(LIST_POP_FRONT, &args![current]);
+                for member_index in 0..member_total {
+                    let member = e.call(GROUP_MEMBER_AT, &args![group, member_index]).u32();
+                    if all_clear
+                        || force_next_update(e, member)
+                        || member == e.global::<u32>(PLAYER_POINTER)
+                    {
+                        e.call(GROUP_REMOVE_TARGET, &args![other, member]);
+                    } else if created != 0 {
+                        e.call(GROUP_ADD_MEMBER, &args![created, member]);
                     }
-                } else {
-                    previous = current;
-                    current = node_next(e, current);
+                }
+            } else {
+                e.call(GROUP_REMOVE_TARGET, &args![other, this]);
+            }
+            let mut target_index = 0u32;
+            while target_index < e.call(GROUP_TARGET_COUNT, &args![other]).u32() {
+                let target = fn_00968630(e, Ptr::new(other), target_index);
+                if target != 0
+                    && force_next_update(e, target)
+                    && !e.call(IS_ANGRY_WITH_PLAYER, &args![target]).bool()
+                {
+                    e.call(GROUP_REMOVE_TARGET, &args![other, target]);
+                    target_index = target_index.wrapping_sub(1);
+                    e.vcall(target, 0x434, &args![0u32]);
+                }
+                target_index = target_index.wrapping_add(1);
+            }
+            for other_index in 0..other_total {
+                let candidate = e.call(GROUP_MEMBER_AT, &args![other, other_index]).u32();
+                handled += 1;
+                if group != 0 {
+                    e.call(GROUP_REMOVE_TARGET, &args![group, candidate]);
+                }
+                if all_clear && created != 0 {
+                    e.call(GROUP_REMOVE_TARGET, &args![created, candidate]);
+                }
+                let candidate_position = e.vcall(candidate, 0x1f4, &args![]).u32();
+                e.call(POINT_SUBTRACT, &args![work, difference, candidate_position]);
+                let distance = e.call(POINT_LENGTH, &args![difference]).f32();
+                if distance < nearest_distance {
+                    nearest = candidate;
+                    nearest_distance = distance;
+                }
+                // Take the candidate's entry out of the list `971fd0` gave.
+                let mut current = entries;
+                let mut previous = 0u32;
+                while current != 0 && !e.call(LIST_IS_EMPTY, &args![current]).bool() {
+                    let item = node_item(e, current);
+                    let mut remove = false;
+                    if item == 0 {
+                        remove = true;
+                    } else if e.call(WORD_AT_8, &args![item]).u32() == candidate {
+                        e.call(ENTRY_DESTROY, &args![item, 1u32]);
+                        remove = true;
+                    }
+                    if remove {
+                        if previous != 0 {
+                            let slot = e.call(NODE_ITEM_SLOT, &args![current]).u32();
+                            e.call(LIST_REMOVE, &args![previous, slot]);
+                            current = node_next(e, previous);
+                        } else {
+                            e.call(LIST_POP_FRONT, &args![current]);
+                        }
+                    } else {
+                        previous = current;
+                        current = node_next(e, current);
+                    }
                 }
             }
-        }
-        e.mem.free(work);
+        });
         if nearest != 0 {
             let dialogue: u32 = e.global(COMBAT_DIALOGUE_MANAGER);
             e.call(
@@ -952,28 +959,30 @@ pub fn fn_00968670(e: &mut Engine, this: Ptr, index: u32) -> u32 {
 /// call of `006815c0` on an unused temporary is left out.
 pub fn fn_00968690(e: &mut Engine, this: Ptr, result: Ptr, time: f32) -> Ptr {
     let position = e.call(POSITION_OF, &args![this]).u32();
-    let work = e.mem.alloc(0x24);
-    let velocity = work;
-    let scaled = work + 0xc;
-    let sum = work + 0x18;
-    for word in 0..3 {
-        let value = e.mem.u32(position + 4 * word);
-        e.mem.set_u32(sum + 4 * word, value);
-    }
-    if time as f64 > e.global::<f64>(DOUBLE_ZERO) {
-        let controller = e.call(GET_CHAR_CONTROLLER, &args![this]).u32();
-        if controller != 0 {
-            let controller = e.call(GET_CHAR_CONTROLLER, &args![this]).u32();
-            e.call(CONTROLLER_LINEAR_VELOCITY, &args![controller, velocity]);
-            let scaled_vector = e.call(VECTOR_SCALE, &args![velocity, scaled, time]).u32();
-            e.call(VECTOR_ADD, &args![sum, scaled_vector]);
+    // The exe's frame (`SUB ESP,0x28` under `EBP`): the velocity at +0x10 (`EBP-0x18`), the
+    // scaled velocity at +4 (`EBP-0x24`), the sum at +0x1c (`EBP-0xc`).
+    e.with_stack(0x28, |e, frame| {
+        let velocity = frame.addr() + 0x10;
+        let scaled = frame.addr() + 4;
+        let sum = frame.addr() + 0x1c;
+        for word in 0..3 {
+            let value = e.mem.u32(position + 4 * word);
+            e.mem.set_u32(sum + 4 * word, value);
         }
-    }
-    for word in 0..3 {
-        let value = e.mem.u32(sum + 4 * word);
-        e.mem.set_u32(result.addr() + 4 * word, value);
-    }
-    e.mem.free(work);
+        if time as f64 > e.global::<f64>(DOUBLE_ZERO) {
+            let controller = e.call(GET_CHAR_CONTROLLER, &args![this]).u32();
+            if controller != 0 {
+                let controller = e.call(GET_CHAR_CONTROLLER, &args![this]).u32();
+                e.call(CONTROLLER_LINEAR_VELOCITY, &args![controller, velocity]);
+                let scaled_vector = e.call(VECTOR_SCALE, &args![velocity, scaled, time]).u32();
+                e.call(VECTOR_ADD, &args![sum, scaled_vector]);
+            }
+        }
+        for word in 0..3 {
+            let value = e.mem.u32(sum + 4 * word);
+            e.mem.set_u32(result.addr() + 4 * word, value);
+        }
+    });
     result
 }
 
@@ -1487,17 +1496,22 @@ pub fn fn_00969930(e: &mut Engine, this: Ptr<PlayerCharacter>) -> u32 {
         if reference == 0 {
             continue;
         }
-        let work = e.mem.alloc(0x18);
-        let position = e.vcall(reference, 0x1f4, &args![]).u32();
-        for word in 0..3 {
-            let value = e.mem.u32(position + 4 * word);
-            e.mem.set_u32(work + 4 * word, value);
-        }
-        let mine = e.vcall(this.addr(), 0x1f4, &args![]).u32();
-        e.call(POINT_SUBTRACT, &args![work, work + 0xc, mine]);
-        let distance = e.call(POINT_LENGTH_SQUARED, &args![work + 0xc]).f32();
-        let radius = e.call(REFERENCE_RADIUS, &args![reference]).f32();
-        e.mem.free(work);
+        // The exe's frame (`SUB ESP,0x40` under `EBP`): the position copy at +0x1c (`EBP-0x24`),
+        // the difference at +0x10 (`EBP-0x30`).
+        let (distance, radius) = e.with_stack(0x40, |e, frame| {
+            let work = frame.addr() + 0x1c;
+            let difference = frame.addr() + 0x10;
+            let position = e.vcall(reference, 0x1f4, &args![]).u32();
+            for word in 0..3 {
+                let value = e.mem.u32(position + 4 * word);
+                e.mem.set_u32(work + 4 * word, value);
+            }
+            let mine = e.vcall(this.addr(), 0x1f4, &args![]).u32();
+            e.call(POINT_SUBTRACT, &args![work, difference, mine]);
+            let distance = e.call(POINT_LENGTH_SQUARED, &args![difference]).f32();
+            let radius = e.call(REFERENCE_RADIUS, &args![reference]).f32();
+            (distance, radius)
+        });
         let inside = (distance as f64) < radius as f64 * radius as f64;
         if best_distance > distance {
             if !best_inside {
@@ -4137,5 +4151,84 @@ mod tests {
         assert_eq!(e.mem.u16(block + 8), 4);
         assert_eq!(e.mem.u16(block + 0xe), 1);
         assert_eq!(e.mem.u32(block + 4), 0x7100);
+    }
+
+    // ---- the exe's stack frames ----
+
+    /// The block the next `with_stack(size)` takes (the last freed block of that size), with
+    /// the call log switched on.
+    fn next_frame(e: &mut Engine, size: u32) -> u32 {
+        let frame = e.mem.alloc(size);
+        e.mem.free(frame);
+        e.call_log = Some(vec![]);
+        frame
+    }
+
+    #[test]
+    fn the_movement_frames_keep_their_locals_at_the_exe_offsets() {
+        // 00967da0 (0xe8 bytes): the verdict word at +0x88, the position copy at +0x94, the
+        // difference at +0x5c.
+        let mut e = engine();
+        let player = new_player(&mut e);
+        let actor = e.mem.alloc(0x40);
+        let position = e.mem.alloc(0x10);
+        slot(&mut e, actor, 0x1f4, eax(position));
+        let other = group(&mut e, &[actor], &[]);
+        manager(&mut e, &[other]);
+        let entry = e.mem.alloc(0x20);
+        e.mem.set_u32(entry + 8, actor);
+        let entries = list(&mut e, &[entry]);
+        double(&mut e, PROCESS_LISTS_ENTRIES, eax(entries));
+        double(&mut e, GROUP_IS_TARGET, eax(1));
+        e.register(LIST_POP_FRONT, |e, a| {
+            e.mem.set_u32(a[0], 0);
+            e.mem.set_u32(a[0] + 4, 0);
+            eax(0)
+        });
+        slot(&mut e, player.addr(), 0x1f4, eax(position));
+        let frame = next_frame(&mut e, 0xe8);
+        e.call(0x00967da0, &args![player]);
+        assert_eq!(
+            calls(&e, GET_SHOULD_ATTACK_ACTOR),
+            vec![vec![actor, player.addr(), 0, frame + 0x88, 1]]
+        );
+        assert_eq!(
+            calls(&e, POINT_SUBTRACT),
+            vec![vec![frame + 0x94, frame + 0x5c, position]]
+        );
+        assert_eq!(calls(&e, POINT_LENGTH), vec![vec![frame + 0x5c]]);
+
+        // 00968690 (0x28 bytes): the velocity at +0x10, the scaled velocity at +4, the sum at
+        // +0x1c.
+        let mut e = engine();
+        let reference = e.mem.alloc(0x40);
+        let position = e.mem.alloc(0x10);
+        double(&mut e, POSITION_OF, eax(position));
+        double(&mut e, GET_CHAR_CONTROLLER, eax(0x77));
+        e.register(VECTOR_SCALE, |_, a| eax(a[1]));
+        let result = e.mem.alloc(0x10);
+        let frame = next_frame(&mut e, 0x28);
+        e.call(0x00968690, &args![reference, result, 2.0f32]);
+        assert_eq!(
+            calls(&e, CONTROLLER_LINEAR_VELOCITY),
+            vec![vec![0x77, frame + 0x10]]
+        );
+        assert_eq!(
+            calls(&e, VECTOR_SCALE),
+            vec![vec![frame + 0x10, frame + 4, 2.0f32.to_bits()]]
+        );
+        assert_eq!(calls(&e, VECTOR_ADD), vec![vec![frame + 0x1c, frame + 4]]);
+
+        // 00969930 (0x40 bytes a marker): the position copy at +0x1c, the difference at +0x10.
+        let mut e = engine();
+        let (player, _) = marker_setup(&mut e, 1);
+        let mine = e.vcall(player.addr(), 0x1f4, &args![]).u32();
+        let frame = next_frame(&mut e, 0x40);
+        e.call(0x00969930, &args![player]);
+        assert_eq!(
+            calls(&e, POINT_SUBTRACT),
+            vec![vec![frame + 0x1c, frame + 0x10, mine]]
+        );
+        assert_eq!(calls(&e, POINT_LENGTH_SQUARED), vec![vec![frame + 0x10]]);
     }
 }

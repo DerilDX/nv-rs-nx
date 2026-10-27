@@ -970,12 +970,14 @@ fn normalise_three(e: &mut Engine, x: &mut X87, f: u32, first: u32, spill: u32) 
 /// its range or `|D|` is too small), writes the contact point (`+0`), the distance (`+0x34`)
 /// and the negated normal (`+0x20`) into the record and sets the byte to 1; every rejection
 /// sets it to 0 and leaves the record alone.
-pub fn is_valid_edge_edge(e: &mut Engine, this: Ptr, valid: Ptr, info: Ptr) {
+/// Answers `valid` (`EAX` at every `RET`; callers test the flag through it, 00db19ed).
+pub fn is_valid_edge_edge(e: &mut Engine, this: Ptr, valid: Ptr, info: Ptr) -> Ptr {
     let (t, info) = (this.addr(), info.addr());
     let ok = e.with_stack(0x60, |e, frame| {
         is_valid_edge_edge_frame(e, frame.addr(), t, info)
     });
     e.mem.set_u8(valid.addr(), u8::from(ok));
+    valid
 }
 
 /// The body of `is_valid_edge_edge` with its frame at `f` (the exe's `ESP + offset` after the
@@ -2664,7 +2666,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00db_0dc0, fn_00db0dc0(Ptr, Ptr, Ptr, u32, u32)),
         entry!(0x00db_0e50, fn_00db0e50(Ptr, u32) -> u32),
         entry!(0x00db_0ec0, check_intersection(Ptr, Ptr) -> u32),
-        entry!(0x00db_15a0, is_valid_edge_edge(Ptr, Ptr, Ptr)),
+        entry!(0x00db_15a0, is_valid_edge_edge(Ptr, Ptr, Ptr) -> Ptr),
         entry!(0x00db_1990, add_additional_edge_helper(Ptr, Ptr, Ptr, f32)),
         entry!(
             0x00db_1d90,
@@ -3004,6 +3006,16 @@ mod tests {
         let info = edge_info(&mut e);
         is_valid_edge_edge(&mut e, Ptr::new(far), Ptr::new(valid), Ptr::new(info));
         assert_eq!(e.mem.u8(valid), 0);
+    }
+
+    #[test]
+    fn is_valid_edge_edge_answers_its_flag_pointer() {
+        let mut e = engine();
+        let t = scene(&mut e);
+        let info = edge_info(&mut e);
+        let valid = e.mem.alloc(4);
+        // EAX is `valid` at every RET; the callers test the flag through it (00db19ed).
+        assert_eq!(e.call(0x00db_15a0, &args![t, valid, info]).u32(), valid);
     }
 
     /// A scene for `add_additional_edge_helper`: transforms at `+0x14` and `+0x18` (identity

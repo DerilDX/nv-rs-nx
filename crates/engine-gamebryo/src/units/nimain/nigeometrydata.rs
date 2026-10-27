@@ -278,7 +278,7 @@ pub fn ni_geometry_data_set_consistency(e: &mut Engine, this: Ptr, consistency: 
 
 // Translated from 00a669c0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `NiGeometryData::GetGroup` (Xbox PDB): answers the static `m_pkGroup` (`011f4880`).
-pub fn ni_geometry_data_get_group(e: &mut Engine) -> u32 {
+pub fn ni_geometry_data_get_group(e: &mut Engine, _this: Ptr) -> u32 {
     e.mem.u32(GEOMETRY_GROUP)
 }
 
@@ -1793,7 +1793,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a6_7090, ni_geometry_data_mark_as_changed(Ptr, u32)),
         entry!(0x00a6_6960, ni_geometry_data_get_texture_set(Ptr, u32) -> u32),
         entry!(0x00a6_7050, ni_geometry_data_set_consistency(Ptr, u32)),
-        entry!(0x00a6_69c0, ni_geometry_data_get_group() -> u32),
+        entry!(0x00a6_69c0, ni_geometry_data_get_group(Ptr) -> u32),
         entry!(0x00a6_69e0, ni_geometry_data_get_active_vertex_count(Ptr) -> u16),
         entry!(
             0x00a6_6bb0,
@@ -2077,7 +2077,7 @@ mod batch_b011_tests {
     fn get_group_and_active_vertex_count() {
         let mut e = engine();
         e.mem.set_u32(GEOMETRY_GROUP, 0x5555);
-        assert_eq!(e.call(0x00a6_69c0, &args![]).u32(), 0x5555);
+        assert_eq!(e.call(0x00a6_69c0, &args![0u32]).u32(), 0x5555);
         let this = data(&mut e);
         e.mem.set_u16(this + 8, 321);
         assert_eq!(e.call(0x00a6_69e0, &args![this]).u16(), 321);

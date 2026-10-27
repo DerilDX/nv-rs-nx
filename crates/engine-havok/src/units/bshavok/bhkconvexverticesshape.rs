@@ -498,9 +498,11 @@ pub fn hk_geometry_destructor(e: &mut Engine, geometry: Ptr) {
 // Translated from 00cce5e0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Constructor of the geometry that `00cce530` destroys (unnamed in the engine map): both
 /// arrays of 16-byte entries (`+0` and `+0xC`) become empty and not owned.
-pub fn fn_00cce5e0(e: &mut Engine, geometry: Ptr) {
+/// Answers `geometry` (`MOV EAX,ECX` first; callers keep it, 00ddadfc).
+pub fn fn_00cce5e0(e: &mut Engine, geometry: Ptr) -> Ptr {
     init_empty_array(e, geometry.addr());
     init_empty_array(e, geometry.addr() + 0xc);
+    geometry
 }
 
 // Translated from 00cce600 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -631,7 +633,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00cce290, fn_00cce290(Ptr)),
         entry!(0x00cce340, bhk_convex_vertices_shape_save_binary(Ptr, u32)),
         entry!(0x00cce530, hk_geometry_destructor(Ptr)),
-        entry!(0x00cce5e0, fn_00cce5e0(Ptr)),
+        entry!(0x00cce5e0, fn_00cce5e0(Ptr) -> Ptr),
         entry!(
             0x00cce600,
             bhk_convex_vertices_shape_build_display_geometry(Ptr, u32, u32)
@@ -672,6 +674,15 @@ mod tests {
     fn bhk_convex_vertices_shape_get_r_t_t_i_returns_the_constant() {
         let mut e = Engine::new();
         assert_eq!(e.call(0x00cc_dc30, &args![]).u32(), 0x0126_86a0);
+    }
+
+    #[test]
+    fn empty_geometry_initialiser_answers_its_geometry() {
+        let mut e = Engine::new();
+        let geometry = e.mem.alloc(0x18);
+        // `MOV EAX,ECX` first; the callers keep the answer (00ddadfc).
+        assert_eq!(e.call(0x00cce5e0, &args![geometry]).u32(), geometry);
+        assert_eq!(e.mem.u32(geometry + 8), 0x8000_0000);
     }
 
     type Calls = Vec<Vec<u32>>;

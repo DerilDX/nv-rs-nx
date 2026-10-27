@@ -4,6 +4,22 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+/// Runs `f` on an exe-shaped frame: a function that aligns `ESP` (`AND ESP,0xfffffff0`) and
+/// then reserves `below` bytes (its `SUB ESP` and pushes) has its frame `below` bytes under a
+/// 16-byte boundary; `f` gets the frame's lowest address.
+fn with_aligned_frame<R>(e: &mut Engine, below: u32, f: impl FnOnce(&mut Engine, u32) -> R) -> R {
+    e.with_stack(below + 0x10, |e, raw| {
+        let boundary = (raw.addr() + below + 0xf) & !0xf;
+        f(e, boundary - below)
+    })
+}
+
+/// The frame base [`with_aligned_frame`] picks for a block at `raw` (tests).
+#[cfg(test)]
+fn aligned_frame_at(raw: u32, below: u32) -> u32 {
+    ((raw + below + 0xf) & !0xf) - below
+}
+
 /// The memory router (`0x00c8_5750`): its field `+0x10` is the allocator the block is freed through.
 const MEMORY_ROUTER: u32 = 0x00c8_5750;
 
@@ -801,10 +817,13 @@ pub fn hkp_simple_constraint_contact_mgr_set_contact_point_properties(
     ));
     let root = x87_store32(e.call(CI_SQRT, &args![x87_load32(product)]).f64());
     let value = x87_quiet_bits(root);
-    let value_at = e.mem.alloc(4);
-    e.mem.set_u32(value_at, value);
-    e.call(UFLOAT8_ASSIGN, &args![properties + 0xc, value_at]);
-    e.mem.free(value_at);
+    // The exe's frame (`PUSH ECX` and four pushes): 0x14 bytes, the root stored in the `ECX` slot
+    // at +0x10 (00cfd819, 00cfd832).
+    e.with_stack(0x14, |e, frame| {
+        let value_at = frame.addr() + 0x10;
+        e.mem.set_u32(value_at, value);
+        e.call(UFLOAT8_ASSIGN, &args![properties + 0xc, value_at]);
+    });
     let product = x87_store32(x87_mul(
         x87_load32(e.mem.u32(body_b + 0x94)),
         x87_m32(e.mem.u32(body_a + 0x94)),
@@ -907,42 +926,50 @@ pub fn hkp_simple_contact_constraint_data_free_contact_point(
         .wrapping_add(0x3f);
     let flags = e.mem.u8(slot);
     e.mem.set_u8(slot, flags & 0xfd);
-    let flag_byte = e.mem.alloc(4);
-    e.mem.set_u8(flag_byte, 0);
-    let current = e.mem.u32(data + 0x28);
-    let new_atom = e
-        .call(OPTIMIZE_CAPACITY, &args![current, 1u32, flag_byte])
-        .u32();
-    e.mem.set_u32(data + 0x28, new_atom);
-    fn_00cfd7d0(e, Ptr::new(data + 0xc), index as i32);
-    let constraint = e.mem.u32(data + 0x24);
-    let block = e.mem.u32(constraint + 0x30);
-    if block != 0 {
-        let first_counter = e.mem.u32(owner + OWNER_COUNTER_FIRST).wrapping_sub(size);
-        e.mem.set_u32(owner + OWNER_COUNTER_FIRST, first_counter);
-        let second_counter = e.mem.u32(owner + OWNER_COUNTER_SECOND).wrapping_sub(second);
-        e.mem.set_u32(owner + OWNER_COUNTER_SECOND, second_counter);
-        let third_counter = e.mem.u32(owner + OWNER_COUNTER_THIRD).wrapping_sub(third);
-        e.mem.set_u32(owner + OWNER_COUNTER_THIRD, third_counter);
-        let block = e.mem.u32(constraint + 0x30);
-        for (offset, share) in [(0x16u32, second), (0x18, third), (0x14, size)] {
-            let value = e.mem.u16(block + offset).wrapping_sub(share as u16);
-            e.mem.set_u16(block + offset, value);
-        }
-    }
-    if e.mem.u8(flag_byte) != 0 {
+    // The exe's frame (`SUB ESP,0x18`, four pushes) is 0x28 bytes; it keeps the flag byte in
+    // its own `id` argument slot, +0x30 past the return address at +0x28 (00cfd287), so the frame
+    // reaches over the arguments as the caller pushed them.
+    let new_atom = e.with_stack(0x34, |e, frame| {
+        let frame = frame.addr();
+        e.mem.set_u32(frame + 0x2c, owner);
+        e.mem.set_u32(frame + 0x30, u32::from(id));
+        let flag_byte = frame + 0x30;
+        e.mem.set_u8(flag_byte, 0);
         let current = e.mem.u32(data + 0x28);
-        let atom_size = u32::from(e.mem.u16(current + 2));
+        let new_atom = e
+            .call(OPTIMIZE_CAPACITY, &args![current, 1u32, flag_byte])
+            .u32();
+        e.mem.set_u32(data + 0x28, new_atom);
+        fn_00cfd7d0(e, Ptr::new(data + 0xc), index as i32);
         let constraint = e.mem.u32(data + 0x24);
-        e.call(
-            UPDATE_FATHER_OF_MOVED_ATOM,
-            &args![constraint, old_atom, current, atom_size],
-        );
-        let current = e.mem.u32(data + 0x28);
-        e.mem
-            .set_u32(data + 0x2c, u32::from(e.mem.u16(current + 2)));
-    }
-    e.mem.free(flag_byte);
+        let block = e.mem.u32(constraint + 0x30);
+        if block != 0 {
+            let first_counter = e.mem.u32(owner + OWNER_COUNTER_FIRST).wrapping_sub(size);
+            e.mem.set_u32(owner + OWNER_COUNTER_FIRST, first_counter);
+            let second_counter = e.mem.u32(owner + OWNER_COUNTER_SECOND).wrapping_sub(second);
+            e.mem.set_u32(owner + OWNER_COUNTER_SECOND, second_counter);
+            let third_counter = e.mem.u32(owner + OWNER_COUNTER_THIRD).wrapping_sub(third);
+            e.mem.set_u32(owner + OWNER_COUNTER_THIRD, third_counter);
+            let block = e.mem.u32(constraint + 0x30);
+            for (offset, share) in [(0x16u32, second), (0x18, third), (0x14, size)] {
+                let value = e.mem.u16(block + offset).wrapping_sub(share as u16);
+                e.mem.set_u16(block + offset, value);
+            }
+        }
+        if e.mem.u8(flag_byte) != 0 {
+            let current = e.mem.u32(data + 0x28);
+            let atom_size = u32::from(e.mem.u16(current + 2));
+            let constraint = e.mem.u32(data + 0x24);
+            e.call(
+                UPDATE_FATHER_OF_MOVED_ATOM,
+                &args![constraint, old_atom, current, atom_size],
+            );
+            let current = e.mem.u32(data + 0x28);
+            e.mem
+                .set_u32(data + 0x2c, u32::from(e.mem.u16(current + 2)));
+        }
+        new_atom
+    });
     let flags = e.mem.u16(new_atom + 0x10);
     e.mem.set_u16(new_atom + 0x10, flags | 5);
     count.wrapping_sub(1) as i32
@@ -966,22 +993,25 @@ pub fn hkp_simple_constraint_contact_mgr_remove_contact_point_impl(
     let properties = contact_point_properties(e, mgr, u32::from(id));
     let body_b = e.mem.u32(mgr + 0x5c);
     let body_a = e.mem.u32(mgr + 0x58);
-    let event = e.mem.alloc(0x20);
-    e.mem.set_u16(event, id);
-    e.mem.set_u32(event + 4, properties);
-    e.mem.set_u32(event + 8, body_a);
-    e.mem.set_u32(event + 0xc, body_b);
-    e.mem.set_u32(event + 0x14, mgr);
-    e.mem.set_u32(event + 0x18, owner.addr());
-    let world = e.mem.u32(mgr + 0xc);
-    e.call(FIRE_CONTACT_POINT_REMOVED, &args![world, event]);
-    if e.mem.u16(body_a + 0x204) != 0 {
-        e.call(FIRE_CONTACT_POINT_REMOVED_INTERNAL, &args![body_a, event]);
-    }
-    if e.mem.u16(body_b + 0x204) != 0 {
-        e.call(FIRE_CONTACT_POINT_REMOVED_INTERNAL, &args![body_b, event]);
-    }
-    e.mem.free(event);
+    // The exe's frame (`SUB ESP,0x1c`, four pushes): 0x2c bytes, the removed-point event at
+    // +0x10 (00cfd36a..00cfd388).
+    e.with_stack(0x2c, |e, frame| {
+        let event = frame.addr() + 0x10;
+        e.mem.set_u16(event, id);
+        e.mem.set_u32(event + 4, properties);
+        e.mem.set_u32(event + 8, body_a);
+        e.mem.set_u32(event + 0xc, body_b);
+        e.mem.set_u32(event + 0x14, mgr);
+        e.mem.set_u32(event + 0x18, owner.addr());
+        let world = e.mem.u32(mgr + 0xc);
+        e.call(FIRE_CONTACT_POINT_REMOVED, &args![world, event]);
+        if e.mem.u16(body_a + 0x204) != 0 {
+            e.call(FIRE_CONTACT_POINT_REMOVED_INTERNAL, &args![body_a, event]);
+        }
+        if e.mem.u16(body_b + 0x204) != 0 {
+            e.call(FIRE_CONTACT_POINT_REMOVED_INTERNAL, &args![body_b, event]);
+        }
+    });
     let remaining =
         hkp_simple_contact_constraint_data_free_contact_point(e, Ptr::new(mgr + 0x14), owner, id);
     if remaining == 0 {
@@ -1031,105 +1061,105 @@ pub fn hkp_simple_constraint_contact_mgr_add_contact_point_impl(
     if count == 0 {
         e.vcall(owner, 0xc, &args![mgr + 0x44]);
     }
-    let locals = e.mem.alloc(0x40);
-    let (point_out, properties_out) = (locals + 0xc, locals);
-    let id_word = e.call(
-        ALLOCATE_CONTACT_POINT,
-        &args![mgr + 0x14, owner, point_out, properties_out],
-    );
-    let id = id_word.u32() & 0xffff;
-    let point = e.mem.u32(point_out);
-    let lanes = e.mem.bytes(contact, 0x20);
-    e.mem.write(point, &lanes);
-    let properties = e.mem.u32(properties_out);
-    let body_a = hkp_simple_constraint_contact_mgr_set_contact_point_properties(
-        e,
-        this,
-        first,
-        second,
-        10000,
-        Ptr::new(properties),
-    );
-    let body_b = e.mem.u32(mgr + 0x5c) ^ e.mem.u32(mgr + 0x58) ^ body_a;
-    let velocity_a = e.mem.alloc(0x10);
-    let velocity_b = e.mem.alloc(0x10);
-    e.call(ENTITY_POINT_VELOCITY, &args![body_a, contact, velocity_a]);
-    e.call(ENTITY_POINT_VELOCITY, &args![body_b, contact, velocity_b]);
-    e.mem.set_u32(properties, 0);
-    let normal = [0u32, 1, 2].map(|lane| e.mem.f32(contact + 0x10 + 4 * lane));
-    let difference = [0u32, 1, 2]
-        .map(|lane| e.mem.f32(velocity_a + 4 * lane) - e.mem.f32(velocity_b + 4 * lane));
-    e.mem.set_u32(properties + 8, 0);
-    let squares = [0, 1, 2].map(|lane| difference[lane] * normal[lane]);
-    let dot = squares[2] + (squares[1] + squares[0]);
-    e.mem.free(velocity_a);
-    e.mem.free(velocity_b);
-    let event = e.mem.alloc(0x40);
-    e.call(
-        FILL_CONTACT_POINT_ADDED_EVENT,
-        &args![
-            event,
-            id,
-            mgr,
-            info,
-            holder,
+    // The exe aligns ESP, then `SUB ESP,0x74` and three pushes: a 0x80-byte frame with the
+    // properties pointer at +0xc and the point pointer at +0x18 (00cfcfc5, 00cfcfca), the
+    // velocities at +0x20 and +0x30 (00cfd013, 00cfd026) and the added-point event at +0x4c
+    // (00cfd09e, 00cfd0aa).
+    with_aligned_frame(e, 0x80, |e, frame| {
+        let (point_out, properties_out) = (frame + 0x18, frame + 0xc);
+        let id_word = e.call(
+            ALLOCATE_CONTACT_POINT,
+            &args![mgr + 0x14, owner, point_out, properties_out],
+        );
+        let id = id_word.u32() & 0xffff;
+        let point = e.mem.u32(point_out);
+        let lanes = e.mem.bytes(contact, 0x20);
+        e.mem.write(point, &lanes);
+        let properties = e.mem.u32(properties_out);
+        let body_a = hkp_simple_constraint_contact_mgr_set_contact_point_properties(
+            e,
+            this,
             first,
             second,
-            contact,
-            extra,
-            properties,
-            x87_quiet_bits(dot.to_bits())
-        ],
-    );
-    let world = e.mem.u32(mgr + 0xc);
-    e.call(FIRE_CONTACT_POINT_ADDED, &args![world, event]);
-    if e.mem.u16(body_a + 0x204) != 0 {
-        e.call(FIRE_CONTACT_POINT_ADDED_INTERNAL, &args![body_a, event]);
-    }
-    if e.mem.u16(body_b + 0x204) != 0 {
-        e.call(FIRE_CONTACT_POINT_ADDED_INTERNAL, &args![body_b, event]);
-    }
-    let status = e.mem.u32(event + 0x20);
-    let delay = e.mem.u16(event + 0x32);
-    e.mem.free(event);
-    if status == 1 {
-        e.vcall(mgr, 0x14, &args![id, owner]);
-        e.mem.free(locals);
-        return 0xffff;
-    }
-    e.mem.set_u16(mgr + 0x12, delay);
-    let mut answered = false;
-    if e.mem.u8(info + 0x6d) != 0 {
-        let strength = e.mem.u8(properties + 0xd);
-        let level = x87_store32(x87_mul(f64::from(strength), e.global::<f64>(ONE_OVER_128)));
-        let zero = x87_load32(e.global::<u32>(FLOAT_ZERO));
-        if x87_load32(level) == zero
-            && e.mem.u16(body_a + 0x204) == 0
-            && e.mem.u16(body_b + 0x204) == 0
-        {
-            let mass_b = x87_store32(e.call(ENTITY_MASS_00CAC860, &args![body_b]).f64());
-            let mass_a = e.call(ENTITY_MASS_00CAC860, &args![body_a]).f64();
-            let sum = x87_store32(x87_add(mass_a, x87_m32(mass_b)));
-            let tiny: f64 = e.global(TINY);
-            let inverse = x87_store32(x87_div(1.0, x87_add(x87_load32(sum), tiny)));
-            let scale: f64 = e.global(MINUS_ONE_FIFTH);
-            let impulse = x87_store32(x87_mul(
-                x87_mul(x87_load32(inverse), scale),
-                x87_m32(dot.to_bits()),
-            ));
-            e.mem.set_u32(properties, impulse);
-            e.mem.set_u32(properties + 4, 0);
-            let fourth = x87_quiet_bits(e.mem.u32(contact + 0x1c));
-            e.mem.set_u32(properties + 0x10, fourth);
-            answered = true;
+            10000,
+            Ptr::new(properties),
+        );
+        let body_b = e.mem.u32(mgr + 0x5c) ^ e.mem.u32(mgr + 0x58) ^ body_a;
+        let velocity_a = frame + 0x20;
+        let velocity_b = frame + 0x30;
+        e.call(ENTITY_POINT_VELOCITY, &args![body_a, contact, velocity_a]);
+        e.call(ENTITY_POINT_VELOCITY, &args![body_b, contact, velocity_b]);
+        e.mem.set_u32(properties, 0);
+        let normal = [0u32, 1, 2].map(|lane| e.mem.f32(contact + 0x10 + 4 * lane));
+        let difference = [0u32, 1, 2]
+            .map(|lane| e.mem.f32(velocity_a + 4 * lane) - e.mem.f32(velocity_b + 4 * lane));
+        e.mem.set_u32(properties + 8, 0);
+        let squares = [0, 1, 2].map(|lane| difference[lane] * normal[lane]);
+        let dot = squares[2] + (squares[1] + squares[0]);
+        let event = frame + 0x4c;
+        e.call(
+            FILL_CONTACT_POINT_ADDED_EVENT,
+            &args![
+                event,
+                id,
+                mgr,
+                info,
+                holder,
+                first,
+                second,
+                contact,
+                extra,
+                properties,
+                x87_quiet_bits(dot.to_bits())
+            ],
+        );
+        let world = e.mem.u32(mgr + 0xc);
+        e.call(FIRE_CONTACT_POINT_ADDED, &args![world, event]);
+        if e.mem.u16(body_a + 0x204) != 0 {
+            e.call(FIRE_CONTACT_POINT_ADDED_INTERNAL, &args![body_a, event]);
         }
-    }
-    if !answered {
-        let removal_owner = e.mem.u32(mgr + 0x38);
-        e.vcall(owner, 0x14, &args![removal_owner, 1u32]);
-    }
-    e.mem.free(locals);
-    id as u16
+        if e.mem.u16(body_b + 0x204) != 0 {
+            e.call(FIRE_CONTACT_POINT_ADDED_INTERNAL, &args![body_b, event]);
+        }
+        let status = e.mem.u32(event + 0x20);
+        let delay = e.mem.u16(event + 0x32);
+        if status == 1 {
+            e.vcall(mgr, 0x14, &args![id, owner]);
+            return 0xffff;
+        }
+        e.mem.set_u16(mgr + 0x12, delay);
+        let mut answered = false;
+        if e.mem.u8(info + 0x6d) != 0 {
+            let strength = e.mem.u8(properties + 0xd);
+            let level = x87_store32(x87_mul(f64::from(strength), e.global::<f64>(ONE_OVER_128)));
+            let zero = x87_load32(e.global::<u32>(FLOAT_ZERO));
+            if x87_load32(level) == zero
+                && e.mem.u16(body_a + 0x204) == 0
+                && e.mem.u16(body_b + 0x204) == 0
+            {
+                let mass_b = x87_store32(e.call(ENTITY_MASS_00CAC860, &args![body_b]).f64());
+                let mass_a = e.call(ENTITY_MASS_00CAC860, &args![body_a]).f64();
+                let sum = x87_store32(x87_add(mass_a, x87_m32(mass_b)));
+                let tiny: f64 = e.global(TINY);
+                let inverse = x87_store32(x87_div(1.0, x87_add(x87_load32(sum), tiny)));
+                let scale: f64 = e.global(MINUS_ONE_FIFTH);
+                let impulse = x87_store32(x87_mul(
+                    x87_mul(x87_load32(inverse), scale),
+                    x87_m32(dot.to_bits()),
+                ));
+                e.mem.set_u32(properties, impulse);
+                e.mem.set_u32(properties + 4, 0);
+                let fourth = x87_quiet_bits(e.mem.u32(contact + 0x1c));
+                e.mem.set_u32(properties + 0x10, fourth);
+                answered = true;
+            }
+        }
+        if !answered {
+            let removal_owner = e.mem.u32(mgr + 0x38);
+            e.vcall(owner, 0x14, &args![removal_owner, 1u32]);
+        }
+        id as u16
+    })
 }
 
 /// This unit's translated functions, by exe address.
@@ -2564,5 +2594,86 @@ mod contact_point_tests {
         e.mem.set_u32(holder + 4, m.owner);
         add(&mut e, &m, info, holder, contact);
         assert_eq!(calls(&seen, OWNER_SLOT_14).len(), 1);
+    }
+
+    #[test]
+    fn the_properties_root_is_stored_in_the_ecx_slot_of_the_exe_frame() {
+        let (mut e, seen) = base_engine();
+        let m = manager(&mut e, 1);
+        let end = node(&mut e, 6, 0);
+        e.mem.set_u32(m.mgr + 0x58, end + 0x20);
+        let first = node(&mut e, 5, end);
+        record(&mut e, &seen, UFLOAT8_ASSIGN, Ret::default());
+        e.register(CI_SQRT, |_, _| Ret::default());
+        let properties = e.mem.alloc(0x40);
+        let frame = e.mem.alloc(0x14);
+        e.mem.free(frame);
+        e.call(
+            0x00cf_d800,
+            &args![m.mgr, first, first, 10000u32, properties],
+        );
+        assert_eq!(calls(&seen, UFLOAT8_ASSIGN)[0][1], frame + 0x10);
+    }
+
+    #[test]
+    fn freeing_a_point_keeps_the_moved_flag_in_its_id_argument_slot() {
+        let (mut e, seen) = base_engine();
+        let m = manager(&mut e, 3);
+        let constraint = e.mem.alloc(0x40);
+        e.mem.set_u32(m.mgr + 0x38, constraint);
+        let flag_seen = Rc::clone(&seen);
+        e.register_double(OPTIMIZE_CAPACITY, move |_, a| {
+            flag_seen.borrow_mut().push((OPTIMIZE_CAPACITY, a.to_vec()));
+            a[0].into_ret()
+        });
+        let frame = e.mem.alloc(0x34);
+        e.mem.free(frame);
+        e.call(0x00cf_d200, &args![m.mgr + 0x14, m.owner, 1u32]);
+        // The flag byte is the low byte of the `id` word, +0x30 of the frame; the owner sits at
+        // +0x2c as the caller pushed it.
+        assert_eq!(calls(&seen, OPTIMIZE_CAPACITY)[0][2], frame + 0x30);
+        assert_eq!(e.mem.u32(frame + 0x2c), m.owner);
+    }
+
+    #[test]
+    fn the_removed_point_event_sits_at_0x10_of_the_exe_frame() {
+        let (mut e, seen) = base_engine();
+        let m = manager(&mut e, 1);
+        record(&mut e, &seen, FIRE_CONTACT_POINT_REMOVED, Ret::default());
+        e.register(OPTIMIZE_CAPACITY, |_, a| a[0].into_ret());
+        let constraint = e.mem.alloc(0x40);
+        e.mem.set_u32(m.mgr + 0x38, constraint);
+        let frame = e.mem.alloc(0x2c);
+        e.mem.free(frame);
+        e.call(0x00cf_d320, &args![m.mgr, 0u32, m.owner]);
+        assert_eq!(calls(&seen, FIRE_CONTACT_POINT_REMOVED)[0][1], frame + 0x10);
+    }
+
+    #[test]
+    fn adding_a_point_keeps_its_outputs_velocities_and_event_in_the_aligned_frame() {
+        let (mut e, seen, m, _properties, contact) = add_rig(0, 0);
+        let info = e.mem.alloc(0x100);
+        let holder = e.mem.alloc(8);
+        e.mem.set_u32(holder + 4, m.owner);
+        let raw = e.mem.alloc(0x90);
+        e.mem.free(raw);
+        e.call_log = Some(vec![]);
+        add(&mut e, &m, info, holder, contact);
+        let logged = |address: u32| -> Vec<Vec<u32>> {
+            e.call_log
+                .as_ref()
+                .unwrap()
+                .iter()
+                .filter(|c| c.0 == address)
+                .map(|c| c.1.clone())
+                .collect()
+        };
+        let frame = aligned_frame_at(raw, 0x80);
+        let fill = &calls(&seen, FILL_CONTACT_POINT_ADDED_EVENT)[0];
+        assert_eq!(fill[0], frame + 0x4c);
+        let allocated = &logged(ALLOCATE_CONTACT_POINT)[0];
+        assert_eq!(allocated[2..4], [frame + 0x18, frame + 0xc]);
+        let velocities: Vec<u32> = logged(ENTITY_POINT_VELOCITY).iter().map(|c| c[2]).collect();
+        assert_eq!(velocities, vec![frame + 0x20, frame + 0x30]);
     }
 }

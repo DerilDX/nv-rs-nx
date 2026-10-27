@@ -35,47 +35,50 @@ const BASE_OBJECT_VTABLE: u32 = 0x0102_e388;
 /// 0 and, unless the capacity word's sign bit is set, frees the array's storage through the
 /// router's allocator (virtual function `+0x10`: data, capacity times 4).
 pub fn fn_00de0fe0(e: &mut Engine, shape: u32, second: u32, third: u32) {
-    let frame = e.mem.alloc(0x20);
-    let environment = frame;
-    let builder = frame + 0xc;
-    let array = frame;
-    e.call(ENVIRONMENT_CONSTRUCTOR, &args![environment]);
-    e.call(BUILDER_CONSTRUCTOR, &args![builder, environment]);
-    e.mem.set_u32(array, 0);
-    e.mem.set_u32(array + 4, 0);
-    e.mem.set_u32(array + 8, 0x8000_0000);
-    e.call(BUILD_DISPLAY_GEOMETRIES, &args![builder, shape, array]);
-    let target = e.mem.u32(DISPLAY_OBJECT);
-    e.call(
-        PROCESS_GEOMETRIES,
-        &args![target, array, second, third, 0u32, shape],
-    );
-    if e.mem.u32(array + 4) != 0 {
-        loop {
-            let data = e.mem.u32(array);
-            let first = e.mem.u32(data);
-            if first != 0 {
-                e.vcall(first, 0, &args![1u32]);
+    // The exe's frame (`SUB ESP,0x20`, one push): 0x24 bytes, the environment and later the
+    // geometry array at +0x4 (00de0fe4, 00de0ffd) and the builder at +0x10 (00de0ff0).
+    e.with_stack(0x24, |e, frame| {
+        let frame = frame.addr();
+        let environment = frame + 4;
+        let builder = frame + 0x10;
+        let array = frame + 4;
+        e.call(ENVIRONMENT_CONSTRUCTOR, &args![environment]);
+        e.call(BUILDER_CONSTRUCTOR, &args![builder, environment]);
+        e.mem.set_u32(array, 0);
+        e.mem.set_u32(array + 4, 0);
+        e.mem.set_u32(array + 8, 0x8000_0000);
+        e.call(BUILD_DISPLAY_GEOMETRIES, &args![builder, shape, array]);
+        let target = e.mem.u32(DISPLAY_OBJECT);
+        e.call(
+            PROCESS_GEOMETRIES,
+            &args![target, array, second, third, 0u32, shape],
+        );
+        if e.mem.u32(array + 4) != 0 {
+            loop {
+                let data = e.mem.u32(array);
+                let first = e.mem.u32(data);
+                if first != 0 {
+                    e.vcall(first, 0, &args![1u32]);
+                }
+                let data = e.mem.u32(array);
+                let size = e.mem.u32(array + 4).wrapping_sub(1);
+                e.mem.set_u32(array + 4, size);
+                if size == 0 {
+                    break;
+                }
+                let last = e.mem.u32(data.wrapping_add(size.wrapping_mul(4)));
+                e.mem.set_u32(data, last);
             }
-            let data = e.mem.u32(array);
-            let size = e.mem.u32(array + 4).wrapping_sub(1);
-            e.mem.set_u32(array + 4, size);
-            if size == 0 {
-                break;
-            }
-            let last = e.mem.u32(data.wrapping_add(size.wrapping_mul(4)));
-            e.mem.set_u32(data, last);
         }
-    }
-    let router = e.call(MEMORY_ROUTER, &args![]).u32();
-    let allocator = e.mem.u32(router + 0x10);
-    let capacity = e.mem.u32(array + 8);
-    e.mem.set_u32(array + 4, 0);
-    if (capacity as i32) >= 0 {
-        let data = e.mem.u32(array);
-        e.vcall(allocator, 0x10, &args![data, (capacity & 0x3fff_ffff) << 2]);
-    }
-    e.mem.free(frame);
+        let router = e.call(MEMORY_ROUTER, &args![]).u32();
+        let allocator = e.mem.u32(router + 0x10);
+        let capacity = e.mem.u32(array + 8);
+        e.mem.set_u32(array + 4, 0);
+        if (capacity as i32) >= 0 {
+            let data = e.mem.u32(array);
+            e.vcall(allocator, 0x10, &args![data, (capacity & 0x3fff_ffff) << 2]);
+        }
+    });
 }
 
 // Translated from 00de10b0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -219,7 +222,11 @@ mod tests {
             seen.borrow_mut().push(("free array", a[1..].to_vec()));
             Ret::default()
         });
+        // The environment and the array sit at +0x4 of the exe's 0x24-byte frame.
+        let pinned = e.mem.alloc(0x24);
+        e.mem.free(pinned);
         e.call(0x00de_0fe0, &args![0x1111u32, 0x2222u32, 0x3333u32]);
+        assert_eq!(frame.get(), pinned + 4);
         let size_when_freed = size_when_freed.borrow().clone();
         Outcome {
             log,

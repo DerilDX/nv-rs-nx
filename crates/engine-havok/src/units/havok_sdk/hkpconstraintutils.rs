@@ -360,13 +360,15 @@ pub fn get_constraint_motors(
 /// first body is moved to `(1 - blend) * world_b + blend * [body_b + 0x120]` (`00ca8800`), takes
 /// the second body's linear and angular velocity (`+0x1b0`, `+0x1c0`; `005616d0`, `00561800`)
 /// and `*out` is 1; otherwise `*out` is 0.
+/// Answers `out`: the exe leaves it in `EAX` at every `RET` (the hkBool/hkResult result
+/// returned through a pointer, which callers read through `EAX`).
 pub fn check_and_fix_constraint(
     e: &mut Engine,
     out: Ptr,
     constraint: Ptr,
     max_distance: u32,
     blend: u32,
-) {
+) -> Ptr {
     e.with_stack(0x60, |e, frame| {
         let pivot_a = frame.addr() + 0x20;
         let pivot_b = frame.addr() + 0x30;
@@ -405,6 +407,7 @@ pub fn check_and_fix_constraint(
             e.mem.set_u8(out.addr(), 0);
         }
     });
+    out
 }
 
 /// This unit's translated functions, by exe address.
@@ -414,7 +417,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e5_aac0, convert_to_limits(Ptr) -> Ptr),
         entry!(0x00e5_ad40, get_constraint_pivots(Ptr, Ptr, Ptr) -> u32),
         entry!(0x00e5_ae60, get_constraint_motors(Ptr, Ptr, Ptr, Ptr) -> u32),
-        entry!(0x00e5_af80, check_and_fix_constraint(Ptr, Ptr, u32, u32)),
+        entry!(0x00e5_af80, check_and_fix_constraint(Ptr, Ptr, u32, u32) -> Ptr),
     ]
 }
 
@@ -910,6 +913,23 @@ mod havok_a03_tests {
                 (SET_LINEAR_VELOCITY, vec![body_a, body_b + 0x1b0]),
                 (SET_ANGULAR_VELOCITY, vec![body_a, body_b + 0x1c0]),
             ]
+        );
+    }
+
+    #[test]
+    fn check_and_fix_moves_the_first_body_when_the_pivots_are_too_far_apart_answers_its_result_pointer(
+    ) {
+        let (mut e, this, _body_a, _body_b, _log) = fix_rig();
+        let out = e.mem.alloc(4);
+        e.mem.set_u8(out, 9);
+        // The exe leaves the result pointer in EAX at every RET; callers read through it.
+        assert_eq!(
+            e.call(
+                0x00e5_af80,
+                &args![out, this, 2.0f32.to_bits(), 0.25f32.to_bits()],
+            )
+            .u32(),
+            args![out][0]
         );
     }
 

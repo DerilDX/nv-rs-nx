@@ -172,32 +172,40 @@ pub fn hkx_attribute_holder_find_attribute_variant_by_name(
     name: u32,
 ) -> Ptr {
     let index = fn_00e5c490(e, this, name);
-    let null_source = e.mem.alloc(8);
-    let temporary = e.mem.alloc(4);
-    let slot;
-    if index >= 0 {
-        slot = e
-            .mem
-            .u32(this.addr() + 4)
-            .wrapping_add((index as u32).wrapping_mul(8))
-            .wrapping_add(4);
-    } else {
-        slot = e.call(REF_PTR_COPY, &args![temporary, null_source]).u32();
-    }
-    let value = e.mem.u32(slot);
-    if value != 0 {
-        e.call(ADD_REFERENCE, &args![value]);
-    }
-    let value = e.mem.u32(slot);
-    e.mem.set_u32(out.addr(), value);
-    if index < 0 {
-        let held = e.mem.u32(temporary);
-        if held != 0 {
-            e.call(REMOVE_REFERENCE, &args![held]);
+    // The exe's frame (`SUB ESP,0x8`, two pushes) taken with the arguments: the null source at
+    // +0x8 (00e5c4e7); the temporary is the `name` argument's own slot, +0x18 past the return
+    // address at +0x10 (00e5c4f8).
+    e.with_stack(0x1c, |e, frame| {
+        let frame = frame.addr();
+        let null_source = frame + 8;
+        e.mem.set_u32(null_source, 0);
+        e.mem.set_u32(null_source + 4, 0);
+        let temporary = frame + 0x18;
+        e.mem.set_u32(frame + 0x14, out.addr());
+        e.mem.set_u32(temporary, name);
+        let slot;
+        if index >= 0 {
+            slot = e
+                .mem
+                .u32(this.addr() + 4)
+                .wrapping_add((index as u32).wrapping_mul(8))
+                .wrapping_add(4);
+        } else {
+            slot = e.call(REF_PTR_COPY, &args![temporary, null_source]).u32();
         }
-    }
-    e.mem.free(temporary);
-    e.mem.free(null_source);
+        let value = e.mem.u32(slot);
+        if value != 0 {
+            e.call(ADD_REFERENCE, &args![value]);
+        }
+        let value = e.mem.u32(slot);
+        e.mem.set_u32(out.addr(), value);
+        if index < 0 {
+            let held = e.mem.u32(temporary);
+            if held != 0 {
+                e.call(REMOVE_REFERENCE, &args![held]);
+            }
+        }
+    });
     out
 }
 
@@ -215,34 +223,38 @@ pub fn hkx_attribute_holder_find_attribute_object_by_name(
     name: u32,
     class_record: u32,
 ) -> u32 {
-    let variant = e.mem.alloc(4);
-    hkx_attribute_holder_find_attribute_variant_by_name(e, this, Ptr::new(variant), name);
-    let object = e.mem.u32(variant);
-    let answer = if object == 0 {
-        0
-    } else {
-        let mut matches = true;
-        if class_record != 0 {
-            let class = e.call(REF_VARIANT_GET_CLASS, &args![variant]).u32();
-            let variant_name = e.call(CLASS_GET_NAME, &args![class]).u32();
-            let record_name = e.call(CLASS_GET_NAME, &args![class_record]).u32();
-            matches = e
-                .call(STRING_CASECMP, &args![record_name, variant_name])
-                .u32()
-                == 0;
-        }
-        let held = e.mem.u32(variant);
-        if held != 0 {
-            e.call(REMOVE_REFERENCE, &args![held]);
-        }
-        if matches {
-            held
-        } else {
+    // The exe's frame (one push) taken with the arguments: the variant is the `name` argument's
+    // own slot, +0x8 past the return address at +0x4 (00e5c546).
+    e.with_stack(0x10, |e, frame| {
+        let variant = frame.addr() + 8;
+        e.mem.set_u32(variant, name);
+        e.mem.set_u32(variant + 4, class_record);
+        hkx_attribute_holder_find_attribute_variant_by_name(e, this, Ptr::new(variant), name);
+        let object = e.mem.u32(variant);
+        if object == 0 {
             0
+        } else {
+            let mut matches = true;
+            if class_record != 0 {
+                let class = e.call(REF_VARIANT_GET_CLASS, &args![variant]).u32();
+                let variant_name = e.call(CLASS_GET_NAME, &args![class]).u32();
+                let record_name = e.call(CLASS_GET_NAME, &args![class_record]).u32();
+                matches = e
+                    .call(STRING_CASECMP, &args![record_name, variant_name])
+                    .u32()
+                    == 0;
+            }
+            let held = e.mem.u32(variant);
+            if held != 0 {
+                e.call(REMOVE_REFERENCE, &args![held]);
+            }
+            if matches {
+                held
+            } else {
+                0
+            }
         }
-    };
-    e.mem.free(variant);
-    answer
+    })
 }
 
 /// This unit's translated functions, by exe address.
@@ -417,13 +429,16 @@ mod tests {
         let out = e.mem.alloc(4);
         e.mem.set_u32(out, 0x5555);
         let name = put_text(&mut e, b"zz");
+        let frame = e.mem.alloc(0x1c);
+        e.mem.free(frame);
         assert_eq!(e.call(0x00e5_c4d0, &args![this, out, name]).u32(), out);
         assert_eq!(e.mem.u32(out), 0);
         let events = events.borrow();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].0, "copy");
-        // The destination is a temporary the exe keeps on its stack, the source a null word.
-        assert_eq!(events[0].1.len(), 2);
+        // The destination is a temporary the exe keeps on its stack, the source a null word:
+        // the `name` argument's slot (+0x18) and +0x8 of the exe's frame.
+        assert_eq!(events[0].1, vec![frame + 0x18, frame + 8]);
     }
 
     /// `hkRefVariant::getClass` answers the class record stored at the variant's object
@@ -464,10 +479,14 @@ mod tests {
         let wanted_name = put_text(&mut e, b"HKQUATERNION");
         let wanted = e.mem.alloc(8);
         e.mem.set_u32(wanted, wanted_name);
+        // The variant is the `name` argument's own slot, +0x8 of the exe's 0x10 bytes.
+        let frame = e.mem.alloc(0x10);
+        e.mem.free(frame);
         assert_eq!(
             e.call(0x00e5_c540, &args![this, name, wanted]).u32(),
             object
         );
+        assert_eq!(e.mem.u32(frame + 8), object);
         assert_eq!(
             *events.borrow(),
             vec![("add", vec![object]), ("remove", vec![object])]

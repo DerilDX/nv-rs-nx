@@ -23,21 +23,29 @@ const FORMAT_BINARY: u32 = 2;
 /// Answers `out`.
 pub fn hk_tagfile_reader_detect_format(e: &mut Engine, out: u32, stream: u32) -> u32 {
     e.vcall(stream, 0x1c, &args![0x10u32]);
-    let buffer = e.mem.alloc(16);
-    let read = e.vcall(stream, 0x10, &args![buffer, 0x10u32]).u32();
-    if read != 0x10 {
-        e.mem.free(buffer);
+    // The exe's frame (`SUB ESP,0x10`, one push) taken with the arguments: the 16 bytes read at
+    // +0x4 (00dcca7a); the magic test's byte goes to the `stream` argument's own slot, +0x1c
+    // past the return address at +0x14 (00dccaaa).
+    let read_words = e.with_stack(0x20, |e, frame| {
+        let frame = frame.addr();
+        e.mem.set_u32(frame + 0x18, out);
+        e.mem.set_u32(frame + 0x1c, stream);
+        let buffer = frame + 4;
+        let read = e.vcall(stream, 0x10, &args![buffer, 0x10u32]).u32();
+        if read != 0x10 {
+            return None;
+        }
+        e.vcall(stream, 0x20, &args![]);
+        let first = e.mem.u32(buffer);
+        let second = e.mem.u32(buffer + 4);
+        let flag = frame + 0x1c;
+        let at = e.call(IS_BINARY_MAGIC, &args![flag, first, second]).u32();
+        Some(e.mem.u8(at) != 0)
+    });
+    let Some(binary) = read_words else {
         e.mem.set_u32(out, FORMAT_UNKNOWN);
         return out;
-    }
-    e.vcall(stream, 0x20, &args![]);
-    let first = e.mem.u32(buffer);
-    let second = e.mem.u32(buffer + 4);
-    e.mem.free(buffer);
-    let flag = e.mem.alloc(4);
-    let at = e.call(IS_BINARY_MAGIC, &args![flag, first, second]).u32();
-    let binary = e.mem.u8(at) != 0;
-    e.mem.free(flag);
+    };
     e.mem
         .set_u32(out, if binary { FORMAT_BINARY } else { FORMAT_OTHER });
     out
@@ -93,8 +101,14 @@ mod tests {
         magic.extend([0u8; 8]);
         let (binary, log) = stream(&mut e, &magic);
         let out = e.mem.alloc(4);
+        // The 16 bytes are read to +0x4 of the exe's frame; the magic byte lands in the
+        // `stream` argument's slot (+0x1c).
+        let frame = e.mem.alloc(0x20);
+        e.mem.free(frame);
         assert_eq!(e.call(0x00dc_ca60, &args![out, binary]).u32(), out);
         assert_eq!(e.mem.u32(out), 2);
+        assert_eq!(e.mem.u32(frame + 4), 0xcab0_0d1e);
+        assert_eq!(e.mem.u8(frame + 0x1c), 1);
         // Marked with 16, rewound once.
         assert_eq!(*log.borrow(), vec![(0x1c, vec![0x10]), (0x20, vec![])]);
         let (other, _) = stream(&mut e, &[7u8; 16]);

@@ -113,7 +113,8 @@ pub fn fn_00dd7b40(e: &mut Engine, this: u32, block: u32) -> u32 {
 /// `00dd7b40` answers 1 for is unlinked and pushed on the list at `+0x10`; one it answers 0 for
 /// becomes the current block (`+8`). After `count` blocks it stores the number and sets
 /// `out_done` to 1 when there is no current block.
-pub fn fn_00dd7c40(e: &mut Engine, this: u32, out_done: u32, count: i32, out_count: u32) {
+/// Answers `out_done` (`EAX` at every `RET`; callers test the flag through it, 00d5ff00).
+pub fn fn_00dd7c40(e: &mut Engine, this: u32, out_done: u32, count: i32, out_count: u32) -> u32 {
     let mut looked = 0i32;
     if count > 0 {
         loop {
@@ -124,7 +125,7 @@ pub fn fn_00dd7c40(e: &mut Engine, this: u32, out_done: u32, count: i32, out_cou
                     e.mem.set_i32(out_count, looked);
                     e.mem.set_u32(this + 8, 0);
                     e.mem.set_u8(out_done, 1);
-                    return;
+                    return out_done;
                 }
                 if fn_00dd7b40(e, this, block) == 0 {
                     e.mem.set_u32(this + 8, block);
@@ -142,7 +143,7 @@ pub fn fn_00dd7c40(e: &mut Engine, this: u32, out_done: u32, count: i32, out_cou
                     e.mem.set_i32(out_count, looked);
                     e.mem.set_u32(this + 8, 0);
                     e.mem.set_u8(out_done, 1);
-                    return;
+                    return out_done;
                 }
                 if fn_00dd7b40(e, this, block) == 0 {
                     e.mem.set_u32(this + 8, block);
@@ -163,13 +164,14 @@ pub fn fn_00dd7c40(e: &mut Engine, this: u32, out_done: u32, count: i32, out_cou
     e.mem.set_i32(out_count, looked);
     let done = e.mem.u32(this + 8) == 0;
     e.mem.set_u8(out_done, u8::from(done));
+    out_done
 }
 
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00dd7b40, fn_00dd7b40(u32, u32) -> u32),
-        entry!(0x00dd7c40, fn_00dd7c40(u32, u32, i32, u32)),
+        entry!(0x00dd7c40, fn_00dd7c40(u32, u32, i32, u32) -> u32),
     ]
 }
 
@@ -314,6 +316,19 @@ mod tests {
         assert_eq!(e.mem.u32(this + 0xc), 0);
         assert_eq!(e.mem.u32(this + 0x10), block);
         assert_eq!(e.mem.u32(this + 8), 0);
+    }
+
+    #[test]
+    fn the_walk_answers_its_flag_pointer() {
+        let (mut e, _, _, _) = environment();
+        let (this, _, _) = free_list(&mut e, 2);
+        let flag = e.mem.alloc(8);
+        let looked = e.mem.alloc(8);
+        // EAX is `out_done` at every RET; the callers test the flag through it (00d5ff00).
+        assert_eq!(
+            e.call(0x00dd_7c40, &args![this, flag, 0i32, looked]).u32(),
+            flag
+        );
     }
 
     #[test]

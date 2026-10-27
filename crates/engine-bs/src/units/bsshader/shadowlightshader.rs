@@ -703,7 +703,7 @@ fn set_vertex_constants(e: &mut Engine, register: u32, data: u32, count: u32) {
 /// are both 0, `011fa280` becomes (500000.0, 0, 0, 0) and the colour `011a9bd0`; else (far, far -
 /// near, its +0x60, 0) and its +0x20, +0x24, +0x28, 0. Either way the vertex shader's device gets
 /// the eight floats as constants 0xe and 0xf.
-pub fn fn_00b7c3a0(e: &mut Engine) {
+pub fn fn_00b7c3a0(e: &mut Engine, _this: Ptr) {
     let index = u32::from(e.global::<u8>(FOG_INDEX_011F91C4));
     let fog = e.call(GET_FOG_PROPERTY, &args![index]).u32();
     if fog != 0 {
@@ -774,7 +774,7 @@ pub fn fn_00b7c510(e: &mut Engine, this: Ptr) -> u32 {
 /// Unnamed in the engine map (`shadowlightshader.cpp`), no arguments. Row 0 of `011fa0c0`
 /// becomes the three floats +0xc8 to +0xd0 of the object at +0xf8 of the first word of the
 /// rendering pass's +0xc (copied through the x87 stack), then 1.0.
-pub fn fn_00b7c580(e: &mut Engine) {
+pub fn fn_00b7c580(e: &mut Engine, _this: Ptr) {
     let object = rendering_object(e);
     let values = e.mem.u32(object + 0xf8);
     for index in 0..3u32 {
@@ -805,7 +805,7 @@ const COLOUR_011FA0D0: u32 = 0x011f_a0d0;
 /// `011fa0d0` = (colour * strength) * object +0xd0 for each, times the HDR scale (`011f9190`)
 /// with HDR and `011f9427` clear, then the object's +0xd4; each x87 step and float store in the
 /// exe's order and operand order.
-pub fn fn_00b7c600(e: &mut Engine) {
+pub fn fn_00b7c600(e: &mut Engine, _this: Ptr) {
     let object = rendering_object(e);
     let values = e.mem.u32(object + 0xf8);
     let strength_bits = copy_float(e, values + 0xc4);
@@ -5200,10 +5200,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b7_c290, fn_00b7c290(u32, u32, u32)),
         entry!(0x00b7_c2c0, fn_00b7c2c0(Ptr, u32, u32)),
         entry!(0x00b7_c320, fn_00b7c320(Ptr, Ptr)),
-        entry!(0x00b7_c3a0, fn_00b7c3a0()),
+        entry!(0x00b7_c3a0, fn_00b7c3a0(Ptr)),
         entry!(0x00b7_c510, fn_00b7c510(Ptr) -> u32),
-        entry!(0x00b7_c580, fn_00b7c580()),
-        entry!(0x00b7_c600, fn_00b7c600()),
+        entry!(0x00b7_c580, fn_00b7c580(Ptr)),
+        entry!(0x00b7_c600, fn_00b7c600(Ptr)),
         entry!(0x00b7_c750, fn_00b7c750(Ptr, u32, u32)),
         entry!(0x00b7_c7b0, fn_00b7c7b0(u32)),
         entry!(0x00b7_ce30, fn_00b7ce30(u32)),
@@ -5787,7 +5787,7 @@ mod tests {
         set_floats(&mut e, fog + 0x2c, &[100.0, 300.0]);
         e.mem.set_f32(fog + 0x60, 2.0);
         e.register_double(GET_FOG_PROPERTY, move |_, _| fog.into_ret());
-        e.call(0x00b7_c3a0, &args![]);
+        e.call(0x00b7_c3a0, &args![0u32]);
         assert_eq!(
             floats(&e, FOG_011FA280, 8),
             vec![300.0, 200.0, 2.0, 0.0, 0.25, 0.5, 0.75, 0.0]
@@ -5799,7 +5799,7 @@ mod tests {
         set_floats(&mut e, fog + 0x2c, &[0.0, 0.0]);
         e.set_global(FAR_DISTANCE_010AD6E0, 500000.0f32);
         set_floats(&mut e, FOG_COLOUR_011A9BD0, &[0.1, 0.2, 0.3, 0.4]);
-        e.call(0x00b7_c3a0, &args![]);
+        e.call(0x00b7_c3a0, &args![0u32]);
         assert_eq!(
             floats(&e, FOG_011FA280, 8),
             vec![500000.0, 0.0, 0.0, 0.0, 0.1, 0.2, 0.3, 0.4]
@@ -5846,7 +5846,7 @@ mod tests {
         let mut e = rig(&[]);
         let (_, values) = rendering_object_with_values(&mut e);
         set_floats(&mut e, values + 0xc8, &[0.1, 0.2, 0.3]);
-        e.call(0x00b7_c580, &args![]);
+        e.call(0x00b7_c580, &args![0u32]);
         assert_eq!(floats(&e, ROWS_011FA0C0, 4), vec![0.1, 0.2, 0.3, 1.0]);
     }
 
@@ -5859,15 +5859,15 @@ mod tests {
         set_floats(&mut e, values + 0xd4, &[0.5, 0.25, 1.0]);
         e.mem.set_f32(object + 0xd0, 2.0);
         e.mem.set_f32(object + 0xd4, 0.75);
-        e.call(0x00b7_c600, &args![]);
+        e.call(0x00b7_c600, &args![0u32]);
         assert_eq!(floats(&e, COLOUR_011FA0D0, 4), vec![1.0, 0.5, 2.0, 0.75]);
         // With HDR the strength stays and the HDR scale applies.
         e.set_global(HDR_011F941E, 1u8);
         e.set_global(HDR_SCALE_011F9190, 0.5f32);
-        e.call(0x00b7_c600, &args![]);
+        e.call(0x00b7_c600, &args![0u32]);
         assert_eq!(floats(&e, COLOUR_011FA0D0, 4), vec![2.0, 1.0, 4.0, 0.75]);
         e.set_global(HDR_SCALE_DISABLED_011F9427, 1u8);
-        e.call(0x00b7_c600, &args![]);
+        e.call(0x00b7_c600, &args![0u32]);
         assert_eq!(floats(&e, COLOUR_011FA0D0, 3), vec![4.0, 2.0, 8.0]);
     }
 

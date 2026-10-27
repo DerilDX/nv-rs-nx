@@ -19,6 +19,22 @@ use crate::units::havok_sdk::hkgeometryprocessing::{
     sub4, sum3, test_parity_even, Vec4,
 };
 
+/// Runs `f` on an exe-shaped frame: a function that aligns `ESP` (`AND ESP,0xfffffff0`) and
+/// then reserves `below` bytes (its `SUB ESP` and pushes) has its frame `below` bytes under a
+/// 16-byte boundary; `f` gets the frame's lowest address.
+fn with_aligned_frame<R>(e: &mut Engine, below: u32, f: impl FnOnce(&mut Engine, u32) -> R) -> R {
+    e.with_stack(below + 0x10, |e, raw| {
+        let boundary = (raw.addr() + below + 0xf) & !0xf;
+        f(e, boundary - below)
+    })
+}
+
+/// The frame base [`with_aligned_frame`] picks for a block at `raw` (tests).
+#[cfg(test)]
+fn aligned_frame_at(raw: u32, below: u32) -> u32 {
+    ((raw + below + 0xf) & !0xf) - below
+}
+
 /// The memory router getter (`00c85750`).
 const MEMORY_ROUTER: u32 = 0x00c8_5750;
 /// `hkArrayUtil::_reserve` (Xbox PDB, `00c908c0`, cdecl: allocator, array, capacity, element
@@ -229,44 +245,47 @@ pub fn fn_00dd6510(
     }
     let mut seeded = false;
     if e.mem.i32(planes + 4) > 0 {
-        let hit = e.mem.alloc(0x20);
-        let mut i = 0i32;
-        loop {
-            if i != i1 && i != i2 && fn_00dd6380(e, planes, i1, i2, i, hit) == 0 {
-                let vertex = load_vec4(e, hit);
-                if !seeded {
-                    let far = f32::from_bits(e.mem.u32(FAR_DISTANCE));
-                    let along = load_vec4(e, direction);
-                    let seed = add4(mul4([far; 4], along), vertex);
-                    store_vec4(e, out_a, seed);
-                    let mask = load_bits(e, SIGN_MASK);
-                    for lane in 0..4 {
-                        let bits = seed[lane].to_bits() ^ mask[lane];
-                        e.mem.set_u32(out_b + 4 * lane as u32, bits);
+        // The exe aligns ESP, then `SUB ESP,0x54` and three pushes: a 0x60-byte frame, the hit at
+        // +0x40 (00dd6574).
+        with_aligned_frame(e, 0x60, |e, frame| {
+            let hit = frame + 0x40;
+            let mut i = 0i32;
+            loop {
+                if i != i1 && i != i2 && fn_00dd6380(e, planes, i1, i2, i, hit) == 0 {
+                    let vertex = load_vec4(e, hit);
+                    if !seeded {
+                        let far = f32::from_bits(e.mem.u32(FAR_DISTANCE));
+                        let along = load_vec4(e, direction);
+                        let seed = add4(mul4([far; 4], along), vertex);
+                        store_vec4(e, out_a, seed);
+                        let mask = load_bits(e, SIGN_MASK);
+                        for lane in 0..4 {
+                            let bits = seed[lane].to_bits() ^ mask[lane];
+                            e.mem.set_u32(out_b + 4 * lane as u32, bits);
+                        }
+                        seeded = true;
                     }
-                    seeded = true;
-                }
-                let tolerance = x87_load32(e.mem.u32(SIDE_TOLERANCE));
-                let indices = [0x10u32, 0x14, 0x18].map(|o| e.mem.u32(hit + o));
-                for out in [out_a, out_b] {
-                    let plane = plane_at(e, planes, i as u32);
-                    let current = load_vec4(e, out);
-                    let side = sum3(mul4(sub4(current, vertex), plane));
-                    let flags = compare_flags(tolerance, x87_m32(side.to_bits()));
-                    if !test_parity_even(flags, 5) {
-                        store_vec4(e, out, vertex);
-                        for (offset, index) in [0x10u32, 0x14, 0x18].into_iter().zip(indices) {
-                            e.mem.set_u32(out + offset, index);
+                    let tolerance = x87_load32(e.mem.u32(SIDE_TOLERANCE));
+                    let indices = [0x10u32, 0x14, 0x18].map(|o| e.mem.u32(hit + o));
+                    for out in [out_a, out_b] {
+                        let plane = plane_at(e, planes, i as u32);
+                        let current = load_vec4(e, out);
+                        let side = sum3(mul4(sub4(current, vertex), plane));
+                        let flags = compare_flags(tolerance, x87_m32(side.to_bits()));
+                        if !test_parity_even(flags, 5) {
+                            store_vec4(e, out, vertex);
+                            for (offset, index) in [0x10u32, 0x14, 0x18].into_iter().zip(indices) {
+                                e.mem.set_u32(out + offset, index);
+                            }
                         }
                     }
                 }
+                i += 1;
+                if i >= e.mem.i32(planes + 4) {
+                    break;
+                }
             }
-            i += 1;
-            if i >= e.mem.i32(planes + 4) {
-                break;
-            }
-        }
-        e.mem.free(hit);
+        });
     }
     if e.mem.u32(out_b + 0x10) == none {
         let first = e.mem.u32(out_a + 0x10);
@@ -294,7 +313,7 @@ pub fn fn_00dd6510(
 // Translated from 00dd66d0 (decompiled, FalloutNV.exe 1.4.0.525)
 // Translation incomplete: 00dd66d0 - the code copies eight words of its 0x20-byte local result
 // (`00dd6380` writes the first seven) into every record it stores; the eighth word is whatever
-// the stack held, and the translation stores 0 there.
+// the stack held (here the frame word at +0x5c, which starts at 0).
 /// Unnamed in the engine map (cdecl: `out_flag`, `direction` (a 16-byte vector), `planes`,
 /// `i1`, `i2`, `point` (a 16-byte vector), `results` (an `hkArray` of 0x20-byte records)).
 /// Answers `out_flag`, after storing a byte there: 1 when a vertex was recorded.
@@ -321,56 +340,60 @@ pub fn fn_00dd66d0(
     let mut best = x87_quiet_bits(e.mem.u32(LARGEST_FLOAT));
     let mut found = 0u8;
     if e.mem.i32(planes + 4) > 0 {
-        let hit = e.mem.alloc(0x20);
-        let mut i = 0i32;
-        let mut offset = 0u32;
-        loop {
-            if i != i1 && i != i2 {
-                let data = e.mem.u32(planes);
-                let plane = load_vec4(e, data.wrapping_add(offset));
-                let along = load_vec4(e, direction);
-                let dot = sum3(mul4(plane, along));
-                let limit = x87_load32(e.mem.u32(FACING_LIMIT));
-                let dot_loaded = x87_load32(dot.to_bits());
-                let flags = compare_flags(dot_loaded, limit);
-                if flags & 0x41 == 0 {
-                    e.mem.set_u32(point + 0xc, 1.0f32.to_bits());
+        // The exe aligns ESP, then `SUB ESP,0x54` and three pushes: a 0x60-byte frame, the hit at
+        // +0x40 (00dd67cb).
+        with_aligned_frame(e, 0x60, |e, frame| {
+            let hit = frame + 0x40;
+            let mut i = 0i32;
+            let mut offset = 0u32;
+            loop {
+                if i != i1 && i != i2 {
                     let data = e.mem.u32(planes);
-                    let position = load_vec4(e, point);
-                    let normal = load_vec4(e, data.wrapping_add(offset));
-                    let product = mul4(normal, position);
-                    let pairs = add4(shufps(product, product, 0x4e), product);
-                    let total = add4(shufps(pairs, pairs, 0xb1), pairs)[0];
-                    let zero = f32::from_bits(e.mem.u32(ZERO_VECTOR));
-                    let negated = zero - total;
-                    let magnitude = x87_store32(dot_loaded.abs());
-                    let distance =
-                        x87_store32(x87_div(x87_load32(negated.to_bits()), x87_m32(magnitude)));
-                    let tolerance = e.mem.f64(TIE_TOLERANCE);
-                    let reach = x87_add(x87_load32(best), tolerance);
-                    let flags = compare_flags(reach, x87_load32(distance));
-                    if flags & 0x41 == 0 && fn_00dd6380(e, planes, i1, i2, i, hit) == 0 {
-                        found = 1;
-                        let difference = x87_store32(x87_sub(x87_load32(distance), x87_m32(best)));
-                        let size = x87_store32(x87_load32(difference).abs());
-                        let flags = compare_flags(x87_load32(size), tolerance);
-                        if test_parity_even(flags, 5) {
-                            e.mem.set_u32(results + 4, 0);
-                            push_record(e, results, hit, 8);
-                            best = x87_quiet_bits(distance);
-                        } else {
-                            push_record(e, results, hit, 8);
+                    let plane = load_vec4(e, data.wrapping_add(offset));
+                    let along = load_vec4(e, direction);
+                    let dot = sum3(mul4(plane, along));
+                    let limit = x87_load32(e.mem.u32(FACING_LIMIT));
+                    let dot_loaded = x87_load32(dot.to_bits());
+                    let flags = compare_flags(dot_loaded, limit);
+                    if flags & 0x41 == 0 {
+                        e.mem.set_u32(point + 0xc, 1.0f32.to_bits());
+                        let data = e.mem.u32(planes);
+                        let position = load_vec4(e, point);
+                        let normal = load_vec4(e, data.wrapping_add(offset));
+                        let product = mul4(normal, position);
+                        let pairs = add4(shufps(product, product, 0x4e), product);
+                        let total = add4(shufps(pairs, pairs, 0xb1), pairs)[0];
+                        let zero = f32::from_bits(e.mem.u32(ZERO_VECTOR));
+                        let negated = zero - total;
+                        let magnitude = x87_store32(dot_loaded.abs());
+                        let distance =
+                            x87_store32(x87_div(x87_load32(negated.to_bits()), x87_m32(magnitude)));
+                        let tolerance = e.mem.f64(TIE_TOLERANCE);
+                        let reach = x87_add(x87_load32(best), tolerance);
+                        let flags = compare_flags(reach, x87_load32(distance));
+                        if flags & 0x41 == 0 && fn_00dd6380(e, planes, i1, i2, i, hit) == 0 {
+                            found = 1;
+                            let difference =
+                                x87_store32(x87_sub(x87_load32(distance), x87_m32(best)));
+                            let size = x87_store32(x87_load32(difference).abs());
+                            let flags = compare_flags(x87_load32(size), tolerance);
+                            if test_parity_even(flags, 5) {
+                                e.mem.set_u32(results + 4, 0);
+                                push_record(e, results, hit, 8);
+                                best = x87_quiet_bits(distance);
+                            } else {
+                                push_record(e, results, hit, 8);
+                            }
                         }
                     }
                 }
+                i += 1;
+                offset = offset.wrapping_add(0x10);
+                if i >= e.mem.i32(planes + 4) {
+                    break;
+                }
             }
-            i += 1;
-            offset = offset.wrapping_add(0x10);
-            if i >= e.mem.i32(planes + 4) {
-                break;
-            }
-        }
-        e.mem.free(hit);
+        });
     }
     e.mem.set_u8(out_flag, found);
     out_flag
@@ -468,8 +491,8 @@ pub fn fn_00dd68d0(e: &mut Engine, tolerance: f32, array: u32, out_count: u32) {
 // Translated from 00dd6a10 (decompiled, FalloutNV.exe 1.4.0.525)
 // Translation incomplete: 00dd6a10 - the two 0x20-byte edge records it builds on its stack for
 // the recursive calls set words 0 to 2 and the vector at `+0x10`; the word at `+0xc` is whatever
-// the stack held and is copied into the edge array by the recursive call. The translation leaves
-// it 0.
+// the stack held and is copied into the edge array by the recursive call (here the frame
+// words at +0x2c / +0x4c, which start at 0).
 /// Unnamed in the engine map (cdecl: `edge` (a 0x20-byte record: two plane indices at `+0` and
 /// `+4`, a pointer to a 16-byte vertex at `+8`, a direction vector at `+0x10`), `planes`,
 /// `edges` (an `hkArray` of such records), `results` (an `hkArray` of 16-byte vectors)). Walks
@@ -507,64 +530,65 @@ pub fn fn_00dd6a10(e: &mut Engine, edge: u32, planes: u32, edges: u32, results: 
         }
     }
     push_record(e, edges, edge, 8);
-    let local = e.mem.alloc(0x10);
-    e.mem.set_u32(local, 0);
-    e.mem.set_u32(local + 4, 0);
-    e.mem.set_u32(local + 8, 0x8000_0000);
-    let flag = e.mem.alloc(8);
-    let i1 = e.mem.i32(edge);
-    let i2 = e.mem.i32(edge + 4);
-    let point = e.mem.u32(edge + 8);
-    let status = fn_00dd66d0(e, flag, edge + 0x10, planes, i1, i2, point, local);
-    if e.mem.u8(status) != 0 {
-        let first_record = e.mem.u32(local);
-        make_room(e, results, 0x10);
-        let vector = load_vec4(e, first_record);
-        let slot = e
-            .mem
-            .u32(results + 4)
-            .wrapping_mul(0x10)
-            .wrapping_add(e.mem.u32(results));
-        store_vec4(e, slot, vector);
-        let size = e.mem.u32(results + 4);
-        e.mem.set_u32(results + 4, size.wrapping_add(1));
-        if e.mem.i32(local + 4) > 0 {
-            let mut index = 0i32;
-            let mut offset = 0u32;
-            loop {
-                let record = e.mem.u32(local).wrapping_add(offset);
-                let w4 = e.mem.i32(record + 0x10);
-                let w5 = e.mem.i32(record + 0x14);
-                let w6 = e.mem.i32(record + 0x18);
-                let first_edge = e.mem.alloc(0x20);
-                e.mem.set_i32(first_edge, w4);
-                e.mem.set_i32(first_edge + 4, w6);
-                e.mem.set_u32(first_edge + 8, record);
-                fn_00dd62e0(e, planes, w4, w6, w5, first_edge + 0x10);
-                fn_00dd6a10(e, first_edge, planes, edges, results);
-                e.mem.free(first_edge);
-                let record = e.mem.u32(local).wrapping_add(offset);
-                let w4 = e.mem.i32(record + 0x10);
-                let w5 = e.mem.i32(record + 0x14);
-                let w6 = e.mem.i32(record + 0x18);
-                let second_edge = e.mem.alloc(0x20);
-                e.mem.set_i32(second_edge, w5);
-                e.mem.set_i32(second_edge + 4, w6);
-                e.mem.set_u32(second_edge + 8, record);
-                fn_00dd62e0(e, planes, w5, w6, w4, second_edge + 0x10);
-                fn_00dd6a10(e, second_edge, planes, edges, results);
-                e.mem.free(second_edge);
-                index += 1;
-                offset = offset.wrapping_add(0x20);
-                if index >= e.mem.i32(local + 4) {
-                    break;
+    // The exe aligns ESP, then `SUB ESP,0x54` and three pushes: a 0x60-byte frame with the
+    // result array at +0x14 (00dd6aac), the flag byte at +0xf (00dd6aba), the edge records at
+    // +0x20 and +0x40 (00dd6b3b..00dd6b4d, 00dd6b7b..00dd6b8d).
+    with_aligned_frame(e, 0x60, |e, frame| {
+        let local = frame + 0x14;
+        e.mem.set_u32(local, 0);
+        e.mem.set_u32(local + 4, 0);
+        e.mem.set_u32(local + 8, 0x8000_0000);
+        let flag = frame + 0xf;
+        let i1 = e.mem.i32(edge);
+        let i2 = e.mem.i32(edge + 4);
+        let point = e.mem.u32(edge + 8);
+        let status = fn_00dd66d0(e, flag, edge + 0x10, planes, i1, i2, point, local);
+        if e.mem.u8(status) != 0 {
+            let first_record = e.mem.u32(local);
+            make_room(e, results, 0x10);
+            let vector = load_vec4(e, first_record);
+            let slot = e
+                .mem
+                .u32(results + 4)
+                .wrapping_mul(0x10)
+                .wrapping_add(e.mem.u32(results));
+            store_vec4(e, slot, vector);
+            let size = e.mem.u32(results + 4);
+            e.mem.set_u32(results + 4, size.wrapping_add(1));
+            if e.mem.i32(local + 4) > 0 {
+                let mut index = 0i32;
+                let mut offset = 0u32;
+                loop {
+                    let record = e.mem.u32(local).wrapping_add(offset);
+                    let w4 = e.mem.i32(record + 0x10);
+                    let w5 = e.mem.i32(record + 0x14);
+                    let w6 = e.mem.i32(record + 0x18);
+                    let first_edge = frame + 0x20;
+                    e.mem.set_i32(first_edge, w4);
+                    e.mem.set_i32(first_edge + 4, w6);
+                    e.mem.set_u32(first_edge + 8, record);
+                    fn_00dd62e0(e, planes, w4, w6, w5, first_edge + 0x10);
+                    fn_00dd6a10(e, first_edge, planes, edges, results);
+                    let record = e.mem.u32(local).wrapping_add(offset);
+                    let w4 = e.mem.i32(record + 0x10);
+                    let w5 = e.mem.i32(record + 0x14);
+                    let w6 = e.mem.i32(record + 0x18);
+                    let second_edge = frame + 0x40;
+                    e.mem.set_i32(second_edge, w5);
+                    e.mem.set_i32(second_edge + 4, w6);
+                    e.mem.set_u32(second_edge + 8, record);
+                    fn_00dd62e0(e, planes, w5, w6, w4, second_edge + 0x10);
+                    fn_00dd6a10(e, second_edge, planes, edges, results);
+                    index += 1;
+                    offset = offset.wrapping_add(0x20);
+                    if index >= e.mem.i32(local + 4) {
+                        break;
+                    }
                 }
             }
         }
-    }
-    release_storage(e, local, 5);
-    e.mem.free(flag);
-    e.mem.free(local);
+        release_storage(e, local, 5);
+    });
 }
 
 // Translated from 00dd6c10 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -589,119 +613,122 @@ pub fn fn_00dd6c10(
     out_a: u32,
     out_b: u32,
 ) -> u32 {
-    let tried = e.mem.alloc(0x110);
-    e.mem.set_u32(tried, tried + 0x10);
-    e.mem.set_u32(tried + 4, 0);
-    e.mem.set_u32(tried + 8, 0x8000_0020);
-    let cross_at = e.mem.alloc(0x10);
-    let result = 'rounds: loop {
-        let mut best_i = 0xffff_ffffu32;
-        let mut best_j = 0xffff_ffffu32;
-        let mut best = x87_quiet_bits(e.mem.u32(SMALLEST_FLOAT));
-        let limit = e.mem.f64(PAIR_DOT_LIMIT);
-        let mut count = e.mem.i32(planes + 4);
-        if count < 1 {
-            break 'rounds 1;
-        }
-        let mut i = 0i32;
-        let mut i_offset = 0u32;
-        loop {
-            let next = i + 1;
-            if next < count {
-                let mut j = next;
-                let mut j_offset = i_offset.wrapping_add(0x10);
-                loop {
-                    let data = e.mem.u32(planes);
-                    let pj = load_vec4(e, data.wrapping_add(j_offset));
-                    let pi = load_vec4(e, data.wrapping_add(i_offset));
-                    let dot = sum3(mul4(pi, pj));
-                    let dot_loaded = x87_load32(dot.to_bits());
-                    let above_best = compare_flags(x87_load32(best), dot_loaded);
-                    let below_limit = compare_flags(dot_loaded, limit);
-                    if !test_parity_even(above_best, 5) && !test_parity_even(below_limit, 5) {
-                        let size = e.mem.i32(tried + 4);
-                        let pairs = e.mem.u32(tried);
-                        let mut seen = false;
-                        if size > 0 {
-                            let mut k = 0i32;
-                            loop {
-                                let at = pairs.wrapping_add((k as u32).wrapping_mul(8));
-                                if e.mem.u32(at) == i as u32 && e.mem.u32(at + 4) == j as u32 {
-                                    // Any match counts: the code's `-1` index test cannot hold.
-                                    seen = true;
-                                    break;
-                                }
-                                k += 1;
-                                if k >= size {
-                                    break;
+    // The exe aligns ESP, then `SUB ESP,0x154` and three pushes: a 0x160-byte frame with the
+    // tried-pairs array at +0x50, its 0x20 inline pairs at +0x5c (00dd6c21..00dd6c32), and the
+    // cross product at +0x40 (00dd6dc4).
+    with_aligned_frame(e, 0x160, |e, frame| {
+        let tried = frame + 0x50;
+        e.mem.set_u32(tried, tried + 0xc);
+        e.mem.set_u32(tried + 4, 0);
+        e.mem.set_u32(tried + 8, 0x8000_0020);
+        let cross_at = frame + 0x40;
+        let result = 'rounds: loop {
+            let mut best_i = 0xffff_ffffu32;
+            let mut best_j = 0xffff_ffffu32;
+            let mut best = x87_quiet_bits(e.mem.u32(SMALLEST_FLOAT));
+            let limit = e.mem.f64(PAIR_DOT_LIMIT);
+            let mut count = e.mem.i32(planes + 4);
+            if count < 1 {
+                break 'rounds 1;
+            }
+            let mut i = 0i32;
+            let mut i_offset = 0u32;
+            loop {
+                let next = i + 1;
+                if next < count {
+                    let mut j = next;
+                    let mut j_offset = i_offset.wrapping_add(0x10);
+                    loop {
+                        let data = e.mem.u32(planes);
+                        let pj = load_vec4(e, data.wrapping_add(j_offset));
+                        let pi = load_vec4(e, data.wrapping_add(i_offset));
+                        let dot = sum3(mul4(pi, pj));
+                        let dot_loaded = x87_load32(dot.to_bits());
+                        let above_best = compare_flags(x87_load32(best), dot_loaded);
+                        let below_limit = compare_flags(dot_loaded, limit);
+                        if !test_parity_even(above_best, 5) && !test_parity_even(below_limit, 5) {
+                            let size = e.mem.i32(tried + 4);
+                            let pairs = e.mem.u32(tried);
+                            let mut seen = false;
+                            if size > 0 {
+                                let mut k = 0i32;
+                                loop {
+                                    let at = pairs.wrapping_add((k as u32).wrapping_mul(8));
+                                    if e.mem.u32(at) == i as u32 && e.mem.u32(at + 4) == j as u32 {
+                                        // Any match counts: the code's `-1` index test cannot hold.
+                                        seen = true;
+                                        break;
+                                    }
+                                    k += 1;
+                                    if k >= size {
+                                        break;
+                                    }
                                 }
                             }
+                            if !seen {
+                                best = x87_store32(dot_loaded);
+                                e.mem.set_i32(out_i, i);
+                                e.mem.set_i32(out_j, j);
+                                best_i = i as u32;
+                                best_j = j as u32;
+                            }
                         }
-                        if !seen {
-                            best = x87_store32(dot_loaded);
-                            e.mem.set_i32(out_i, i);
-                            e.mem.set_i32(out_j, j);
-                            best_i = i as u32;
-                            best_j = j as u32;
+                        j += 1;
+                        j_offset = j_offset.wrapping_add(0x10);
+                        if j >= e.mem.i32(planes + 4) {
+                            break;
                         }
-                    }
-                    j += 1;
-                    j_offset = j_offset.wrapping_add(0x10);
-                    if j >= e.mem.i32(planes + 4) {
-                        break;
                     }
                 }
+                i_offset = i_offset.wrapping_add(0x10);
+                count = e.mem.i32(planes + 4);
+                i = next;
+                if i >= count {
+                    break;
+                }
             }
-            i_offset = i_offset.wrapping_add(0x10);
-            count = e.mem.i32(planes + 4);
-            i = next;
-            if i >= count {
-                break;
+            if best_i == 0xffff_ffff {
+                break 'rounds 1;
             }
-        }
-        if best_i == 0xffff_ffff {
-            break 'rounds 1;
-        }
-        make_room(e, tried, 8);
-        let slot = e
-            .mem
-            .u32(tried)
-            .wrapping_add(e.mem.u32(tried + 4).wrapping_mul(8));
-        if slot != 0 {
-            e.mem.set_u32(slot, best_i);
-            e.mem.set_u32(slot + 4, best_j);
-        }
-        let j = e.mem.u32(out_j);
-        let i = e.mem.u32(out_i);
-        let size = e.mem.u32(tried + 4);
-        e.mem.set_u32(tried + 4, size.wrapping_add(1));
-        let pj = plane_at(e, planes, j);
-        let pi = plane_at(e, planes, i);
-        let cross = sub4(
-            mul4(rotate_d2(pj), rotate_c9(pi)),
-            mul4(rotate_c9(pj), rotate_d2(pi)),
-        );
-        store_vec4(e, cross_at, cross);
-        let status = fn_00dd6510(e, cross_at, planes, i as i32, j as i32, out_b, out_a);
-        if status == 1 {
-            break 'rounds 1;
-        }
-        let side = {
-            let a = load_vec4(e, out_a);
-            let b = load_vec4(e, out_b);
-            let cross = load_vec4(e, cross_at);
-            sum3(mul4(sub4(b, a), cross))
+            make_room(e, tried, 8);
+            let slot = e
+                .mem
+                .u32(tried)
+                .wrapping_add(e.mem.u32(tried + 4).wrapping_mul(8));
+            if slot != 0 {
+                e.mem.set_u32(slot, best_i);
+                e.mem.set_u32(slot + 4, best_j);
+            }
+            let j = e.mem.u32(out_j);
+            let i = e.mem.u32(out_i);
+            let size = e.mem.u32(tried + 4);
+            e.mem.set_u32(tried + 4, size.wrapping_add(1));
+            let pj = plane_at(e, planes, j);
+            let pi = plane_at(e, planes, i);
+            let cross = sub4(
+                mul4(rotate_d2(pj), rotate_c9(pi)),
+                mul4(rotate_c9(pj), rotate_d2(pi)),
+            );
+            store_vec4(e, cross_at, cross);
+            let status = fn_00dd6510(e, cross_at, planes, i as i32, j as i32, out_b, out_a);
+            if status == 1 {
+                break 'rounds 1;
+            }
+            let side = {
+                let a = load_vec4(e, out_a);
+                let b = load_vec4(e, out_b);
+                let cross = load_vec4(e, cross_at);
+                sum3(mul4(sub4(b, a), cross))
+            };
+            let tolerance = x87_load32(e.mem.u32(SIDE_TOLERANCE));
+            let flags = compare_flags(tolerance, x87_m32(side.to_bits()));
+            if !test_parity_even(flags, 5) {
+                break 'rounds 0;
+            }
         };
-        let tolerance = x87_load32(e.mem.u32(SIDE_TOLERANCE));
-        let flags = compare_flags(tolerance, x87_m32(side.to_bits()));
-        if !test_parity_even(flags, 5) {
-            break 'rounds 0;
-        }
-    };
-    release_storage(e, tried, 3);
-    e.mem.free(cross_at);
-    e.mem.free(tried);
-    result
+        release_storage(e, tried, 3);
+        result
+    })
 }
 
 // Translated from 00dd6ec0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -854,12 +881,14 @@ pub fn fn_00dd7090(e: &mut Engine, this: u32, other: u32) {
 /// start, and its first word is the next element. `out` receives 1 when the chain ends (a
 /// null word) and 0 when a test fails. A zero element size faults in the code's `DIV`; it
 /// panics here.
-pub fn fn_00dd7140(e: &mut Engine, this: u32, out: u32) {
+/// Answers `out`: the exe leaves it in `EAX` at every `RET` (the hkBool/hkResult result
+/// returned through a pointer, which callers read through `EAX`).
+pub fn fn_00dd7140(e: &mut Engine, this: u32, out: u32) -> u32 {
     let mut element = e.mem.u32(this);
     loop {
         if element == 0 {
             e.mem.set_u8(out, 1);
-            return;
+            return out;
         }
         let alignment = e.mem.u32(this + 0x18).wrapping_sub(1);
         if element & alignment != 0 {
@@ -869,16 +898,20 @@ pub fn fn_00dd7140(e: &mut Engine, this: u32, out: u32) {
         let start = loop {
             if block == 0 {
                 e.mem.set_u8(out, 0);
-                return;
+                return out;
             }
             let checker = e.mem.u32(this + 0x30);
-            let scratch = e.mem.alloc(8);
-            let answer = e.vcall(checker, 0xc, &args![scratch, block]).u32();
-            let valid = e.mem.u8(answer) != 0;
-            e.mem.free(scratch);
+            // The exe's frame (`PUSH ECX` and three pushes): 0x10 bytes, the answer byte at +0xf,
+            // the high byte of the pushed `ECX` (00dd7169).
+            let valid = e.with_stack(0x10, |e, frame| {
+                let answer = e
+                    .vcall(checker, 0xc, &args![frame.addr() + 0xf, block])
+                    .u32();
+                e.mem.u8(answer) != 0
+            });
             if !valid {
                 e.mem.set_u8(out, 0);
-                return;
+                return out;
             }
             let start = e.mem.u32(block + 8);
             if element >= start {
@@ -901,6 +934,7 @@ pub fn fn_00dd7140(e: &mut Engine, this: u32, out: u32) {
         element = e.mem.u32(element);
     }
     e.mem.set_u8(out, 0);
+    out
 }
 
 // Translated from 00dd6ea0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -940,7 +974,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00dd6ec0, fn_00dd6ec0(u32)),
         entry!(0x00dd6f20, fn_00dd6f20(u32)),
         entry!(0x00dd7090, fn_00dd7090(u32, u32)),
-        entry!(0x00dd7140, fn_00dd7140(u32, u32)),
+        entry!(0x00dd7140, fn_00dd7140(u32, u32) -> u32),
     ]
 }
 
@@ -1648,6 +1682,21 @@ mod tests {
     }
 
     #[test]
+    fn fn_00dd7140_answers_its_result_pointer() {
+        let (mut e, _) = env();
+        let (this, start) = free_list(&mut e, true);
+        // Elements 3, 1 and 5 chained, the last ends the chain.
+        e.mem.set_u32(this, start + 0x30);
+        e.mem.set_u32(start + 0x30, start + 0x10);
+        e.mem.set_u32(start + 0x10, start + 0x50);
+        e.mem.set_u32(start + 0x50, 0);
+        let out = e.mem.alloc(4);
+        e.mem.set_u8(out, 7);
+        // The exe leaves the result pointer in EAX at every RET; callers read through it.
+        assert_eq!(e.call(0x00dd_7140, &args![this, out]).u32(), args![out][0]);
+    }
+
+    #[test]
     fn a_misaligned_unowned_or_rejected_element_fails_the_check() {
         let (mut e, _) = env();
         let (this, start) = free_list(&mut e, true);
@@ -1672,5 +1721,104 @@ mod tests {
         e.mem.set_u8(out, 1);
         e.call(0x00dd_7140, &args![this, out]);
         assert_eq!(e.mem.u8(out), 0);
+    }
+
+    /// A freed block of `size` bytes (the next frame of that size reuses it).
+    fn marked_frame(e: &mut Engine, size: u32) -> u32 {
+        let raw = e.mem.alloc(size);
+        e.mem.free(raw);
+        raw
+    }
+
+    #[test]
+    fn the_edge_ends_use_the_hit_at_0x40_of_the_aligned_frame() {
+        let (mut e, _) = env();
+        let planes = plane_array(&mut e, &CUBE);
+        let direction = e.mem.alloc(16);
+        store_vec4(&mut e, direction, [0.0, 0.0, 1.0, 0.0]);
+        let out_a = e.mem.alloc(0x20);
+        let out_b = e.mem.alloc(0x20);
+        let raw = marked_frame(&mut e, 0x70);
+        e.call(
+            0x00dd_6510,
+            &args![direction, planes, 0i32, 2i32, out_b, out_a],
+        );
+        let frame = aligned_frame_at(raw, 0x60);
+        // `00dd6380` wrote the last hit's plane indices at +0x50.
+        assert_eq!(words(&e, frame + 0x50, 3), vec![0, 2, 5]);
+    }
+
+    #[test]
+    fn the_nearest_plane_search_uses_the_hit_at_0x40_of_the_aligned_frame() {
+        let (mut e, _) = env();
+        let planes = plane_array(&mut e, &CUBE);
+        let direction = e.mem.alloc(16);
+        store_vec4(&mut e, direction, [0.0, 0.0, 1.0, 0.0]);
+        let point = e.mem.alloc(16);
+        store_vec4(&mut e, point, [0.5, 0.5, 0.5, 7.0]);
+        let flag = e.mem.alloc(8);
+        let results = record_array(&mut e);
+        let raw = marked_frame(&mut e, 0x70);
+        e.call(
+            0x00dd_66d0,
+            &args![flag, direction, planes, 0i32, 2i32, point, results],
+        );
+        let frame = aligned_frame_at(raw, 0x60);
+        let record = e.mem.u32(results);
+        // The stored record is the frame's hit, its eighth word included.
+        assert_eq!(words(&e, record, 8), words(&e, frame + 0x40, 8));
+    }
+
+    #[test]
+    fn the_edge_walk_keeps_its_array_and_flag_in_the_aligned_frame() {
+        let (mut e, _) = env();
+        let planes = plane_array(&mut e, &[CUBE[0], CUBE[2]]);
+        let data = e.mem.alloc(8 * 0x20);
+        let edges = array(&mut e, data, 0, 8);
+        let results = vectors_array(&mut e, &[], 8);
+        let new = edge(&mut e, 0, 1, [0.5; 4], [0.0, 0.0, 1.0, 0.0]);
+        let raw = marked_frame(&mut e, 0x70);
+        e.call(0x00dd_6a10, &args![new, planes, edges, results]);
+        let frame = aligned_frame_at(raw, 0x60);
+        // The result array at +0x14 (data, size, capacity flag) and the flag byte at +0xf.
+        assert_eq!(words(&e, frame + 0x14, 3), vec![0, 0, 0x8000_0000]);
+        assert_eq!(e.mem.u8(frame + 0xf), 0);
+    }
+
+    #[test]
+    fn the_first_edge_search_keeps_its_inline_array_in_the_aligned_frame() {
+        let (mut e, _) = env();
+        let planes = plane_array(&mut e, &CUBE);
+        let out_i = e.mem.alloc(4);
+        let out_j = e.mem.alloc(4);
+        let out_a = e.mem.alloc(0x20);
+        let out_b = e.mem.alloc(0x20);
+        let raw = marked_frame(&mut e, 0x170);
+        e.call(0x00dd_6c10, &args![planes, out_i, out_j, out_a, out_b]);
+        let frame = aligned_frame_at(raw, 0x160);
+        // The tried pairs: data pointing at the inline storage at +0x5c, capacity 0x20 not owned.
+        assert_eq!(e.mem.u32(frame + 0x50), frame + 0x5c);
+        assert_eq!(e.mem.u32(frame + 0x58), 0x8000_0020);
+    }
+
+    #[test]
+    fn the_free_list_check_passes_the_answer_byte_at_0xf_of_its_frame() {
+        let (mut e, _) = env();
+        let (this, start) = free_list(&mut e, true);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&seen);
+        e.register_double(0x0077_0100, move |e, a| {
+            sink.borrow_mut().push(a[1]);
+            e.mem.set_u8(a[1], 1);
+            a[1].into_ret()
+        });
+        e.mem.set_u32(this, start + 0x10);
+        e.mem.set_u32(start + 0x10, 0);
+        let out = e.mem.alloc(4);
+        let raw = e.mem.alloc(0x10);
+        e.mem.free(raw);
+        e.call(0x00dd_7140, &args![this, out]);
+        assert_eq!(*seen.borrow(), vec![raw + 0xf]);
+        assert_eq!(e.mem.u8(out), 1);
     }
 }

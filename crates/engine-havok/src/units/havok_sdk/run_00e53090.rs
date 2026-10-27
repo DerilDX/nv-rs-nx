@@ -5410,6 +5410,8 @@ pub fn fn_00e55080(
 /// addresses of words that hold the addresses of the arrays)): `out` is 0 as soon as for an index
 /// the distance (`00e54b20`) of the point from the curve point at `parameters[index]`
 /// (`00e54630`) exceeds `tolerances[index] + 0.001` (a `double` addition with the double at `01016978`), else 1.
+/// Answers `out`: the exe leaves it in `EAX` at every `RET` (the hkBool/hkResult result
+/// returned through a pointer, which callers read through `EAX`).
 pub fn fn_00e55140(
     e: &mut Engine,
     out: Ptr,
@@ -5421,7 +5423,7 @@ pub fn fn_00e55140(
     points: Ptr,
     parameters: Ptr,
     tolerances: Ptr,
-) {
+) -> Ptr {
     e.with_stack(0x300, |e, frame| {
         let mut esp = frame.addr() + 0x200;
         e.mem.set_u32(esp.wrapping_add(4), out.addr());
@@ -5601,7 +5603,8 @@ pub fn fn_00e55140(
                 _ => unreachable!("no block at {pc:08x}"),
             }
         }
-    })
+    });
+    out
 }
 
 #[allow(
@@ -5618,6 +5621,8 @@ pub fn fn_00e55140(
 /// and `tolerance`): for each index `0..=count` the parameter comes from `00e54cb0(.., 100, 10,
 /// 1e-4, 1e-4)` (the float at `010141cc`), the curve point from `00e54630`, and `out` is 0 as soon as the distance
 /// (`00e54b20`) exceeds `tolerance`, else 1.
+/// Answers `out`: the exe leaves it in `EAX` at every `RET` (the hkBool/hkResult result
+/// returned through a pointer, which callers read through `EAX`).
 pub fn fn_00e55200(
     e: &mut Engine,
     out: Ptr,
@@ -5628,7 +5633,7 @@ pub fn fn_00e55200(
     count: i32,
     points: Ptr,
     tolerance: f32,
-) {
+) -> Ptr {
     e.with_stack(0x300, |e, frame| {
         let mut esp = frame.addr() + 0x200;
         e.mem.set_u32(esp.wrapping_add(4), out.addr());
@@ -5838,7 +5843,8 @@ pub fn fn_00e55200(
                 _ => unreachable!("no block at {pc:08x}"),
             }
         }
-    })
+    });
+    out
 }
 
 #[allow(
@@ -20858,11 +20864,11 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e55080, fn_00e55080(Ptr, i32, i32, Ptr, Ptr, i32, Ptr, Ptr, f32) -> Ptr),
         entry!(
             0x00e55140,
-            fn_00e55140(Ptr, i32, i32, Ptr, Ptr, i32, Ptr, Ptr, Ptr)
+            fn_00e55140(Ptr, i32, i32, Ptr, Ptr, i32, Ptr, Ptr, Ptr) -> Ptr
         ),
         entry!(
             0x00e55200,
-            fn_00e55200(Ptr, i32, i32, Ptr, Ptr, i32, Ptr, f32)
+            fn_00e55200(Ptr, i32, i32, Ptr, Ptr, i32, Ptr, f32) -> Ptr
         ),
         entry!(0x00e552f0, fn_00e552f0(i32, i32, Ptr, Ptr, f32, i32, i32) -> f32),
         entry!(0x00e555f0, fn_00e555f0(i32, i32, Ptr, Ptr, Ptr, i32, i32)),
@@ -21834,6 +21840,25 @@ mod tests {
         assert_eq!(e.mem.u8(out.addr()), 1);
         fn_00e55200(&mut e, out, 5, 3, controls, knots, 1, points, 0.1);
         assert_eq!(e.mem.u8(out.addr()), 0);
+    }
+
+    #[test]
+    fn the_tolerance_checks_answer_their_out_pointer() {
+        let mut e = Engine::new();
+        crt(&mut e);
+        constants(&mut e);
+        let (knots, controls) = cubic_curve(&mut e);
+        let a = curve_point(&mut e, knots, controls, 5, 3, 0.8);
+        let b = curve_point(&mut e, knots, controls, 5, 3, 2.1);
+        let out = Ptr::new(e.mem.alloc(8));
+        let points = vector_record(&mut e, &[a, b]);
+        let params = float_record(&mut e, &[0.8, 2.1]);
+        let loose = float_record(&mut e, &[0.01, 0.6]);
+        // Both leave `out` in EAX at every RET (the hkBool result pointer callers read through).
+        let answered = fn_00e55140(&mut e, out, 5, 3, controls, knots, 1, points, params, loose);
+        assert_eq!(answered, out);
+        let answered = fn_00e55200(&mut e, out, 5, 3, controls, knots, 1, points, 0.35);
+        assert_eq!(answered, out);
     }
 
     #[test]

@@ -114,35 +114,38 @@ pub fn decal_caster_init(e: &mut Engine, this: Ptr, radius: f32, source: u32) {
         )
         .u32()
     };
-    let record = e.mem.alloc(0x60);
-    e.call(RECORD_CONSTRUCT, &args![record]);
-    let filter = e.mem.alloc(4);
-    e.call(FILTER_CONSTRUCT, &args![filter, 0u32]);
-    e.call(FILTER_SET_LAYER, &args![filter, 0x27u32]);
-    e.call(FILTER_SET_SOURCE, &args![filter, source]);
-    let info = e.call(HOLDER_GET, &args![filter]).u32();
-    e.mem.set_u32(record, info);
-    let shape_pointer = e.call(POINTER_GET, &args![shape]).u32();
-    e.mem.set_u32(record.wrapping_add(4), shape_pointer);
-    e.call(RECORD_MEMBER_CONSTRUCT, &args![record.wrapping_add(0x20)]);
-    let phantom_block = e.call(ALLOCATE_OBJECT, &args![0x18u32]).u32();
-    let phantom = if phantom_block == 0 {
-        0
-    } else {
-        e.call(PHANTOM_CONSTRUCT, &args![phantom_block, record])
-            .u32()
-    };
-    let holder = this.addr().wrapping_add(PHANTOM_OFFSET);
-    e.call(POINTER_ASSIGN, &args![holder, phantom]);
-    let held = e.call(HOLDER_GET, &args![holder]).u32();
-    fn_00622f20(e, Ptr::new(held), NAME_STRING);
-    e.call(
-        SET_MULTI_LAYER_COLLISION,
-        &args![0x27u32, 0x1fe3_f637u32, 0xffff_fd47u32],
-    );
-    e.call(RECORD_DESTRUCT, &args![record]);
-    e.mem.free(filter);
-    e.mem.free(record);
+    // The exe's frame: `EBP` on a 16-byte boundary (`AND ESP,0xfffffff0`), 0xb4 bytes below it;
+    // the record at `EBP-0x90` and the filter at `EBP-0x94`.
+    e.with_stack(0xb4 + 0x10, |e, raw| {
+        let ebp = (raw.addr() + 0xb4 + 0xf) & !0xf;
+        let record = ebp - 0x90;
+        e.call(RECORD_CONSTRUCT, &args![record]);
+        let filter = ebp - 0x94;
+        e.call(FILTER_CONSTRUCT, &args![filter, 0u32]);
+        e.call(FILTER_SET_LAYER, &args![filter, 0x27u32]);
+        e.call(FILTER_SET_SOURCE, &args![filter, source]);
+        let info = e.call(HOLDER_GET, &args![filter]).u32();
+        e.mem.set_u32(record, info);
+        let shape_pointer = e.call(POINTER_GET, &args![shape]).u32();
+        e.mem.set_u32(record.wrapping_add(4), shape_pointer);
+        e.call(RECORD_MEMBER_CONSTRUCT, &args![record.wrapping_add(0x20)]);
+        let phantom_block = e.call(ALLOCATE_OBJECT, &args![0x18u32]).u32();
+        let phantom = if phantom_block == 0 {
+            0
+        } else {
+            e.call(PHANTOM_CONSTRUCT, &args![phantom_block, record])
+                .u32()
+        };
+        let holder = this.addr().wrapping_add(PHANTOM_OFFSET);
+        e.call(POINTER_ASSIGN, &args![holder, phantom]);
+        let held = e.call(HOLDER_GET, &args![holder]).u32();
+        fn_00622f20(e, Ptr::new(held), NAME_STRING);
+        e.call(
+            SET_MULTI_LAYER_COLLISION,
+            &args![0x27u32, 0x1fe3_f637u32, 0xffff_fd47u32],
+        );
+        e.call(RECORD_DESTRUCT, &args![record]);
+    });
 }
 
 // Translated from 00622f20 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -183,36 +186,37 @@ pub fn fn_00623070(e: &mut Engine, this: Ptr) -> u32 {
 /// answers for a stack byte (the byte it gets is not read afterwards). Ends with `00623070` on
 /// `this`; its answer is left in `EAX` (returned here).
 pub fn fn_00622f80(e: &mut Engine, this: Ptr, first: u32, second: u32, value: f32) -> u32 {
-    // The stack frame: the byte at `-0x41`, the record at `-0x40` and the record at `-0x20`.
-    let frame = e.mem.alloc(0x48);
-    let second_record = frame.wrapping_add(4);
-    let first_record = frame.wrapping_add(0x24);
-    let zero: f64 = e.global(ZERO);
-    if f64::from(x87_quiet(value)) != zero {
-        fn_00623310(e, this, value);
-    }
-    e.call(CASTER_RESET, &args![this, 0u32]);
-    e.vcall(this.addr(), 8, &args![]);
-    let holder = this.addr().wrapping_add(PHANTOM_OFFSET);
-    if e.call(HOLDER_GET, &args![holder]).u32() != 0 {
-        e.call(MEMBER_SETUP, &args![first_record]);
-        e.call(MEMBER_A_SETUP, &args![second_record]);
-        e.call(COPY_RECORD, &args![first_record, first]);
-        e.call(COPY_RECORD, &args![second_record, second]);
-        let held = e.call(HOLDER_GET, &args![holder]).u32();
-        e.call(
-            CAST_THROUGH_HOLDER,
-            &args![held, first_record, second_record, this, 0u32],
-        );
-        let result = e
-            .call(RESULT_HOLDER, &args![this, frame.wrapping_add(3)])
-            .u32();
-        // The byte the exe keeps in `-9` is never read again.
-        e.call(RESULT_BYTE, &args![result]);
-    }
-    let answer = fn_00623070(e, this);
-    e.mem.free(frame);
-    answer
+    // The stack frame: `EBP` on a 16-byte boundary (`AND ESP,0xfffffff0`), 0x50 bytes below it;
+    // `frame` is `EBP-0x44`: the byte at `-0x41`, the record at `-0x40` and the record at `-0x20`.
+    e.with_stack(0x50 + 0x10, |e, raw| {
+        let frame = ((raw.addr() + 0x50 + 0xf) & !0xf) - 0x44;
+        let second_record = frame.wrapping_add(4);
+        let first_record = frame.wrapping_add(0x24);
+        let zero: f64 = e.global(ZERO);
+        if f64::from(x87_quiet(value)) != zero {
+            fn_00623310(e, this, value);
+        }
+        e.call(CASTER_RESET, &args![this, 0u32]);
+        e.vcall(this.addr(), 8, &args![]);
+        let holder = this.addr().wrapping_add(PHANTOM_OFFSET);
+        if e.call(HOLDER_GET, &args![holder]).u32() != 0 {
+            e.call(MEMBER_SETUP, &args![first_record]);
+            e.call(MEMBER_A_SETUP, &args![second_record]);
+            e.call(COPY_RECORD, &args![first_record, first]);
+            e.call(COPY_RECORD, &args![second_record, second]);
+            let held = e.call(HOLDER_GET, &args![holder]).u32();
+            e.call(
+                CAST_THROUGH_HOLDER,
+                &args![held, first_record, second_record, this, 0u32],
+            );
+            let result = e
+                .call(RESULT_HOLDER, &args![this, frame.wrapping_add(3)])
+                .u32();
+            // The byte the exe keeps in `-9` is never read again.
+            e.call(RESULT_BYTE, &args![result]);
+        }
+        fn_00623070(e, this)
+    })
 }
 
 // Translated from 00623090 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -236,11 +240,13 @@ pub fn fn_00623090(e: &mut Engine, this: Ptr, first: u32, second: Ptr) {
 /// 0x1c-byte record on the stack (`006815c0`), copies `source` into it (`004a3e00`) and hands
 /// what that answers to `006219f0` on `this`.
 pub fn fn_006230f0(e: &mut Engine, this: Ptr, source: u32) {
-    let record = e.mem.alloc(0x1c);
-    e.call(MEMBER_SETUP, &args![record]);
-    let copied = e.call(COPY_RECORD, &args![record, source]).u32();
-    e.call(RECORD_CONSUME, &args![this, copied]);
-    e.mem.free(record);
+    // The record at `EBP-0x20`, `EBP` on a 16-byte boundary (`AND ESP,0xfffffff0`, `SUB ESP,0x20`).
+    e.with_stack(0x20 + 0x10, |e, raw| {
+        let record = ((raw.addr() + 0x20 + 0xf) & !0xf) - 0x20;
+        e.call(MEMBER_SETUP, &args![record]);
+        let copied = e.call(COPY_RECORD, &args![record, source]).u32();
+        e.call(RECORD_CONSUME, &args![this, copied]);
+    });
 }
 
 // Translated from 00623150 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -699,5 +705,48 @@ mod tests {
             vec![vec![0x7000, 3.0f32.to_bits()]]
         );
         assert_eq!(calls(&e, OWNER_OF), vec![vec![HELD]]);
+    }
+
+    // ---- the exe's stack frames ----
+
+    /// The block the next `with_stack(size)` takes (the last freed block of that size), with
+    /// the call log switched on.
+    fn next_frame(e: &mut Engine, size: u32) -> u32 {
+        let frame = e.mem.alloc(size);
+        e.mem.free(frame);
+        e.call_log = Some(vec![]);
+        frame
+    }
+
+    /// `EBP` of an exe frame that aligns it to 16 bytes, `below` bytes of locals under it.
+    fn aligned_ebp(raw: u32, below: u32) -> u32 {
+        (raw + below + 0xf) & !0xf
+    }
+
+    #[test]
+    fn the_decal_caster_frames_put_their_locals_below_an_aligned_ebp() {
+        // 00622d60: the record at EBP-0x90, the filter at EBP-0x94.
+        let mut e = rig();
+        let raw = next_frame(&mut e, 0xb4 + 0x10);
+        e.call(0x0062_2d60, &args![0x5000u32, 1.0f32, 0u32]);
+        let ebp = aligned_ebp(raw, 0xb4);
+        assert_eq!(calls(&e, RECORD_CONSTRUCT), vec![vec![ebp - 0x90]]);
+        assert_eq!(calls(&e, FILTER_CONSTRUCT)[0][0], ebp - 0x94);
+        // 00622f80: the records at EBP-0x20 and EBP-0x40, the byte at EBP-0x41.
+        let this = object(&mut e, &[(8, 0x0600_1008)]);
+        e.register(HOLDER_GET, |_, _| HELD.into_ret());
+        let raw = next_frame(&mut e, 0x50 + 0x10);
+        e.call(0x0062_2f80, &args![this, 0x11u32, 0x22u32, 0.0f32]);
+        let ebp = aligned_ebp(raw, 0x50);
+        assert_eq!(calls(&e, MEMBER_SETUP), vec![vec![ebp - 0x20]]);
+        assert_eq!(calls(&e, MEMBER_A_SETUP), vec![vec![ebp - 0x40]]);
+        assert_eq!(calls(&e, RESULT_HOLDER), vec![vec![this, ebp - 0x41]]);
+        // 006230f0: the record at EBP-0x20.
+        let raw = next_frame(&mut e, 0x20 + 0x10);
+        e.call(0x0062_30f0, &args![0x4000u32, 0x31u32]);
+        assert_eq!(
+            calls(&e, MEMBER_SETUP),
+            vec![vec![aligned_ebp(raw, 0x20) - 0x20]]
+        );
     }
 }

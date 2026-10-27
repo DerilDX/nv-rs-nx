@@ -78,14 +78,17 @@ pub fn hkp_multi_ray_shape_cast_ray_with_collector_impl(
 // Translated from 00e3c610 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkpMultiRayShape::castRayImpl` (Xbox PDB), thiscall with three stack words, `RET 0xC`:
 /// clears the byte the first one points to (no hit).
+/// Answers `result`: the exe leaves it in `EAX` at every `RET` (the hkBool/hkResult result
+/// returned through a pointer, which callers read through `EAX`).
 pub fn hkp_multi_ray_shape_cast_ray_impl(
     e: &mut Engine,
     _this: Ptr,
     result: Ptr,
     _unused_2: u32,
     _unused_3: u32,
-) {
+) -> Ptr {
     e.mem.set_u8(result.addr(), 0);
+    result
 }
 
 // Translated from 00e3c620 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -288,7 +291,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x00e3_c610,
-            hkp_multi_ray_shape_cast_ray_impl(Ptr, Ptr, u32, u32)
+            hkp_multi_ray_shape_cast_ray_impl(Ptr, Ptr, u32, u32) -> Ptr
         ),
         entry!(
             0x00e3_c620,
@@ -409,6 +412,19 @@ mod tests {
         r.e.mem.write(block, &[0xff; 4]);
         r.e.call(0x00e3_c610, &args![0x1234u32, block + 1, 5u32, 6u32]);
         assert_eq!(r.e.mem.bytes(block, 4), [0xff, 0, 0xff, 0xff]);
+    }
+
+    #[test]
+    fn fn_00e3c610_answers_its_result_pointer() {
+        let mut r = rig();
+        let block = r.e.mem.alloc(0x10);
+        r.e.mem.write(block, &[0xff; 4]);
+        // The exe leaves the result pointer in EAX at every RET; callers read through it.
+        assert_eq!(
+            r.e.call(0x00e3_c610, &args![0x1234u32, block + 1, 5u32, 6u32])
+                .u32(),
+            args![block + 1][0]
+        );
     }
 
     /// Doubles for the statistics callees that log `(address, arguments)`.

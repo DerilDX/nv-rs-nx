@@ -294,8 +294,9 @@ pub fn fn_00c04990(e: &mut Engine, this: Ptr) -> bool {
 // Translated from 00c04950 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed (no Ghidra function; a slot of that effect's vtable): a jump to `00b4f510` with
 /// the same `this`, answering what it answers.
-pub fn fn_00c04950(e: &mut Engine, this: Ptr) -> u32 {
-    e.call(0x00b4_f510, &args![this]).u32()
+// 00b4f510 takes no `this`: 00876850 calls it with ECX left from 00b540b0.
+pub fn fn_00c04950(e: &mut Engine, _this: Ptr) -> u32 {
+    e.call(0x00b4_f510, &args![]).u32()
 }
 
 // Translated from 00c04da0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -5493,7 +5494,7 @@ fn first_param(e: &Engine, effect: u32) -> u32 {
 /// to null (`00ba3aa0` with the address of a zeroed local). Ends in that call; its `EAX` is
 /// answered.
 pub fn fn_00c04960(e: &mut Engine, this: Ptr) -> u32 {
-    e.call(EFFECT_RETURN_00B4F510, &args![this]);
+    e.call(EFFECT_RETURN_00B4F510, &args![]);
     e.with_stack(4, |e, local| {
         e.mem.set_u32(local.addr(), 0);
         e.call(
@@ -7728,7 +7729,7 @@ mod batch_b011_tests {
     fn thunk_and_small_slots() {
         let mut e = engine();
         e.call(0x00c0_4950, &args![0x1234u32]);
-        assert_eq!(calls(&e, 0x00b4_f510), vec![vec![0x1234]]);
+        assert_eq!(calls(&e, 0x00b4_f510), vec![Vec::<u32>::new()]);
         let (this, _) = effect(&mut e, 1);
         e.mem.set_u8(this + 0x58, 7);
         e.call(0x00c0_4d50, &args![this, 0x99u32]);
@@ -8543,7 +8544,10 @@ mod n080_tests {
         let this = effect(&mut e, 0);
         e.call_log = Some(vec![]);
         assert_eq!(e.call(0x00c0_4960, &args![this]).u32(), 9);
-        assert_eq!(calls_to(&e, EFFECT_RETURN_00B4F510), vec![vec![this]]);
+        assert_eq!(
+            calls_to(&e, EFFECT_RETURN_00B4F510),
+            vec![Vec::<u32>::new()]
+        );
         assert_eq!(
             calls_to(&e, ARRAY_SET_AT_00BA3AA0)[0][..2],
             [this + 0x28, 2]

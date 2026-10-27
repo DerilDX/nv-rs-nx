@@ -787,13 +787,15 @@ pub fn fn_00e0cd20(e: &mut Engine, begin: u32, end: u32, map: u32) {
 /// `frame`, `+0x1c` set to the used size and `+0x20` to the used size plus `size`; copies `size`
 /// bytes from `begin` into the buffer at the used size (`memCpy`), adds `size` to the used size
 /// and writes the byte 1 to `*out`.
-pub fn fn_00e0ce00(e: &mut Engine, this: Ptr, out: Ptr, begin: u32, end: u32, frame: Ptr) {
+/// Answers `out`: the exe leaves it in `EAX` at every `RET` (the hkBool/hkResult result
+/// returned through a pointer, which callers read through `EAX`).
+pub fn fn_00e0ce00(e: &mut Engine, this: Ptr, out: Ptr, begin: u32, end: u32, frame: Ptr) -> Ptr {
     let this = this.addr();
     let size = end.wrapping_sub(begin);
     let room = (e.mem.u32(this + 0x14) & CAPACITY_MASK).wrapping_sub(e.mem.u32(this + 0x10));
     if (room as i32) < size as i32 {
         e.mem.set_u8(out.addr(), 0);
-        return;
+        return out;
     }
     let allocator = heap_allocator(e);
     let frames = e
@@ -823,6 +825,7 @@ pub fn fn_00e0ce00(e: &mut Engine, this: Ptr, out: Ptr, begin: u32, end: u32, fr
     let buffer = e.mem.u32(this + 0xc);
     e.call(MEM_COPY, &args![buffer.wrapping_add(used), begin, size]);
     e.mem.set_u8(out.addr(), 1);
+    out
 }
 
 /// The inlined "append a word": after the router has been asked for its allocator, makes room
@@ -3743,7 +3746,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e0cc90, fn_00e0cc90(Ptr, u32) -> u32),
         entry!(0x00e0ccf0, fn_00e0ccf0(Ptr)),
         entry!(0x00e0cd20, fn_00e0cd20(u32, u32, u32)),
-        entry!(0x00e0ce00, fn_00e0ce00(Ptr, Ptr, u32, u32, Ptr)),
+        entry!(0x00e0ce00, fn_00e0ce00(Ptr, Ptr, u32, u32, Ptr) -> Ptr),
         entry!(
             0x00e0cec0,
             output_stats_for_frame(u32, u32, u32, f32, f32, u32)
@@ -4739,6 +4742,30 @@ mod tests {
         assert_eq!(e.mem.u8(out), 0);
         assert_eq!(e.mem.u32(this + 0x10), 8 + 0x10);
         assert_eq!(e.mem.u32(threads + 12 + 4), 1);
+    }
+
+    #[test]
+    fn fn_00e0ce00_answers_its_result_pointer() {
+        let mut e = engine();
+        e.register(MEM_COPY, |_, _| Ret::default());
+        let this = e.mem.alloc(0x20);
+        let threads = e.mem.alloc(24);
+        e.mem.set_u32(threads + 8, NOT_OWNED);
+        e.mem.set_u32(threads + 12 + 8, NOT_OWNED);
+        let buffer = e.mem.alloc(0x40);
+        e.mem.set_u32(this, threads);
+        e.mem.set_u32(this + 0xc, buffer);
+        e.mem.set_u32(this + 0x10, 8);
+        e.mem.set_u32(this + 0x14, 0x30 | NOT_OWNED);
+        let frame = e.mem.alloc(0x24);
+        e.mem.set_u32(frame + 0x18, 1);
+        let out = e.mem.alloc(4);
+        let source = e.mem.alloc(0x20);
+        // EAX is `out` at both RETs (the hkBool result pointer the callers read through).
+        let answered = e
+            .call(0x00e0_ce00, &args![this, out, source, source + 0x10, frame])
+            .u32();
+        assert_eq!(answered, out);
     }
 
     #[test]

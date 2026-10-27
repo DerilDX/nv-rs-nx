@@ -292,27 +292,31 @@ pub fn hkp_save_contact_points_util_serialize_collision_entry(
     if e.mem.u16(header + 4) == 0 {
         return 1;
     }
-    let scratch = e.mem.alloc(0x10);
-    let (kind_at, size_at, track_at) = (scratch, scratch + 4, scratch + 8);
-    e.mem.set_u32(size_at, u32::MAX);
-    e.mem.set_u32(kind_at, 0);
-    let failed = e
-        .call(
-            SERIALIZE_ENTRY,
-            &args![
-                entry,
-                1u32,
-                context,
-                size_at,
-                kind_at,
-                track_at,
-                record + 0x114
-            ],
-        )
-        .u32();
-    let kind = e.mem.u8(kind_at);
-    let size = e.mem.u32(size_at);
-    e.mem.free(scratch);
+    // The exe's frame (`SUB ESP,0xc`, two pushes): 0x14 bytes, the kind at +0x8, the size at
+    // +0xc and at +0x10 the byte 1 that is both the flag argument and the track out word
+    // (00dcd757..00dcd77e).
+    let (failed, kind, size) = e.with_stack(0x14, |e, frame| {
+        let scratch = frame.addr() + 8;
+        let (kind_at, size_at, track_at) = (scratch, scratch + 4, scratch + 8);
+        e.mem.set_u8(track_at, 1);
+        e.mem.set_u32(size_at, u32::MAX);
+        e.mem.set_u32(kind_at, 0);
+        let failed = e
+            .call(
+                SERIALIZE_ENTRY,
+                &args![
+                    entry,
+                    1u32,
+                    context,
+                    size_at,
+                    kind_at,
+                    track_at,
+                    record + 0x114
+                ],
+            )
+            .u32();
+        (failed, e.mem.u8(kind_at), e.mem.u32(size_at))
+    });
     if failed != 0 {
         return 1;
     }
@@ -476,6 +480,20 @@ const SORT_ARRAY: u32 = 0x00cd_1e20;
 /// (answer 0) is handed to `00dcec70` on `container`; the record loses its reference either way.
 /// The local array is freed through slot `0x10` unless it was never taken.
 pub fn fn_00dcda40(e: &mut Engine, converter: Ptr, group: Ptr, container: Ptr) {
+    // The exe's frame (`SUB ESP,0x10`, four pushes) taken with the arguments: the sorted array
+    // at +0x14 (00dcda4d, 00dcdaf3), the return address at +0x20; the byte count goes to the
+    // allocator through the `group` argument's own slot, +0x28 (00dcda9c).
+    e.with_stack(0x30, |e, frame| {
+        let frame = frame.addr();
+        e.mem.set_u32(frame + 0x24, converter.addr());
+        e.mem.set_u32(frame + 0x28, group.addr());
+        e.mem.set_u32(frame + 0x2c, container.addr());
+        fn_00dcda40_in_frame(e, frame, converter, group, container)
+    });
+}
+
+/// [`fn_00dcda40`] in its frame.
+fn fn_00dcda40_in_frame(e: &mut Engine, frame: u32, converter: Ptr, group: Ptr, container: Ptr) {
     let converter = converter.addr();
     let group = group.addr();
     let container = container.addr();
@@ -486,11 +504,10 @@ pub fn fn_00dcda40(e: &mut Engine, converter: Ptr, group: Ptr, container: Ptr) {
         // The code that would free an earlier array is unreachable: the capacity word starts
         // with its "not owned" bit set.
         let wanted = e.mem.i32(group + 0x2c).wrapping_mul(4);
-        let bytes = e.mem.alloc(4);
+        let bytes = frame + 0x28;
         e.mem.set_i32(bytes, wanted);
         data = e.vcall(allocator_object, 0xc, &args![bytes]).u32();
         let granted = e.mem.i32(bytes);
-        e.mem.free(bytes);
         capacity = (granted.wrapping_add((granted >> 31) & 3) >> 2) as u32;
     }
     let count = e.mem.i32(group + 0x2c);
@@ -505,7 +522,7 @@ pub fn fn_00dcda40(e: &mut Engine, converter: Ptr, group: Ptr, container: Ptr) {
     let sort_second = e.mem.u32(group + 0x38);
     let sort_first = e.mem.u32(group + 0x34);
     let allocator_object = allocator(e);
-    let array = e.mem.alloc(0xc);
+    let array = frame + 0x14;
     e.mem.set_u32(array, data);
     e.mem.set_u32(array + 4, count as u32);
     e.mem.set_u32(array + 8, capacity);
@@ -513,7 +530,6 @@ pub fn fn_00dcda40(e: &mut Engine, converter: Ptr, group: Ptr, container: Ptr) {
         SORT_ARRAY,
         &args![array, allocator_object, count, sort_first, sort_second],
     );
-    e.mem.free(array);
     if count > 0 {
         let mut item_index: u32 = 0;
         loop {
@@ -605,72 +621,74 @@ pub fn hkp_save_contact_points_util_save_contact_points(
     let bodies = bodies.addr();
     let container = container.addr();
     let world = e.mem.u32(e.mem.u32(bodies) + 8);
-    let map = e.mem.alloc(0xc);
-    e.mem.set_u32(map, 0);
-    e.mem.set_u32(map + 4, 0);
-    e.mem.set_u32(map + 8, u32::MAX);
-    let allocator_object = allocator(e);
-    e.call(MAP_RESERVE, &args![map, allocator_object, count]);
-    let list = e.mem.alloc(0xc);
-    if count > 0 {
-        let mut body_index: u32 = 0;
-        loop {
-            let collidable = e.mem.u32(bodies.wrapping_add(body_index.wrapping_mul(4))) + 0x10;
-            let allocator_object = allocator(e);
-            e.call(MAP_INSERT, &args![map, allocator_object, collidable, 0u32]);
-            init_empty_array(e, list);
-            let collidable = e.mem.u32(bodies.wrapping_add(body_index.wrapping_mul(4))) + 0x10;
-            e.call(GET_COLLISION_ENTRIES_SORTED, &args![collidable, list]);
-            let mut pair_index: u32 = 0;
-            if e.mem.i32(list + 4) > 0 {
-                loop {
-                    let pairs = e.mem.u32(list);
-                    let pair = pairs.wrapping_add(pair_index.wrapping_mul(8));
-                    let other = e.mem.u32(pair.wrapping_add(4));
-                    let found = e.call(MAP_FIND_KEY, &args![map, other]).i32();
-                    if found > e.mem.i32(map + 8) {
-                        let fresh = allocate(e, 0x140);
-                        e.mem.set_u16(fresh + 4, 0x140);
-                        let record = e.call(CONSTRUCT_RECORD, &args![fresh]).u32();
-                        let context = e.mem.u32(world + 0x78);
-                        let entry = e.mem.u32(pair);
-                        let failed = e
-                            .call(
-                                SERIALIZE_COLLISION_ENTRY,
-                                &args![converter, entry, context, record],
-                            )
-                            .u32();
-                        if failed == 0 {
-                            e.call(STORE_RECORD, &args![container, record]);
+    // The exe's frame (`SUB ESP,0x1c`, four pushes): 0x2c bytes, the entries list at +0x14
+    // (00dcdc6a) and the body map at +0x20 (00dcdc16).
+    e.with_stack(0x2c, |e, frame| {
+        let map = frame.addr() + 0x20;
+        e.mem.set_u32(map, 0);
+        e.mem.set_u32(map + 4, 0);
+        e.mem.set_u32(map + 8, u32::MAX);
+        let allocator_object = allocator(e);
+        e.call(MAP_RESERVE, &args![map, allocator_object, count]);
+        let list = frame.addr() + 0x14;
+        if count > 0 {
+            let mut body_index: u32 = 0;
+            loop {
+                let collidable = e.mem.u32(bodies.wrapping_add(body_index.wrapping_mul(4))) + 0x10;
+                let allocator_object = allocator(e);
+                e.call(MAP_INSERT, &args![map, allocator_object, collidable, 0u32]);
+                init_empty_array(e, list);
+                let collidable = e.mem.u32(bodies.wrapping_add(body_index.wrapping_mul(4))) + 0x10;
+                e.call(GET_COLLISION_ENTRIES_SORTED, &args![collidable, list]);
+                let mut pair_index: u32 = 0;
+                if e.mem.i32(list + 4) > 0 {
+                    loop {
+                        let pairs = e.mem.u32(list);
+                        let pair = pairs.wrapping_add(pair_index.wrapping_mul(8));
+                        let other = e.mem.u32(pair.wrapping_add(4));
+                        let found = e.call(MAP_FIND_KEY, &args![map, other]).i32();
+                        if found > e.mem.i32(map + 8) {
+                            let fresh = allocate(e, 0x140);
+                            e.mem.set_u16(fresh + 4, 0x140);
+                            let record = e.call(CONSTRUCT_RECORD, &args![fresh]).u32();
+                            let context = e.mem.u32(world + 0x78);
+                            let entry = e.mem.u32(pair);
+                            let failed = e
+                                .call(
+                                    SERIALIZE_COLLISION_ENTRY,
+                                    &args![converter, entry, context, record],
+                                )
+                                .u32();
+                            if failed == 0 {
+                                e.call(STORE_RECORD, &args![container, record]);
+                            }
+                            e.call(REMOVE_REFERENCE, &args![record]);
                         }
-                        e.call(REMOVE_REFERENCE, &args![record]);
-                    }
-                    pair_index += 1;
-                    if pair_index as i32 >= e.mem.i32(list + 4) {
-                        break;
+                        pair_index += 1;
+                        if pair_index as i32 >= e.mem.i32(list + 4) {
+                            break;
+                        }
                     }
                 }
-            }
-            let allocator_object = allocator(e);
-            let capacity = e.mem.u32(list + 8);
-            e.mem.set_u32(list + 4, 0);
-            if (capacity as i32) >= 0 {
-                let data = e.mem.u32(list);
-                let bytes = (capacity & 0x3fff_ffff).wrapping_mul(8);
-                e.vcall(allocator_object, 0x10, &args![data, bytes]);
-            }
-            body_index += 1;
-            init_empty_array(e, list);
-            if body_index as i32 >= count {
-                break;
+                let allocator_object = allocator(e);
+                let capacity = e.mem.u32(list + 8);
+                e.mem.set_u32(list + 4, 0);
+                if (capacity as i32) >= 0 {
+                    let data = e.mem.u32(list);
+                    let bytes = (capacity & 0x3fff_ffff).wrapping_mul(8);
+                    e.vcall(allocator_object, 0x10, &args![data, bytes]);
+                }
+                body_index += 1;
+                init_empty_array(e, list);
+                if body_index as i32 >= count {
+                    break;
+                }
             }
         }
-    }
-    let allocator_object = allocator(e);
-    e.call(MAP_CLEAR_AND_DEALLOCATE, &args![map, allocator_object]);
-    e.call(MAP_DESTRUCT, &args![map]);
-    e.mem.free(list);
-    e.mem.free(map);
+        let allocator_object = allocator(e);
+        e.call(MAP_CLEAR_AND_DEALLOCATE, &args![map, allocator_object]);
+        e.call(MAP_DESTRUCT, &args![map]);
+    });
 }
 
 // Translated from 00dcde10 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -771,8 +789,23 @@ pub fn hkp_save_contact_points_util_serialize_1n_track(
     if e.mem.i32(source + 4) <= 0 {
         return 0;
     }
-    let scratch = e.mem.alloc(0x10);
-    let (track_at, size_at, kind_at) = (scratch, scratch + 4, scratch + 8);
+    // The exe's frame (`SUB ESP,0x18`, four pushes): 0x28 bytes, the track word at +0x14, the
+    // size at +0x18 and the kind at +0x24 (00dce037..00dce049).
+    e.with_stack(0x28, |e, frame| {
+        let frame = frame.addr();
+        serialize_1n_track_in_frame(e, frame, source, context, track)
+    })
+}
+
+/// [`hkp_save_contact_points_util_serialize_1n_track`] in its frame.
+fn serialize_1n_track_in_frame(
+    e: &mut Engine,
+    frame: u32,
+    source: u32,
+    context: Ptr,
+    track: u32,
+) -> u32 {
+    let (track_at, size_at, kind_at) = (frame + 0x14, frame + 0x18, frame + 0x24);
     let mut item_index: i32 = 0;
     loop {
         let item = e.mem.u32(
@@ -807,7 +840,6 @@ pub fn hkp_save_contact_points_util_serialize_1n_track(
                         e.call(DESTRUCT_TRACK_RECORD, &args![record]);
                         free_block(e, record, 0x20);
                     }
-                    e.mem.free(scratch);
                     return 1;
                 }
                 assert!(record != 0, "00dcdf70: the allocation of a record failed");
@@ -871,7 +903,6 @@ pub fn hkp_save_contact_points_util_serialize_1n_track(
             break;
         }
     }
-    e.mem.free(scratch);
     0
 }
 /// `hkpWorldAgentUtil::getIslandFromAgentEntry` (`00cc0e20`, cdecl `(agent, island_a, island_b)`).
@@ -1105,163 +1136,165 @@ pub fn hkp_save_contact_points_util_deserialize_collision_entry(
     let owner = e.mem.u32(object + 0x74);
     let island_at = e.mem.u32(owner + u32::from(e.mem.u8(owner + 0x1a)) * 4 + 4);
     let counters = e.mem.u32(island_at + 0xcc);
-    let info_at = e.mem.alloc(0x10);
-    for (index, value) in info.iter().enumerate() {
-        e.mem.set_u32(info_at + 4 * index as u32, *value);
-    }
-    e.call(
-        ADD_CONSTRAINT_INFO,
-        &args![counters, object + 0x44, info_at],
-    );
-    e.mem.free(info_at);
-    let atoms = e.mem.u32(object + 0x3c);
-    let contact_bytes = u32::from(e.mem.u8(atoms + 0xa)).wrapping_mul(atom_count);
-    let destination = atoms
-        .wrapping_add(u32::from(e.mem.u16(atoms + 6)) << 5)
-        .wrapping_add(0x30);
-    let source = e.mem.u32(saved + 0x50);
-    e.call(MEM_COPY, &args![destination, source, contact_bytes]);
-    let source = e.mem.u32(saved + 0x5c);
-    let atoms = e.mem.u32(object + 0x3c);
-    e.call(MEM_COPY, &args![atoms + 0x30, source, atom_count << 5]);
-    if e.mem.u8(options + 1) != 0 {
+    // The stack frame of the exe: the ids array at +0x1C, the constraint info at +0x28
+    // (00dce44e), an event at +0x3C and the words the exe stores there (some far away from
+    // the event, at +0x30A0 to +0x30C4). The frame starts on a 16-byte boundary
+    // (`AND ESP,0xfffffff0`, `0x30f4` bytes through `_chkstk`, three pushes).
+    e.with_stack(COLLISION_FRAME + 0x10, |e, raw| {
+        let frame = (raw.addr() + 0xf) & !0xf;
+        let info_at = frame + 0x28;
+        for (index, value) in info.iter().enumerate() {
+            e.mem.set_u32(info_at + 4 * index as u32, *value);
+        }
+        e.call(
+            ADD_CONSTRAINT_INFO,
+            &args![counters, object + 0x44, info_at],
+        );
         let atoms = e.mem.u32(object + 0x3c);
-        let stride = u32::from(e.mem.u8(atoms + 0xa));
-        let mut cursor = atoms
+        let contact_bytes = u32::from(e.mem.u8(atoms + 0xa)).wrapping_mul(atom_count);
+        let destination = atoms
             .wrapping_add(u32::from(e.mem.u16(atoms + 6)) << 5)
             .wrapping_add(0x30);
-        if e.mem.u16(atoms + 4) != 0 {
-            let mut index: i32 = 0;
-            loop {
-                e.mem.set_u32(cursor + 8, 0);
-                let total = i32::from(e.mem.u16(e.mem.u32(object + 0x3c) + 4));
-                index += 1;
-                cursor = cursor.wrapping_add(stride);
-                if index >= total {
-                    break;
+        let source = e.mem.u32(saved + 0x50);
+        e.call(MEM_COPY, &args![destination, source, contact_bytes]);
+        let source = e.mem.u32(saved + 0x5c);
+        let atoms = e.mem.u32(object + 0x3c);
+        e.call(MEM_COPY, &args![atoms + 0x30, source, atom_count << 5]);
+        if e.mem.u8(options + 1) != 0 {
+            let atoms = e.mem.u32(object + 0x3c);
+            let stride = u32::from(e.mem.u8(atoms + 0xa));
+            let mut cursor = atoms
+                .wrapping_add(u32::from(e.mem.u16(atoms + 6)) << 5)
+                .wrapping_add(0x30);
+            if e.mem.u16(atoms + 4) != 0 {
+                let mut index: i32 = 0;
+                loop {
+                    e.mem.set_u32(cursor + 8, 0);
+                    let total = i32::from(e.mem.u16(e.mem.u32(object + 0x3c) + 4));
+                    index += 1;
+                    cursor = cursor.wrapping_add(stride);
+                    if index >= total {
+                        break;
+                    }
                 }
             }
         }
-    }
-    // The stack frame of the exe: the ids array at +0x1C, an event at +0x3C and the words the
-    // exe stores there (some far away from the event, at +0x30A0 to +0x30C4).
-    let frame = e.mem.alloc(COLLISION_FRAME);
-    let ids = frame + 0x1c;
-    init_empty_array(e, ids);
-    e.vcall(object, 0x30, &args![ids]);
-    let event = frame + 0x3c;
-    let mut count = e.mem.i32(ids + 4);
-    if e.mem.u8(options + 8) != 0 && count > 0 {
-        let mut index: u32 = 0;
-        loop {
-            let id = u32::from(
-                e.mem
-                    .u16(e.mem.u32(ids).wrapping_add(index.wrapping_mul(2))),
-            );
-            let quiet = x87_quiet_bits(e.global::<u32>(ADDED_EVENT_FLOAT));
-            e.mem.set_u32(frame + 0x30a0, quiet);
-            e.mem.set_u32(frame + 0x30c0, 0);
-            e.mem.set_u32(frame + 0x74, 0);
-            e.mem.set_u32(frame + 0x30c4, 0);
-            e.mem.set_u32(frame + 0x38, 0);
-            e.mem.set_u32(frame + 0x10, 0);
-            if e.mem.u8(options + 0xa) != 0 {
-                e.mem.set_u32(frame + 0x38, body_a + 0x10);
-                e.mem.set_u32(frame + 0x10, body_b + 0x10);
-            }
-            let point = e.vcall(object, 0x28, &args![id]).u32();
-            let properties = e.vcall(object, 0x2c, &args![id]).u32();
-            e.mem.set_u32(frame + 0x58, 0);
-            let first = e.mem.u32(frame + 0x38);
-            e.mem.set_u32(event, first);
-            let second = e.mem.u32(frame + 0x10);
-            e.mem.set_u32(event + 4, second);
-            e.mem.set_u32(event + 0x10, properties);
-            e.mem.set_u32(event + 8, 1);
-            e.mem.set_u32(event + 0x14, 0);
-            e.mem.set_u32(event + 0x18, point);
-            e.mem.set_u32(event + 0x24, object);
-            e.mem.set_u32(event + 0x28, context);
-            e.mem.set_u32(event + 0x2c, frame + 0x70);
-            e.mem.set_u32(event + 0x20, 0);
-            e.mem.set_u16(event + 0x30, id as u16);
-            if e.mem.u32(object + 8) == 0 {
-                let word = e.mem.u16(object + 0x12);
-                e.mem.set_u16(event + 0x32, word);
-            } else {
-                e.mem.set_u16(event + 0x32, 0);
-            }
-            let world = e.mem.u32(body_a + 8);
-            e.call(FIRE_CONTACT_POINT_ADDED, &args![world, event]);
-            if e.mem.u16(body_a + 0x204) != 0 {
-                e.call(FIRE_CONTACT_POINT_ADDED_INTERNAL, &args![body_a, event]);
-            }
-            if e.mem.u16(body_b + 0x204) != 0 {
-                e.call(FIRE_CONTACT_POINT_ADDED_INTERNAL, &args![body_b, event]);
-            }
-            index += 1;
-            count = e.mem.i32(ids + 4);
-            if index as i32 >= count {
-                break;
-            }
-        }
-    }
-    if e.mem.u8(options + 9) != 0 {
-        let total = count;
-        if total > 0 {
+        let ids = frame + 0x1c;
+        init_empty_array(e, ids);
+        e.vcall(object, 0x30, &args![ids]);
+        let event = frame + 0x3c;
+        let mut count = e.mem.i32(ids + 4);
+        if e.mem.u8(options + 8) != 0 && count > 0 {
             let mut index: u32 = 0;
             loop {
                 let id = u32::from(
                     e.mem
                         .u16(e.mem.u32(ids).wrapping_add(index.wrapping_mul(2))),
                 );
+                let quiet = x87_quiet_bits(e.global::<u32>(ADDED_EVENT_FLOAT));
+                e.mem.set_u32(frame + 0x30a0, quiet);
+                e.mem.set_u32(frame + 0x30c0, 0);
+                e.mem.set_u32(frame + 0x74, 0);
+                e.mem.set_u32(frame + 0x30c4, 0);
+                e.mem.set_u32(frame + 0x38, 0);
+                e.mem.set_u32(frame + 0x10, 0);
+                if e.mem.u8(options + 0xa) != 0 {
+                    e.mem.set_u32(frame + 0x38, body_a + 0x10);
+                    e.mem.set_u32(frame + 0x10, body_b + 0x10);
+                }
                 let point = e.vcall(object, 0x28, &args![id]).u32();
-                if e.mem.u8(point + 0xf) & 1 == 0 {
-                    let point = e.vcall(object, 0x28, &args![id]).u32();
-                    let properties = e.vcall(object, 0x2c, &args![id]).u32();
-                    e.mem.set_u32(frame + 0x50, properties);
-                    e.mem.set_u32(frame + 0x54, point);
-                    e.mem.set_u32(frame + 0x64, point.wrapping_add(0x14));
-                    let world = e.mem.u32(body_a + 8);
-                    e.mem.set_u32(event, 2);
-                    e.mem.set_u32(event + 0xc, object);
-                    e.mem.set_u32(event + 4, body_a);
-                    e.mem.set_u32(event + 8, body_b);
-                    e.mem.set_u32(event + 0x10, 4);
-                    e.mem.set_u8(event + 0x1c, 0);
-                    e.mem.set_u8(event + 0x1d, 0);
-                    e.mem.set_u8(event + 0x1e, 0);
-                    e.mem.set_u32(event + 0x20, 0);
-                    e.mem.set_u32(event + 0x24, 0);
-                    e.mem.set_u32(event + 0x2c, 0);
-                    e.mem.set_u32(event + 0x30, 0);
-                    e.call(FIRE_CONTACT_POINT_CALLBACK, &args![world, event]);
-                    e.mem.set_u32(event, 0);
-                    if e.mem.u16(body_a + 0x204) != 0 {
-                        e.call(FIRE_CONTACT_POINT_CALLBACK_INTERNAL, &args![body_a, event]);
-                    }
-                    e.mem.set_u32(event, 1);
-                    if e.mem.u16(body_b + 0x204) != 0 {
-                        e.call(FIRE_CONTACT_POINT_CALLBACK_INTERNAL, &args![body_b, event]);
-                    }
+                let properties = e.vcall(object, 0x2c, &args![id]).u32();
+                e.mem.set_u32(frame + 0x58, 0);
+                let first = e.mem.u32(frame + 0x38);
+                e.mem.set_u32(event, first);
+                let second = e.mem.u32(frame + 0x10);
+                e.mem.set_u32(event + 4, second);
+                e.mem.set_u32(event + 0x10, properties);
+                e.mem.set_u32(event + 8, 1);
+                e.mem.set_u32(event + 0x14, 0);
+                e.mem.set_u32(event + 0x18, point);
+                e.mem.set_u32(event + 0x24, object);
+                e.mem.set_u32(event + 0x28, context);
+                e.mem.set_u32(event + 0x2c, frame + 0x70);
+                e.mem.set_u32(event + 0x20, 0);
+                e.mem.set_u16(event + 0x30, id as u16);
+                if e.mem.u32(object + 8) == 0 {
+                    let word = e.mem.u16(object + 0x12);
+                    e.mem.set_u16(event + 0x32, word);
+                } else {
+                    e.mem.set_u16(event + 0x32, 0);
+                }
+                let world = e.mem.u32(body_a + 8);
+                e.call(FIRE_CONTACT_POINT_ADDED, &args![world, event]);
+                if e.mem.u16(body_a + 0x204) != 0 {
+                    e.call(FIRE_CONTACT_POINT_ADDED_INTERNAL, &args![body_a, event]);
+                }
+                if e.mem.u16(body_b + 0x204) != 0 {
+                    e.call(FIRE_CONTACT_POINT_ADDED_INTERNAL, &args![body_b, event]);
                 }
                 index += 1;
-                if index as i32 >= total {
+                count = e.mem.i32(ids + 4);
+                if index as i32 >= count {
                     break;
                 }
             }
         }
-    }
-    e.call(INVALIDATE_TIM_IN_AGENT, &args![agent, context]);
-    let allocator_object = allocator(e);
-    let capacity = e.mem.u32(ids + 8);
-    e.mem.set_u32(ids + 4, 0);
-    if (capacity as i32) >= 0 {
-        let data = e.mem.u32(ids);
-        let bytes = (capacity & 0x3fff_ffff).wrapping_mul(2);
-        e.vcall(allocator_object, 0x10, &args![data, bytes]);
-    }
-    e.mem.free(frame);
+        if e.mem.u8(options + 9) != 0 {
+            let total = count;
+            if total > 0 {
+                let mut index: u32 = 0;
+                loop {
+                    let id = u32::from(
+                        e.mem
+                            .u16(e.mem.u32(ids).wrapping_add(index.wrapping_mul(2))),
+                    );
+                    let point = e.vcall(object, 0x28, &args![id]).u32();
+                    if e.mem.u8(point + 0xf) & 1 == 0 {
+                        let point = e.vcall(object, 0x28, &args![id]).u32();
+                        let properties = e.vcall(object, 0x2c, &args![id]).u32();
+                        e.mem.set_u32(frame + 0x50, properties);
+                        e.mem.set_u32(frame + 0x54, point);
+                        e.mem.set_u32(frame + 0x64, point.wrapping_add(0x14));
+                        let world = e.mem.u32(body_a + 8);
+                        e.mem.set_u32(event, 2);
+                        e.mem.set_u32(event + 0xc, object);
+                        e.mem.set_u32(event + 4, body_a);
+                        e.mem.set_u32(event + 8, body_b);
+                        e.mem.set_u32(event + 0x10, 4);
+                        e.mem.set_u8(event + 0x1c, 0);
+                        e.mem.set_u8(event + 0x1d, 0);
+                        e.mem.set_u8(event + 0x1e, 0);
+                        e.mem.set_u32(event + 0x20, 0);
+                        e.mem.set_u32(event + 0x24, 0);
+                        e.mem.set_u32(event + 0x2c, 0);
+                        e.mem.set_u32(event + 0x30, 0);
+                        e.call(FIRE_CONTACT_POINT_CALLBACK, &args![world, event]);
+                        e.mem.set_u32(event, 0);
+                        if e.mem.u16(body_a + 0x204) != 0 {
+                            e.call(FIRE_CONTACT_POINT_CALLBACK_INTERNAL, &args![body_a, event]);
+                        }
+                        e.mem.set_u32(event, 1);
+                        if e.mem.u16(body_b + 0x204) != 0 {
+                            e.call(FIRE_CONTACT_POINT_CALLBACK_INTERNAL, &args![body_b, event]);
+                        }
+                    }
+                    index += 1;
+                    if index as i32 >= total {
+                        break;
+                    }
+                }
+            }
+        }
+        e.call(INVALIDATE_TIM_IN_AGENT, &args![agent, context]);
+        let allocator_object = allocator(e);
+        let capacity = e.mem.u32(ids + 8);
+        e.mem.set_u32(ids + 4, 0);
+        if (capacity as i32) >= 0 {
+            let data = e.mem.u32(ids);
+            let bytes = (capacity & 0x3fff_ffff).wrapping_mul(2);
+            e.vcall(allocator_object, 0x10, &args![data, bytes]);
+        }
+    });
     0
 }
 
@@ -1275,13 +1308,14 @@ pub fn hkp_save_contact_points_util_load_contact_points(
     group: Ptr,
     world: Ptr,
 ) {
-    let selector = e.mem.alloc(4);
-    e.mem.set_u32(selector, LOAD_SELECTOR_VTABLE);
-    e.call(
-        LOAD_CONTACT_POINTS_INTERNAL,
-        &args![converter, group, world, selector],
-    );
-    e.mem.free(selector);
+    // The exe's frame (`PUSH ECX`): the selector is all of it (00dce7b9).
+    e.with_stack(4, |e, selector| {
+        e.mem.set_u32(selector.addr(), LOAD_SELECTOR_VTABLE);
+        e.call(
+            LOAD_CONTACT_POINTS_INTERNAL,
+            &args![converter, group, world, selector],
+        );
+    });
 }
 
 /// `hkpSaveContactPointsUtil::loadContactPointsInternal` (`00dcea10`).
@@ -1989,10 +2023,14 @@ mod tests {
         let mut e = engine();
         let log = new_log();
         let c = collision(&mut e, &log, 0, 2, 0);
+        // The exe's 0x14-byte frame: the kind at +0x8, the size at +0xc, the track at +0x10.
+        let frame = e.mem.alloc(0x14);
+        e.mem.free(frame);
         assert_eq!(serialize_collision(&mut e, &c), 0);
         let serialize = calls(&log, SERIALIZE_ENTRY);
         assert_eq!(serialize.len(), 1);
         assert_eq!(serialize[0][..3], [c.entry, 1, c.context]);
+        assert_eq!(serialize[0][3..6], [frame + 0xc, frame + 8, frame + 0x10]);
         assert_eq!(serialize[0][6], c.record + 0x114);
         assert_eq!(e.mem.u8(c.record + 0x19), 7);
         assert_eq!(bytes(&e, c.record + 0x74, 0x10), bytes(&e, c.entry, 0x10));
@@ -2211,11 +2249,15 @@ mod tests {
         record_doubles(&mut e, &log, entries[1]);
         let converter = e.mem.alloc(8);
         let container = e.mem.alloc(8);
+        // The sorted array sits at +0x14 of the exe's 0x30-byte frame (with the arguments).
+        let frame = e.mem.alloc(0x30);
+        e.mem.free(frame);
         e.call(0x00dc_da40, &args![converter, group, container]);
         let list = e.mem.u32(group + 0x28);
         // The sort sees: this, allocator, count, the two words, the array header and the items.
         let sort = calls(&log, SORT_ARRAY);
         assert_eq!(sort.len(), 1);
+        assert_eq!(sort[0][0], frame + 0x14);
         assert_eq!(sort[0][1..5], [allocator, 2, 0x11, 0x22]);
         let data = sort[0][5];
         assert_eq!(
@@ -2353,9 +2395,13 @@ mod tests {
         });
         let container = e.mem.alloc(8);
         let converter = e.mem.alloc(8);
+        // The body map sits at +0x20 of the exe's 0x2c-byte frame.
+        let frame = e.mem.alloc(0x2c);
+        e.mem.free(frame);
         e.call(0x00dc_dc00, &args![converter, bodies, 2i32, container]);
         let reserved = calls(&log, MAP_RESERVE);
         assert_eq!(reserved.len(), 1);
+        assert_eq!(reserved[0][0], frame + 0x20);
         assert_eq!(reserved[0][2], 2);
         assert_eq!(
             calls(&log, MAP_INSERT)
@@ -2606,9 +2652,16 @@ mod tests {
         let (source, item) = one_item_source(&mut e);
         entry_double(&mut e, &log, item + 0x10, 0);
         let track = e.mem.alloc(0x20);
+        // The exe's 0x28-byte frame: the track word +0x14, the size +0x18, the kind +0x24.
+        let frame = e.mem.alloc(0x28);
+        e.mem.free(frame);
         let got = e.call(0x00dc_df70, &args![source, 0x99u32, track]).u32();
         assert_eq!(got, 0);
         let serialized = calls(&log, SERIALIZE_ENTRY);
+        assert_eq!(
+            serialized[0][3..6],
+            [frame + 0x18, frame + 0x24, frame + 0x14]
+        );
         assert_eq!(
             serialized
                 .iter()
@@ -2906,7 +2959,12 @@ mod tests {
         let s = scene(&mut e, &log, 0, 0, 4);
         set_options(&mut e, &s, [1, 1, 1, 1]);
         e.mem.set_u16(s.body_a + 0x204, 1);
+        // The constraint info at +0x28 of the exe's aligned frame.
+        let block = e.mem.alloc(COLLISION_FRAME + 0x10);
+        e.mem.free(block);
+        let frame = (block + 0xf) & !0xf;
         assert_eq!(deserialize_collision(&mut e, &s), 0);
+        assert_eq!(calls(&log, ADD_CONSTRAINT_INFO)[0][2], frame + 0x28);
         assert_eq!(
             calls(&log, DESTROY_OLD_ENTRY),
             vec![vec![0xffff_fffe, 0xc0de, s.object, 0x1a1a, s.agent]]
@@ -3187,9 +3245,13 @@ mod tests {
                 .push((LOAD_CONTACT_POINTS_INTERNAL, words));
             Ret::default()
         });
+        // The selector is the exe's whole 4-byte frame.
+        let frame = e.mem.alloc(4);
+        e.mem.free(frame);
         e.call(0x00dc_e7b0, &args![0x11u32, 0x22u32, 0x33u32]);
         let loaded = calls(&log, LOAD_CONTACT_POINTS_INTERNAL);
         assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0][3], frame);
         assert_eq!(loaded[0][..3], [0x11, 0x22, 0x33]);
         assert_eq!(loaded[0][4], LOAD_SELECTOR_VTABLE);
     }

@@ -121,8 +121,11 @@ pub fn hkp_ball_and_socket_constraint_data_get_runtime_info(
 // Translated from 00d54270 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkpBallAndSocketConstraintData::isValid` (named in the engine map): stores 1 in the byte
 /// at `valid`.
-pub fn hkp_ball_and_socket_constraint_data_is_valid(e: &mut Engine, _this: Ptr, valid: Ptr) {
+/// Answers `valid`: the exe leaves it in `EAX` at every `RET` (the hkBool/hkResult result
+/// returned through a pointer, which callers read through `EAX`).
+pub fn hkp_ball_and_socket_constraint_data_is_valid(e: &mut Engine, _this: Ptr, valid: Ptr) -> Ptr {
     e.mem.set_u8(valid.addr(), 1);
+    valid
 }
 
 // Translated from 00d54280 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -140,16 +143,19 @@ pub fn hkp_ball_and_socket_constraint_data_get_type(_e: &mut Engine, _this: Ptr)
 /// Returns `this`.
 pub fn hkp_ball_and_socket_constraint_data_construct(e: &mut Engine, this: Ptr) -> Ptr {
     let base = this.addr();
-    let one = e.mem.alloc(4);
-    e.mem.set_f32(one, 1.0);
-    e.mem.set_u16(base + 6, 1);
-    e.mem.set_u32(base + 8, 0);
-    e.mem.set_u32(base, BALL_AND_SOCKET_VTABLE);
-    e.mem.set_u16(base + 0x10, 3);
-    e.mem.set_u8(base + 0x42, 0);
-    e.mem.set_u16(base + 0x40, 5);
-    e.call(UFLOAT8_ASSIGN, &args![base + 0x43, one]);
-    e.mem.free(one);
+    // The exe's frame (`AND ESP,0xfffffff0`, `SUB ESP,0xc`, one push): 0x10 bytes from a
+    // 16-byte boundary, the 1.0 at +0xc (00d5429e).
+    e.with_stack(0x10 + 0x10, |e, raw| {
+        let one = ((raw.addr() + 0xf) & !0xf) + 0xc;
+        e.mem.set_f32(one, 1.0);
+        e.mem.set_u16(base + 6, 1);
+        e.mem.set_u32(base + 8, 0);
+        e.mem.set_u32(base, BALL_AND_SOCKET_VTABLE);
+        e.mem.set_u16(base + 0x10, 3);
+        e.mem.set_u8(base + 0x42, 0);
+        e.mem.set_u16(base + 0x40, 5);
+        e.call(UFLOAT8_ASSIGN, &args![base + 0x43, one]);
+    });
     let impulse = x87_quiet(e.mem.f32(DEFAULT_MAX_LINEAR_IMPULSE));
     e.mem.set_f32(base + 0x44, impulse);
     for offset in [0x20, 0x30] {
@@ -193,7 +199,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x00d5_4270,
-            hkp_ball_and_socket_constraint_data_is_valid(Ptr, Ptr)
+            hkp_ball_and_socket_constraint_data_is_valid(Ptr, Ptr) -> Ptr
         ),
         entry!(
             0x00d5_4280,
@@ -320,6 +326,16 @@ mod tests {
     }
 
     #[test]
+    fn fn_00d54270_answers_its_result_pointer() {
+        let mut e = engine();
+        let data = e.mem.alloc(0x50);
+        let out = e.mem.alloc(4);
+        e.mem.set_u32(out, 0xaabb_ccdd);
+        // The exe leaves the result pointer in EAX at every RET; callers read through it.
+        assert_eq!(e.call(0x00d5_4270, &args![data, out]).u32(), args![out][0]);
+    }
+
+    #[test]
     fn get_type_is_zero() {
         let mut e = engine();
         let data = e.mem.alloc(0x50);
@@ -340,7 +356,11 @@ mod tests {
         for offset in (0..0x50).step_by(4) {
             e.mem.set_u32(data + offset, 0xffff_ffff);
         }
+        // The 1.0 sits at +0xc of the exe's aligned 0x10-byte frame.
+        let block = e.mem.alloc(0x20);
+        e.mem.free(block);
         let result = e.call(0x00d5_4290, &args![data]);
+        assert_eq!(e.mem.f32(((block + 0xf) & !0xf) + 0xc), 1.0);
         assert_eq!(result.u32(), data);
         assert_eq!(e.mem.u16(data + 6), 1);
         assert_eq!(e.mem.u32(data + 8), 0);

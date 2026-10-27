@@ -27,6 +27,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use crate::units::crt::glue::alloca16_esp;
 use crate::units::fallout_ai::combatgroup::{CombatGroup, CombatGroupData};
 
 /// Takes a byte count and returns a heap block or null (cdecl; the game's
@@ -494,80 +495,90 @@ pub fn fn_009905a0(e: &mut Engine, this: Ptr<CombatGroupData>) {
     }
 }
 
+/// `SortRangedMembers`' fixed frame under `EBP`: `SUB ESP,0x64` and two pushes.
+const SORT_FIXED_FRAME: u32 = 0x6c;
+
 // Translated from 00990640 (decompiled, FalloutNV.exe 1.4.0.525)
 // Translation incomplete: 00990640 - the stack-cookie check (00ec408c) is not translated
 /// `CombatGroupData::SortRangedMembers` (Xbox PDB): sorts `RangedMembers`
 /// by each actor's squared distance to their centre, nearest first (selection
 /// sort; ties keep the first). The positions (actor slot 0x1f4) and squared
-/// distances live in two `_alloca` buffers. With no ranged member the exe
-/// would run its outer loop over `0xffffffff` indices; callers never do
-/// that.
+/// distances live in two `_alloca16` tables (`00ec5ec0`), placed in the exe's
+/// frame with [`alloca16_esp`]: the positions from `ESP = EBP-0x6c`, the
+/// distances under them, so their addresses and alignment are the exe's. With no
+/// ranged member the exe would run its outer loop over `0xffffffff` indices;
+/// callers never do that.
 pub fn combat_group_data_sort_ranged_members(e: &mut Engine, this: Ptr<CombatGroupData>) {
     let ranged = this.addr() + DATA_RANGED_MEMBERS;
     let count = fn_00990890(e, this.cast());
-    e.with_stack(count.wrapping_mul(0xc), |e, positions| {
-        e.with_stack(0xc, |e, center| {
+    // The exe's frame: `EBP` is the top of one block holding the fixed locals
+    // (`SUB ESP,0x64` and two pushes: `ESP = EBP-0x6c` before the first
+    // `_alloca16`), both tables and both alignment pads.
+    let block_size = SORT_FIXED_FRAME
+        .wrapping_add(count.wrapping_mul(0xc + 4))
+        .wrapping_add(0x20);
+    e.with_stack(block_size, |e, block| {
+        let ebp = block.addr().wrapping_add(block_size);
+        let center = ebp - 0xc;
+        let difference = ebp - 0x50;
+        let positions = alloca16_esp(ebp - SORT_FIXED_FRAME, count.wrapping_mul(0xc));
+        for word in 0..3 {
+            let value: u32 = e.global(SORT_CENTER_START + word * 4);
+            e.mem.set_u32(center + word * 4, value);
+        }
+        for index in 0..count {
+            let entry = e.call(ARRAY_ELEMENT, &args![ranged, index]).u32();
+            let actor = e.mem.u32(entry);
+            let position = e.vcall(actor, ACTOR_SLOT_POSITION, &[]).u32();
+            let slot = positions + index * 0xc;
             for word in 0..3 {
-                let value: u32 = e.global(SORT_CENTER_START + word * 4);
-                e.mem.set_u32(center.addr() + word * 4, value);
+                let value = e.mem.u32(position + word * 4);
+                e.mem.set_u32(slot + word * 4, value);
             }
-            for index in 0..count {
-                let entry = e.call(ARRAY_ELEMENT, &args![ranged, index]).u32();
-                let actor = e.mem.u32(entry);
-                let position = e.vcall(actor, ACTOR_SLOT_POSITION, &[]).u32();
-                let slot = positions.addr() + index * 0xc;
-                for word in 0..3 {
-                    let value = e.mem.u32(position + word * 4);
-                    e.mem.set_u32(slot + word * 4, value);
+            e.call(POINT_ADD, &args![center, slot]);
+        }
+        e.call(POINT_DIVIDE, &args![center, (count as f32).to_bits()]);
+        let distances = alloca16_esp(positions, count.wrapping_mul(4));
+        for index in 0..count {
+            let slot = positions + index * 0xc;
+            let result = e
+                .call(POINT_SUBTRACT, &args![slot, difference, center])
+                .u32();
+            let length = e.call(POINT_LENGTH_SQUARED, &args![result]).f32();
+            e.mem.set_f32(distances + index * 4, length);
+        }
+        let distance = |e: &Engine, i: u32| e.mem.u32(distances + i * 4);
+        let mut first = 0u32;
+        while first < count.wrapping_sub(1) {
+            let mut nearest = first;
+            let mut nearest_distance = f32::from_bits(x87_quiet_bits(distance(e, first)));
+            let mut other = first + 1;
+            while other < count {
+                let value = f32::from_bits(distance(e, other));
+                if value < nearest_distance {
+                    nearest = other;
+                    nearest_distance = x87_quiet(value);
                 }
-                e.call(POINT_ADD, &args![center, slot]);
+                other += 1;
             }
-            e.call(POINT_DIVIDE, &args![center, (count as f32).to_bits()]);
-            e.with_stack(count.wrapping_mul(4), |e, distances| {
-                e.with_stack(0xc, |e, difference| {
-                    for index in 0..count {
-                        let slot = positions.addr() + index * 0xc;
-                        let result = e
-                            .call(POINT_SUBTRACT, &args![slot, difference, center])
-                            .u32();
-                        let length = e.call(POINT_LENGTH_SQUARED, &args![result]).f32();
-                        e.mem.set_f32(distances.addr() + index * 4, length);
-                    }
-                });
-                let distance = |e: &Engine, i: u32| e.mem.u32(distances.addr() + i * 4);
-                let mut first = 0u32;
-                while first < count.wrapping_sub(1) {
-                    let mut nearest = first;
-                    let mut nearest_distance = f32::from_bits(x87_quiet_bits(distance(e, first)));
-                    let mut other = first + 1;
-                    while other < count {
-                        let value = f32::from_bits(distance(e, other));
-                        if value < nearest_distance {
-                            nearest = other;
-                            nearest_distance = x87_quiet(value);
-                        }
-                        other += 1;
-                    }
-                    if first != nearest {
-                        let saved = x87_quiet_bits(distance(e, first));
-                        let moved = x87_quiet_bits(distance(e, nearest));
-                        e.mem.set_u32(distances.addr() + first * 4, moved);
-                        e.mem.set_u32(distances.addr() + nearest * 4, saved);
-                        let a = e.call(ARRAY_ELEMENT_REF, &args![ranged, first]).u32();
-                        let first_entry = (e.mem.u32(a), e.mem.u32(a + 4));
-                        let b = e.call(ARRAY_ELEMENT_REF, &args![ranged, nearest]).u32();
-                        let nearest_entry = (e.mem.u32(b), e.mem.u32(b + 4));
-                        let a = e.call(ARRAY_ELEMENT_REF, &args![ranged, first]).u32();
-                        e.mem.set_u32(a, nearest_entry.0);
-                        e.mem.set_u32(a + 4, nearest_entry.1);
-                        let b = e.call(ARRAY_ELEMENT_REF, &args![ranged, nearest]).u32();
-                        e.mem.set_u32(b, first_entry.0);
-                        e.mem.set_u32(b + 4, first_entry.1);
-                    }
-                    first += 1;
-                }
-            });
-        });
+            if first != nearest {
+                let saved = x87_quiet_bits(distance(e, first));
+                let moved = x87_quiet_bits(distance(e, nearest));
+                e.mem.set_u32(distances + first * 4, moved);
+                e.mem.set_u32(distances + nearest * 4, saved);
+                let a = e.call(ARRAY_ELEMENT_REF, &args![ranged, first]).u32();
+                let first_entry = (e.mem.u32(a), e.mem.u32(a + 4));
+                let b = e.call(ARRAY_ELEMENT_REF, &args![ranged, nearest]).u32();
+                let nearest_entry = (e.mem.u32(b), e.mem.u32(b + 4));
+                let a = e.call(ARRAY_ELEMENT_REF, &args![ranged, first]).u32();
+                e.mem.set_u32(a, nearest_entry.0);
+                e.mem.set_u32(a + 4, nearest_entry.1);
+                let b = e.call(ARRAY_ELEMENT_REF, &args![ranged, nearest]).u32();
+                e.mem.set_u32(b, first_entry.0);
+                e.mem.set_u32(b + 4, first_entry.1);
+            }
+            first += 1;
+        }
     });
 }
 
@@ -1660,6 +1671,30 @@ mod tests {
         assert_eq!(calls(&e, POINT_DIVIDE)[0][1], 4.0f32.to_bits());
         // One swap (first and third), four element lookups.
         assert_eq!(calls(&e, ARRAY_ELEMENT_REF).len(), 4);
+    }
+
+    #[test]
+    fn sort_ranged_members_places_its_alloca16_tables_as_the_exe_does() {
+        let mut e = engine();
+        let data = ranged_data(&mut e);
+        // Four members: the fixed 0x6c bytes, 4 * 12 + 4 * 4 bytes of tables and
+        // both pads. The block just freed is the frame.
+        let size = SORT_FIXED_FRAME + 4 * 16 + 0x20;
+        let block = e.mem.alloc(size);
+        e.mem.free(block);
+        let ebp = block + size;
+        combat_group_data_sort_ranged_members(&mut e, data);
+        // `_alloca16` from ESP = EBP-0x6c, then from the positions table.
+        let positions = (ebp - 0x6c - 0x30) & !0xf;
+        let distances = (positions - 0x10) & !0xf;
+        assert!(distances >= block);
+        let xs: Vec<f32> = (0..4).map(|i| e.mem.f32(positions + 12 * i)).collect();
+        assert_eq!(xs, vec![0.0, 1.0, 2.0, 10.0]);
+        let sorted: Vec<f32> = (0..4).map(|i| e.mem.f32(distances + 4 * i)).collect();
+        assert_eq!(sorted, vec![1.5625, 5.0625, 10.5625, 45.5625]);
+        // The centre and the difference are the locals at EBP-0xc and EBP-0x50.
+        assert_eq!(e.mem.f32(ebp - 0xc), 3.25);
+        assert!(calls(&e, POINT_SUBTRACT).iter().all(|c| c[1] == ebp - 0x50));
     }
 
     #[test]

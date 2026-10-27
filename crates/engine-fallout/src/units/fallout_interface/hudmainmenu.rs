@@ -2255,7 +2255,8 @@ pub fn hud_main_menu_do_idle(e: &mut Engine, this: Ptr<HUDMainMenu>) {
 // Translated from 00771520 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Converts a scene object and passes the result to its attached controller.
 pub fn fn_00771520(e: &mut Engine, object: Ptr) {
-    let converted = e.call(0x0045_7fe0, &args![object]).u32();
+    // 00457fe0 (the tick count) takes no `this`; 00771527 leaves ECX as is.
+    let converted = e.call(0x0045_7fe0, &args![]).u32();
     e.call(0x00aa_4ee0, &args![object, converted]);
 }
 
@@ -9315,9 +9316,12 @@ mod tests {
     #[test]
     fn controller_attachment_converts_before_assigning() {
         let mut e = Engine::new();
-        e.register_double(0x0045_7fe0, |_, words| Ret {
-            eax: words[0] + 4,
-            ..Ret::default()
+        e.register_double(0x0045_7fe0, |_, words| {
+            assert!(words.is_empty());
+            Ret {
+                eax: 0x4004,
+                ..Ret::default()
+            }
         });
         e.register_double(0x00aa_4ee0, |_, words| {
             assert_eq!(words, &[0x4000, 0x4004]);

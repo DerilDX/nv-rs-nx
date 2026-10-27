@@ -1244,79 +1244,81 @@ pub fn fn_008b2170(
     e.call(0x0067_2aa0, &args![package, option_c]);
     e.call(0x0067_a6b0, &args![package, !head_track]);
     fn_008b28a0(e, Ptr::new(package), option_d as u8);
-    // Two `PackageLocation`s on the stack, 0xC bytes each.
-    let locations = e.mem.alloc(0x18);
-    let (first, second) = (locations, locations + 0xc);
-    e.call(PACKAGE_LOCATION_CONSTRUCTOR, &args![first]);
-    if !location.is_null() {
-        e.call(0x0067_f4d0, &args![first, location, 1u32]);
-    }
-    e.call(0x0067_f3c0, &args![first, this]);
-    e.call(0x0067_1d30, &args![package, first]);
-    e.call(PACKAGE_LOCATION_CONSTRUCTOR, &args![second]);
-    if !second_location.is_null() {
-        e.call(0x0067_f4d0, &args![second, second_location, 1u32]);
-    }
-    let result = 'conversation: {
-        let distance = e.call(0x0067_6280, &args![package, this]).u32();
-        let setting = e.call(0x0040_3e20, &args![0x011c_cf38u32]).u32();
-        let setting = e.mem.f32(setting);
-        let radius = (setting as f64 + distance as f64) as i64 as u32;
-        e.call(0x0067_f1f0, &args![second, radius]);
-        e.call(0x0067_1e10, &args![package, second]);
-        let memory = e.call(OPERATOR_NEW, &args![0x10u32]).u32();
-        let target = if memory != 0 {
-            e.call(0x0067_ff70, &args![memory]).u32()
-        } else {
-            0
-        };
-        e.call(0x0067_2fc0, &args![package, target]);
-        if target != 0 {
-            e.call(0x007b_3fa0, &args![target, 1u32]);
+    // Two `PackageLocation`s on the stack, 0xC bytes each: the exe's frame (`SUB ESP,0xb4`
+    // under the exception record, then the record link) has them at `EBP-0x34` (+0x90) and
+    // `EBP-0x28` (+0x9c).
+    e.with_stack(0xc4, |e, frame| {
+        let (first, second) = (frame.addr() + 0x90, frame.addr() + 0x9c);
+        e.call(PACKAGE_LOCATION_CONSTRUCTOR, &args![first]);
+        if !location.is_null() {
+            e.call(0x0067_f4d0, &args![first, location, 1u32]);
         }
-        e.call(0x0098_4f60, &args![package, 10u32]);
-        let holder = e.call(0x0067_1d10, &args![package]).u32();
-        e.call(0x0068_00b0, &args![holder, 0u32]);
-        let holder = e.call(0x0067_1d10, &args![package]).u32();
-        e.call(0x0068_0110, &args![holder, partner]);
-        let kind = process_call(e, this.addr(), 0x4bc, &args![]).u32();
-        let holder = e.call(0x0067_1d10, &args![package]).u32();
-        e.call(
-            0x0040_3550,
-            &args![holder, if kind == 4 { 0xc8u32 } else { 0x5au32 }],
-        );
-        process_call(e, this.addr(), 0x28, &args![]);
-        e.vcall(this.addr(), 0x2f4, &args![package, 1u32, 1u32]);
-        e.call(0x0057_bd60, &args![this, partner]);
-        let process = e.get(this, Actor::pCurrentProcess);
-        if option_a {
-            e.vcall(process.addr(), 0x288, &args![this, 2u32]);
-        } else if option_b {
-            e.vcall(process.addr(), 0x288, &args![this, 1u32]);
+        e.call(0x0067_f3c0, &args![first, this]);
+        e.call(0x0067_1d30, &args![package, first]);
+        e.call(PACKAGE_LOCATION_CONSTRUCTOR, &args![second]);
+        if !second_location.is_null() {
+            e.call(0x0067_f4d0, &args![second, second_location, 1u32]);
         }
-        let process = e.get(this, Actor::pCurrentProcess);
-        e.call(0x0048_3710, &args![process]);
-        let process = e.get(this, Actor::pCurrentProcess);
-        e.call(0x0048_3710, &args![process]);
-        if partner.addr() != player && partner != this && (!option_c || option_d) {
-            e.vcall(partner.addr(), 0x2f4, &args![package, 1u32, 1u32]);
-            if e.call(0x0093_44a0, &args![partner]).u32() != package {
-                e.vcall(this.addr(), 0x288, &args![]);
-                break 'conversation false;
-            }
-            e.call(0x0057_bd60, &args![partner, this]);
-            if option_a {
-                process_call(e, partner.addr(), 0x288, &args![partner, 2u32]);
+        let result = 'conversation: {
+            let distance = e.call(0x0067_6280, &args![package, this]).u32();
+            let setting = e.call(0x0040_3e20, &args![0x011c_cf38u32]).u32();
+            let setting = e.mem.f32(setting);
+            let radius = (setting as f64 + distance as f64) as i64 as u32;
+            e.call(0x0067_f1f0, &args![second, radius]);
+            e.call(0x0067_1e10, &args![package, second]);
+            let memory = e.call(OPERATOR_NEW, &args![0x10u32]).u32();
+            let target = if memory != 0 {
+                e.call(0x0067_ff70, &args![memory]).u32()
             } else {
-                process_call(e, partner.addr(), 0x288, &args![partner, 1u32]);
+                0
+            };
+            e.call(0x0067_2fc0, &args![package, target]);
+            if target != 0 {
+                e.call(0x007b_3fa0, &args![target, 1u32]);
             }
-        }
-        true
-    };
-    e.call(PACKAGE_LOCATION_DESTRUCTOR, &args![second]);
-    e.call(PACKAGE_LOCATION_DESTRUCTOR, &args![first]);
-    e.mem.free(locations);
-    result
+            e.call(0x0098_4f60, &args![package, 10u32]);
+            let holder = e.call(0x0067_1d10, &args![package]).u32();
+            e.call(0x0068_00b0, &args![holder, 0u32]);
+            let holder = e.call(0x0067_1d10, &args![package]).u32();
+            e.call(0x0068_0110, &args![holder, partner]);
+            let kind = process_call(e, this.addr(), 0x4bc, &args![]).u32();
+            let holder = e.call(0x0067_1d10, &args![package]).u32();
+            e.call(
+                0x0040_3550,
+                &args![holder, if kind == 4 { 0xc8u32 } else { 0x5au32 }],
+            );
+            process_call(e, this.addr(), 0x28, &args![]);
+            e.vcall(this.addr(), 0x2f4, &args![package, 1u32, 1u32]);
+            e.call(0x0057_bd60, &args![this, partner]);
+            let process = e.get(this, Actor::pCurrentProcess);
+            if option_a {
+                e.vcall(process.addr(), 0x288, &args![this, 2u32]);
+            } else if option_b {
+                e.vcall(process.addr(), 0x288, &args![this, 1u32]);
+            }
+            let process = e.get(this, Actor::pCurrentProcess);
+            e.call(0x0048_3710, &args![process]);
+            let process = e.get(this, Actor::pCurrentProcess);
+            e.call(0x0048_3710, &args![process]);
+            if partner.addr() != player && partner != this && (!option_c || option_d) {
+                e.vcall(partner.addr(), 0x2f4, &args![package, 1u32, 1u32]);
+                if e.call(0x0093_44a0, &args![partner]).u32() != package {
+                    e.vcall(this.addr(), 0x288, &args![]);
+                    break 'conversation false;
+                }
+                e.call(0x0057_bd60, &args![partner, this]);
+                if option_a {
+                    process_call(e, partner.addr(), 0x288, &args![partner, 2u32]);
+                } else {
+                    process_call(e, partner.addr(), 0x288, &args![partner, 1u32]);
+                }
+            }
+            true
+        };
+        e.call(PACKAGE_LOCATION_DESTRUCTOR, &args![second]);
+        e.call(PACKAGE_LOCATION_DESTRUCTOR, &args![first]);
+        result
+    })
 }
 
 // Translated from 008b2860 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1814,18 +1816,21 @@ pub fn fn_008b37c0(e: &mut Engine, this: Ptr<Actor>, first: u32, second: f32, la
 /// loads it, `0041a280` stores it). The compiler's exception frame is not
 /// translated.
 pub fn fn_008b3230(e: &mut Engine, this: Ptr<Actor>, delta: f32) {
-    let guard = e.mem.alloc(8);
-    e.call(
-        0x0040_4eb0,
-        &args![guard, 0x2du32, 1u32, 0x0108_4918u32, 0x5d06u32],
-    );
-    actor_frame_update(e, this, delta);
-    e.call(0x0040_4ee0, &args![guard]);
-    e.mem.free(guard);
+    // The exe's frame (`SUB ESP,0x74` under the exception record, then the record link): the
+    // scope at `EBP-0x10` (+0x74); the body's locals are in the same frame.
+    e.with_stack(0x84, |e, frame| {
+        let guard = frame.addr() + 0x74;
+        e.call(
+            0x0040_4eb0,
+            &args![guard, 0x2du32, 1u32, 0x0108_4918u32, 0x5d06u32],
+        );
+        actor_frame_update(e, frame.addr(), this, delta);
+        e.call(0x0040_4ee0, &args![guard]);
+    });
 }
 
 /// The body of [`fn_008b3230`] between the scope guard's calls.
-fn actor_frame_update(e: &mut Engine, this: Ptr<Actor>, delta: f32) {
+fn actor_frame_update(e: &mut Engine, frame: u32, this: Ptr<Actor>, delta: f32) {
     let player: u32 = e.global(PLAYER_CHARACTER);
     if this.addr() == player {
         return;
@@ -1878,11 +1883,11 @@ fn actor_frame_update(e: &mut Engine, this: Ptr<Actor>, delta: f32) {
         || e.call(0x008a_3b30, &args![this]).bool())
         && !e.vcall(this.addr(), 0x22c, &args![0u32]).bool();
     // The sound handle (16 bytes), a copy of the creature sound's 36-byte
-    // data, and the temporary handle the audio system fills.
-    let block = e.mem.alloc(0x60);
-    let handle = block;
-    let sound_data = block + 0x20;
-    let temporary = block + 0x44;
+    // data, and the temporary handle the audio system fills, at `EBP-0x30`, `EBP-0x54` and
+    // `EBP-0x60` of the caller's frame.
+    let handle = frame + 0x54;
+    let sound_data = frame + 0x30;
+    let temporary = frame + 0x24;
     e.call(0x0041_a250, &args![handle]);
     let extra = e.call(0x005d_43c0, &args![this]).u32();
     e.call(0x0041_8980, &args![extra, handle]);
@@ -1928,7 +1933,6 @@ fn actor_frame_update(e: &mut Engine, this: Ptr<Actor>, delta: f32) {
         store(e);
     }
     e.call(0x0048_3710, &args![handle]);
-    e.mem.free(block);
 }
 
 /// `ActorMover` (Xbox PDB) of the actor: `pActorMover` (PC +0x190).
@@ -3100,25 +3104,25 @@ fn new_limb_node(e: &mut Engine) -> u32 {
 /// through `00403e20` on [`LIMB_VELOCITY_OWNER`], and added as a velocity
 /// (`TESHavokUtilities::AddVelocity`, `0062b8d0`). `frame` is 0x40 bytes of
 /// scratch.
-fn add_limb_velocity(e: &mut Engine, bound_owner: u32, node: u32, frame: u32) {
+/// `locals` are the caller's locals for the bound copy, the centre, the direction and the
+/// velocity.
+fn add_limb_velocity(e: &mut Engine, bound_owner: u32, node: u32, locals: [u32; 4]) {
+    let [bound_copy, centre, direction, velocity] = locals;
     let bound = e.call(0x0043_d450, &args![bound_owner]).u32();
     for word in 0..4 {
         let value = e.mem.u32(bound + 4 * word);
-        e.mem.set_u32(frame + 4 * word, value);
+        e.mem.set_u32(bound_copy + 4 * word, value);
     }
-    let centre_source = e.call(0x0068_15c0, &args![frame]).u32();
-    let centre = frame + 0x10;
+    let centre_source = e.call(0x0068_15c0, &args![bound_copy]).u32();
     for word in 0..3 {
         let value = e.mem.u32(centre_source + 4 * word);
         e.mem.set_u32(centre + 4 * word, value);
     }
-    let direction = frame + 0x20;
     let position = e.call(0x0045_bb80, &args![node]).u32();
     e.call(0x0043_9ef0, &args![position, direction, centre]);
     e.call(0x004a_0c10, &args![direction]);
     let factor_at = e.call(0x0040_3e20, &args![LIMB_VELOCITY_OWNER]).u32();
     let factor = e.mem.f32(factor_at);
-    let velocity = frame + 0x30;
     e.call(0x0045_bb20, &args![direction, velocity, factor]);
     e.call(0x0062_b8d0, &args![node, velocity, 0u32]);
 }
@@ -3155,19 +3159,21 @@ pub fn fn_008b52a0(
     flag_18: u8,
     flag_1c: u8,
 ) {
-    let frame = e.mem.alloc(0x400);
-    limb_piece(
-        e,
-        this,
-        actor_value,
-        part_index,
-        hide_only,
-        flag_14,
-        flag_18,
-        flag_1c,
-        frame,
-    );
-    e.mem.free(frame);
+    // The exe's frame (`SUB ESP,0x30c` under the exception record, then `ESI`, `EDI` and the
+    // record link).
+    e.with_stack(0x324, |e, frame| {
+        limb_piece(
+            e,
+            this,
+            actor_value,
+            part_index,
+            hide_only,
+            flag_14,
+            flag_18,
+            flag_1c,
+            frame.addr(),
+        );
+    });
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3182,21 +3188,24 @@ fn limb_piece(
     flag_1c: u8,
     frame: u32,
 ) {
-    // Scratch layout (all offsets from `frame`).
-    let name = frame;
-    let second_name = frame + 0x10;
-    let cloning = frame + 0x20;
-    let transform_a = frame + 0x60;
-    let transform_b = frame + 0xa0;
-    let transform_c = frame + 0xe0;
-    let transform_d = frame + 0x120;
-    let composed_scratch = frame + 0x160;
-    let euler = frame + 0x1a0;
-    let angle_out = frame + 0x1b0;
-    let zero_vector = frame + 0x1f0;
-    let inverse_scratch = frame + 0x200;
-    let burst = frame + 0x240;
-    let out_word = frame + 0x300;
+    // The locals at their offsets in the exe's 0x324-byte frame (see `fn_008b52a0`).
+    let name = frame + 0x314;
+    let second_name = frame + 0x144;
+    let cloning = frame + 0x248;
+    let transform_a = frame + 0x264;
+    let transform_b = frame + 0x2c4;
+    let transform_c = frame + 0x1dc;
+    let transform_d = frame + 0x210;
+    let composed_part = frame + 0xe0;
+    let composed_limb = frame + 0xac;
+    let euler = frame + 0x298;
+    let angle_out = frame + 0x114;
+    let zero_vector = frame + 0x2ac;
+    let part_offset = frame + 0x138;
+    let inverse_scratch = frame + 0x78;
+    let burst = [0x1a0, 0x1b0, 0x178, 0x184].map(|offset| frame + offset);
+    let out_word = frame + 0x190;
+    let handle_out = frame + 0x6c;
 
     let this_addr = this.addr();
     let form = e.call(0x0041_81e0, &args![this]).u32();
@@ -3257,7 +3266,7 @@ fn limb_piece(
     e.call(0x0047_6a80, &args![transform_b]);
     e.call(0x0047_6a80, &args![transform_a]);
     // The part's offset and rotation (degrees) from the body part data.
-    let offset = fn_008b6260(e, Ptr::new(part_data), Ptr::new(inverse_scratch));
+    let offset = fn_008b6260(e, Ptr::new(part_data), Ptr::new(part_offset));
     for word in 0..3 {
         let value = e.mem.u32(offset.addr() + 4 * word);
         e.mem.set_u32(transform_a + 0x24 + 4 * word, value);
@@ -3278,7 +3287,7 @@ fn limb_piece(
     let composed = e
         .call(
             0x0062_c250,
-            &args![parent_transform, composed_scratch, transform_a],
+            &args![parent_transform, composed_part, transform_a],
         )
         .u32();
     for word in 0..13 {
@@ -3335,7 +3344,7 @@ fn limb_piece(
         let composed = e
             .call(
                 0x0062_c250,
-                &args![transform_c, composed_scratch, limb_transform],
+                &args![transform_c, composed_limb, limb_transform],
             )
             .u32();
         for word in 0..13 {
@@ -3511,7 +3520,7 @@ fn limb_piece(
     e.call(0x00a5_a040, &args![root]);
     let sibling = e.mem.u32(this_addr + 0xb0);
     if sibling != 0 {
-        let handle = e.call(0x0093_1ed0, &args![this, out_word + 0x10]).u32();
+        let handle = e.call(0x0093_1ed0, &args![this, handle_out]).u32();
         let value = e.call(0x004a_3a20, &args![handle]).u32();
         let actor_root = e.vcall(this_addr, 0x1d0, &args![]).u32();
         e.call(0x00ca_2ad0, &args![sibling, actor_root, value]);
@@ -3694,31 +3703,35 @@ pub fn actor_update_dismembered_limb_vel(e: &mut Engine, this: Ptr<Actor>) {
     if count != 0 {
         e.call(0x00c6_a270, &args![nodes, 1u32, 1u32, 0u32]);
     }
-    let frame = e.mem.alloc(0x80);
-    let name = frame;
-    let burst = frame + 0x10;
-    for entry_index in 0..count {
-        let mut found = 0;
-        let entry = e.call(0x0044_1420, &args![record, entry_index]).u32();
-        let limb_name = e.global::<u32>(LIMB_NAME_TABLE + 4 * u32::from(e.mem.u8(entry)));
-        e.call(0x0043_8170, &args![name, limb_name]);
-        let mut node_index = 0;
-        while node_index < e.call(0x0043_b480, &args![nodes]).u32() && found == 0 {
-            let node = e.call(0x0043_b4a0, &args![nodes, node_index]).u32();
-            if node != 0 {
-                let node_name = e.call(0x0041_3f40, &args![node]).u32();
-                if e.call(0x009a_3830, &args![node_name, name]).bool() {
-                    found = node;
+    // The exe's frame (`SUB ESP,0x60` under the exception record, then the record link): the
+    // limb name at `EBP-0x24` (+0x4c), the bound copy at `EBP-0x4c` (+0x24), the centre at
+    // `EBP-0x3c` (+0x34), the direction at `EBP-0x64` (+0xc), the velocity at `EBP-0x58` (+0x18).
+    e.with_stack(0x70, |e, frame| {
+        let frame = frame.addr();
+        let name = frame + 0x4c;
+        let burst = [0x24, 0x34, 0xc, 0x18].map(|offset| frame + offset);
+        for entry_index in 0..count {
+            let mut found = 0;
+            let entry = e.call(0x0044_1420, &args![record, entry_index]).u32();
+            let limb_name = e.global::<u32>(LIMB_NAME_TABLE + 4 * u32::from(e.mem.u8(entry)));
+            e.call(0x0043_8170, &args![name, limb_name]);
+            let mut node_index = 0;
+            while node_index < e.call(0x0043_b480, &args![nodes]).u32() && found == 0 {
+                let node = e.call(0x0043_b4a0, &args![nodes, node_index]).u32();
+                if node != 0 {
+                    let node_name = e.call(0x0041_3f40, &args![node]).u32();
+                    if e.call(0x009a_3830, &args![node_name, name]).bool() {
+                        found = node;
+                    }
                 }
+                node_index += 1;
             }
-            node_index += 1;
+            if found != 0 {
+                add_limb_velocity(e, nodes, found, burst);
+            }
+            e.call(0x0043_81b0, &args![name]);
         }
-        if found != 0 {
-            add_limb_velocity(e, nodes, found, burst);
-        }
-        e.call(0x0043_81b0, &args![name]);
-    }
-    e.mem.free(frame);
+    });
 }
 
 // Translated from 008b6800 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -3856,59 +3869,61 @@ pub fn actor_create_dismembered_limbs(e: &mut Engine, this: Ptr<Actor>) {
         }
         let mut compared = false;
         let count = fn_008b6800(e, Ptr::new(record));
-        let frame = e.mem.alloc(0x40);
-        let name = frame;
-        let equipment = frame + 0x10;
-        for index in 0..count {
-            let entry = e.call(0x0044_1420, &args![record, index]).u32();
-            let part_index = u32::from(e.mem.u8(entry));
-            let part = e.call(0x005e_50f0, &args![body_parts, part_index]).u32();
-            if part == 0 {
-                continue;
-            }
-            let process = e.call(ACTOR_GET_PROCESS, &args![this]).u32();
-            let limb = e.vcall(process, 0x6d0, &args![part_index]).u32();
-            if limb != 0 {
-                let world = e.call(0x0096_11e0, &args![limb]).u32();
-                let limb_name = e.global::<u32>(LIMB_NAME_TABLE + 4 * part_index);
-                e.call(0x0043_8170, &args![name, limb_name]);
-                let node_name = e.call(0x0041_3f40, &args![world]).u32();
-                let present = e.call(0x009a_3830, &args![node_name, name]).bool();
-                e.call(0x0043_81b0, &args![name]);
-                if present {
+        // The exe's frame (`SUB ESP,0x68` under the exception record, then the record link):
+        // the limb name at `EBP-0x5c` (+0x1c), the equipment at `EBP-0x54` (+0x24).
+        e.with_stack(0x78, |e, frame| {
+            let name = frame.addr() + 0x1c;
+            let equipment = frame.addr() + 0x24;
+            for index in 0..count {
+                let entry = e.call(0x0044_1420, &args![record, index]).u32();
+                let part_index = u32::from(e.mem.u8(entry));
+                let part = e.call(0x005e_50f0, &args![body_parts, part_index]).u32();
+                if part == 0 {
                     continue;
                 }
-            }
-            if creature_form != 0 && e.mem.u8(entry + 2) == 0 {
-                let mut same = false;
-                if !compared {
-                    e.call(0x0042_f570, &args![equipment]);
-                    // 008b6cdb: slot 0x1e8 takes no stack word; the pushed
-                    // equipment is the last word of `00605fc0` (RET 0xc).
-                    let worn = e.vcall(creature, 0x1e8, &args![]).u32();
-                    e.call(0x0060_5fc0, &args![creature_form, this, worn, equipment]);
-                    same = e.call(0x0043_87b0, &args![equipment, entry + 4]).bool();
-                    compared = true;
-                    e.call(0x0042_ff80, &args![equipment]);
+                let process = e.call(ACTOR_GET_PROCESS, &args![this]).u32();
+                let limb = e.vcall(process, 0x6d0, &args![part_index]).u32();
+                if limb != 0 {
+                    let world = e.call(0x0096_11e0, &args![limb]).u32();
+                    let limb_name = e.global::<u32>(LIMB_NAME_TABLE + 4 * part_index);
+                    e.call(0x0043_8170, &args![name, limb_name]);
+                    let node_name = e.call(0x0041_3f40, &args![world]).u32();
+                    let present = e.call(0x009a_3830, &args![node_name, name]).bool();
+                    e.call(0x0043_81b0, &args![name]);
+                    if present {
+                        continue;
+                    }
                 }
-                if !same {
-                    // 008b6d2c: the pushed entry + 4 is the last word of
-                    // `00605e70` (RET 0xc).
-                    let worn = e.vcall(creature, 0x1e8, &args![]).u32();
-                    e.call(0x0060_5e70, &args![creature_form, this, worn, entry + 4]);
-                    applied = true;
+                if creature_form != 0 && e.mem.u8(entry + 2) == 0 {
+                    let mut same = false;
+                    if !compared {
+                        e.call(0x0042_f570, &args![equipment]);
+                        // 008b6cdb: slot 0x1e8 takes no stack word; the pushed
+                        // equipment is the last word of `00605fc0` (RET 0xc).
+                        let worn = e.vcall(creature, 0x1e8, &args![]).u32();
+                        e.call(0x0060_5fc0, &args![creature_form, this, worn, equipment]);
+                        same = e.call(0x0043_87b0, &args![equipment, entry + 4]).bool();
+                        compared = true;
+                        e.call(0x0042_ff80, &args![equipment]);
+                    }
+                    if !same {
+                        // 008b6d2c: the pushed entry + 4 is the last word of
+                        // `00605e70` (RET 0xc).
+                        let worn = e.vcall(creature, 0x1e8, &args![]).u32();
+                        e.call(0x0060_5e70, &args![creature_form, this, worn, entry + 4]);
+                        applied = true;
+                    }
+                }
+                actor_fill_bone_array(e, this, limb, 0);
+                actor_unhide_dismembered_limb(e, this, part_index, limb);
+                let value = i32::from(e.call(0x005e_5190, &args![part]).u8() as i8);
+                let second = e.mem.u8(entry + 1);
+                fn_008b52a0(e, this, value, part_index, second, 0, 0, 1);
+                if e.mem.u8(entry + 3) != 0 {
+                    fn_008b6df0(e, this, part_index);
                 }
             }
-            actor_fill_bone_array(e, this, limb, 0);
-            actor_unhide_dismembered_limb(e, this, part_index, limb);
-            let value = i32::from(e.call(0x005e_5190, &args![part]).u8() as i8);
-            let second = e.mem.u8(entry + 1);
-            fn_008b52a0(e, this, value, part_index, second, 0, 0, 1);
-            if e.mem.u8(entry + 3) != 0 {
-                fn_008b6df0(e, this, part_index);
-            }
-        }
-        e.mem.free(frame);
+        });
     }
     if applied {
         actor_reload_targets(e, this, 0);
@@ -7790,7 +7805,15 @@ mod tests {
         let (mut w, this, knobs) = sound_world();
         knobs.valid.set(false);
         w.e.call_log = Some(vec![]);
+        let frame = next_frame(&mut w.e, 0x84);
         w.e.call(0x008b_3230, &args![this, 0.5f32]);
+        // The 0x84-byte frame: the scope at +0x74, the handle at +0x54, the sound data at +0x30,
+        // the temporary at +0x24.
+        let early = w.e.call_log.clone().unwrap();
+        assert_eq!(args_of(&early, 0x0040_4eb0)[0][0], frame + 0x74);
+        assert_eq!(args_of(&early, 0x0041_a250), vec![vec![frame + 0x54]]);
+        assert_eq!(args_of(&early, 0x004e_75d0)[0][1], frame + 0x30);
+        assert_eq!(args_of(&early, 0x00ad_7480)[0][1], frame + 0x24);
         let log = w.e.call_log.take().unwrap();
         // Load the handle, create it, store it, follow, play, store it.
         assert_eq!(
@@ -9345,7 +9368,17 @@ mod tests {
             e.mem.set_u8(a[7], 1);
             Ret::default()
         });
+        let frame = next_frame(&mut w.s.e, 0x324);
         let log = w.dismember(0x1a, 4, 0);
+        // The 0x324-byte frame of 008b52a0: the name at +0x314, the cloning process at +0x248, the
+        // transforms at +0x2c4, +0x264, +0x1dc and +0x210.
+        assert_eq!(args_of(&log, 0x0043_8170)[0][0], frame + 0x314);
+        assert_eq!(args_of(&log, 0x004a_d050)[0][0], frame + 0x248);
+        let transforms: Vec<u32> = args_of(&log, 0x0047_6a80).iter().map(|c| c[0]).collect();
+        assert_eq!(
+            transforms,
+            vec![frame + 0x2c4, frame + 0x264, frame + 0x1dc, frame + 0x210]
+        );
         assert_eq!(args_of(&log, 0x00a5_d2c0).len(), 1);
         assert!(w
             .slot_calls_on(w.process)
@@ -9961,7 +9994,17 @@ mod tests {
         w.s.e.register(0x0041_3f40, |_, a| int(a[0]));
         w.s.e
             .register_double(0x009a_3830, move |_, a| int(u32::from(a[0] == n1)));
+        let frame = next_frame(&mut w.s.e, 0x70);
         let (_, log) = logged(&mut w.s.e, |e| e.call(0x008b_65f0, &args![actor]));
+        // The 0x70-byte frame: the name at +0x4c, the bound copy at +0x24, the direction at +0xc,
+        // the velocity at +0x18.
+        assert_eq!(args_of(&log, 0x0043_8170)[0][0], frame + 0x4c);
+        assert_eq!(args_of(&log, 0x0068_15c0)[0][0], frame + 0x24);
+        assert_eq!(
+            args_of(&log, 0x0045_bb20)[0][..2],
+            [frame + 0xc, frame + 0x18]
+        );
+        assert_eq!(args_of(&log, 0x0062_b8d0)[0][1], frame + 0x18);
         assert_eq!(args_of(&log, 0x00c6_a270), vec![vec![nodes, 1, 1, 0]]);
         let names = args_of(&log, 0x0043_8170);
         assert_eq!(
@@ -10111,7 +10154,10 @@ mod tests {
         w.s.answer(a, 0x218, 1);
         w.s.answer(a, 0x1e8, 0x77);
         let form = w.s.e.call(0x0041_81e0, &args![a]).u32();
+        let frame = next_frame(&mut w.s.e, 0x78);
         let (_, log) = logged(&mut w.s.e, |e| e.call(0x008b_6ae0, &args![actor]));
+        // The 0x78-byte frame: the equipment at +0x24.
+        assert_eq!(args_of(&log, 0x0042_f570), vec![vec![frame + 0x24]]);
         // The worn equipment is built for the comparison, then applied because they differ.
         let compared = args_of(&log, 0x0043_87b0);
         assert_eq!(compared.len(), 1);
@@ -11528,5 +11574,40 @@ mod tests {
         s.e.call(0x008b_87a0, &args![a, b, flag]);
         assert_eq!(s.e.mem.u32(frame + 0x14), 0x10);
         assert_eq!(s.e.mem.u32(frame + 0x21c), 0x30);
+    }
+
+    #[test]
+    fn a_conversation_keeps_its_package_locations_in_the_frame() {
+        let (mut w, this, this_process, partner, _) = talk_world();
+        w.e.register(0x0083_b9a0, |_, _| int(1));
+        let built = Rc::new(Cell::new(0));
+        let seen = built.clone();
+        w.e.register_double(DIALOGUE_PACKAGE_CONSTRUCTOR, move |_, a| {
+            seen.set(a[0]);
+            int(a[0])
+        });
+        let accepted = built.clone();
+        w.e.register_double(0x0093_44a0, move |_, _| int(accepted.get()));
+        w.answer(this_process.addr(), 0x4bc, 0);
+        // The 0xc4-byte frame of 008b2170: the locations at +0x90 and +0x9c.
+        let frame = next_frame(&mut w.e, 0xc4);
+        w.e.call_log = Some(vec![]);
+        assert!(talk(
+            &mut w,
+            this,
+            partner,
+            [true, true, false, false, false]
+        ));
+        let log = w.e.call_log.take().unwrap();
+        let locations: Vec<u32> = args_of(&log, PACKAGE_LOCATION_CONSTRUCTOR)
+            .iter()
+            .map(|c| c[0])
+            .collect();
+        assert_eq!(locations, vec![frame + 0x90, frame + 0x9c]);
+        let destroyed: Vec<u32> = args_of(&log, PACKAGE_LOCATION_DESTRUCTOR)
+            .iter()
+            .map(|c| c[0])
+            .collect();
+        assert_eq!(destroyed, vec![frame + 0x9c, frame + 0x90]);
     }
 }

@@ -1614,7 +1614,9 @@ fn off_diagonal_is_small(e: &mut Engine, s: u32, index: i32) -> bool {
 /// `+0x1c`, `+0x24`, `+0x2c`, `+0x30`, `+0x34` hold temporaries, `+0x20` is `l`, `+0x28` the
 /// round counter, `+0x2c` the count of positions left, `+0x38` / `+0x3c` / `+0x40` are `e0` /
 /// `e1` / `e2` and `+0x44` / `+0x48` / `+0x4c` are `d0` / `d1` / `d2`.
-pub fn fn_00d5a6e0(e: &mut Engine, result: u32, matrix: u32, iterations: i32) {
+/// Answers `result`: the exe leaves it in `EAX` at every `RET` (the hkBool/hkResult result
+/// returned through a pointer, which callers read through `EAX`).
+pub fn fn_00d5a6e0(e: &mut Engine, result: u32, matrix: u32, iterations: i32) -> u32 {
     e.with_stack(0x60, |e, frame| {
         let s = frame.addr();
         let load = |e: &Engine, offset: u32| e.mem.f32(s + offset);
@@ -2064,6 +2066,7 @@ pub fn fn_00d5a6e0(e: &mut Engine, result: u32, matrix: u32, iterations: i32) {
             }
         }
     });
+    result
 }
 
 /// `hkGeometry`'s destructor (`00cce530`, `thiscall`), the local unit axes, the `float` `0.01`
@@ -2311,7 +2314,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00d5b990, fn_00d5b990(u32, u32, u32, u32, u32, i32) -> f32),
         entry!(0x00d5bce0, fn_00d5bce0(u32, u32, u32, u32, u32, f32)),
         entry!(0x00d5beb0, fn_00d5beb0(u32, u32, u32, u32, f32) -> u32),
-        entry!(0x00d5a6e0, fn_00d5a6e0(u32, u32, i32)),
+        entry!(0x00d5a6e0, fn_00d5a6e0(u32, u32, i32) -> u32),
         entry!(
             0x00d5c1a0,
             get_mean_and_covariance(u32, i32, u32, u32, u32, u8)
@@ -3209,6 +3212,23 @@ mod tests {
         assert_eq!(load_vec4(&e, diagonal), [1.0, 0.0, 0.0, 0.0]);
         assert_eq!(load_vec4(&e, diagonal + 0x10), [0.0, 1.0, 0.0, 0.0]);
         assert_eq!(load_vec4(&e, diagonal + 0x20), [0.0, 0.0, 1.0, 0.0]);
+    }
+
+    #[test]
+    fn fn_00d5a6e0_answers_its_result_pointer() {
+        let mut e = numeric_engine();
+        let record = e.mem.alloc(4);
+        let original = [
+            [4.0f32, 1.0, 2.0, 0.0],
+            [1.0, 3.0, 0.0, 0.0],
+            [2.0, 0.0, 1.0, 0.0],
+        ];
+        let matrix = rows_at(&mut e, &original);
+        // The exe leaves the result pointer in EAX at every RET; callers read through it.
+        assert_eq!(
+            e.call(0x00d5_a6e0, &args![record, matrix, 30i32]).u32(),
+            args![record][0]
+        );
     }
 
     #[test]

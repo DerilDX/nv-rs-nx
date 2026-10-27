@@ -77,6 +77,9 @@ fn decompress_block(e: &mut Engine, table: u32, anim: u32, data: u32, count: u32
     );
 }
 
+/// `samplePartialWithDataChunks`' frame: `SUB ESP,0x6c` and four pushes.
+const SAMPLE_CHUNKS_FRAME_SIZE: u32 = 0x7c;
+
 // Translated from 00e30200 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkaWaveletCompressedAnimation::samplePartialWithDataChunks` (Xbox PDB name; cdecl, plain
 /// `RET`): samples the tracks from a block of data chunks as `getDataChunks` (`00e2fac0`)
@@ -102,106 +105,110 @@ pub fn sample_partial_with_data_chunks(
     chunks: u32,
     chunk_count: u32,
 ) {
-    let anim = e
-        .mem
-        .u32(chunks)
-        .wrapping_add(u32::from(e.mem.u8(chunks + 8)));
-    profile_start_record(e, LABEL_SAMPLE_CHUNK, LABEL_STATIC);
-    let data = e
-        .mem
-        .u32(chunks + 0xc)
-        .wrapping_add(u32::from(e.mem.u8(chunks + 0x14)));
-    let mut count = e.mem.u32(anim + 0x34);
-    let static_values = e.mem.u32(anim + 0x48).wrapping_add(data);
-    let anim_tracks = e.mem.u32(anim + 0x10);
-    let words = e.mem.u32(anim + 0x44).wrapping_add(data);
-    if transform_count != anim_tracks || float_count != e.mem.u32(anim + 0x14) {
-        let float_words = words.wrapping_add(anim_tracks.wrapping_mul(2));
-        let stats = e.mem.alloc(0x38);
-        let sum = if float_count == 0 {
-            e.call(
-                CALC_DYNAMIC_STATS,
-                &args![words, float_words, transform_count, 0u32, stats],
-            );
-            e.mem
-                .u32(stats + 0x20)
-                .wrapping_add(e.mem.u32(stats + 0x24))
-        } else {
-            e.call(
-                CALC_DYNAMIC_STATS,
-                &args![words, float_words, anim_tracks, float_count, stats],
-            );
-            e.mem
-                .u32(stats + 0x24)
-                .wrapping_add(e.mem.u32(stats + 0x28))
-                .wrapping_add(e.mem.u32(stats + 0x20))
-        };
-        count = sum.wrapping_add(e.mem.u32(stats + 0x1c));
-        e.mem.free(stats);
-    }
-    profile_record(e, LABEL_DECOMPRESS_CHUNK);
-    let block_size = e.mem.u32(anim + 0x2c);
-    let rest = (1.0 - f64::from(time)) as f32;
-    let table = reserve(e, block_size.wrapping_mul(count).wrapping_mul(4));
-    let result = reserve(e, count.wrapping_mul(4));
-    let first_stream = u32::from(e.mem.u8(chunks + 0x20)).wrapping_add(e.mem.u32(chunks + 0x18));
-    decompress_block(e, table, anim, data, count, first_stream);
-    let block_size = e.mem.u32(anim + 0x2c);
-    if block_size == 0 {
-        panic!("integer divide fault at 0x00e30404");
-    }
-    let column = frame % block_size;
-    if chunk_count == 3 {
-        for row in 0..count {
-            let low = f64::from(e.mem.f32(cell(table, row, block_size, column)));
-            let high = f64::from(e.mem.f32(cell(table, row, block_size, column) + 4));
-            let value = (high * f64::from(time) + low * f64::from(rest)) as f32;
-            e.mem
-                .set_f32(result.wrapping_add(row.wrapping_mul(4)), value);
+    // The exe's frame (`SUB ESP,0x6c` and four pushes) holds the statistics block at +0x24
+    // (00e302d0) and the analysis block at +0x5c (00e30544).
+    e.with_stack(SAMPLE_CHUNKS_FRAME_SIZE, |e, locals| {
+        let locals = locals.addr();
+        let anim = e
+            .mem
+            .u32(chunks)
+            .wrapping_add(u32::from(e.mem.u8(chunks + 8)));
+        profile_start_record(e, LABEL_SAMPLE_CHUNK, LABEL_STATIC);
+        let data = e
+            .mem
+            .u32(chunks + 0xc)
+            .wrapping_add(u32::from(e.mem.u8(chunks + 0x14)));
+        let mut count = e.mem.u32(anim + 0x34);
+        let static_values = e.mem.u32(anim + 0x48).wrapping_add(data);
+        let anim_tracks = e.mem.u32(anim + 0x10);
+        let words = e.mem.u32(anim + 0x44).wrapping_add(data);
+        if transform_count != anim_tracks || float_count != e.mem.u32(anim + 0x14) {
+            let float_words = words.wrapping_add(anim_tracks.wrapping_mul(2));
+            let stats = locals + 0x24;
+            let sum = if float_count == 0 {
+                e.call(
+                    CALC_DYNAMIC_STATS,
+                    &args![words, float_words, transform_count, 0u32, stats],
+                );
+                e.mem
+                    .u32(stats + 0x20)
+                    .wrapping_add(e.mem.u32(stats + 0x24))
+            } else {
+                e.call(
+                    CALC_DYNAMIC_STATS,
+                    &args![words, float_words, anim_tracks, float_count, stats],
+                );
+                e.mem
+                    .u32(stats + 0x24)
+                    .wrapping_add(e.mem.u32(stats + 0x28))
+                    .wrapping_add(e.mem.u32(stats + 0x20))
+            };
+            count = sum.wrapping_add(e.mem.u32(stats + 0x1c));
         }
-    } else {
-        for row in 0..count {
-            let low = f64::from(e.mem.f32(cell(table, row, block_size, column)));
-            let value = (low * f64::from(rest)) as f32;
-            e.mem
-                .set_f32(result.wrapping_add(row.wrapping_mul(4)), value);
-        }
-        let second_stream =
-            u32::from(e.mem.u8(chunks + 0x2c)).wrapping_add(e.mem.u32(chunks + 0x24));
-        decompress_block(e, table, anim, data, count, second_stream);
+        profile_record(e, LABEL_DECOMPRESS_CHUNK);
         let block_size = e.mem.u32(anim + 0x2c);
-        for row in 0..count {
-            let high = f64::from(e.mem.f32(cell(table, row, block_size, 0)));
-            let at = result.wrapping_add(row.wrapping_mul(4));
-            let value = (high * f64::from(time) + f64::from(e.mem.f32(at))) as f32;
-            e.mem.set_f32(at, value);
+        let rest = (1.0 - f64::from(time)) as f32;
+        let table = reserve(e, block_size.wrapping_mul(count).wrapping_mul(4));
+        let result = reserve(e, count.wrapping_mul(4));
+        let first_stream =
+            u32::from(e.mem.u8(chunks + 0x20)).wrapping_add(e.mem.u32(chunks + 0x18));
+        decompress_block(e, table, anim, data, count, first_stream);
+        let block_size = e.mem.u32(anim + 0x2c);
+        if block_size == 0 {
+            panic!("integer divide fault at 0x00e30404");
         }
-    }
-    profile_record(e, LABEL_RECOMPOSE_CHUNK);
-    let analysis = e.mem.alloc(0x20);
-    e.mem.set_u32(analysis, transform_count);
-    e.mem.set_u32(analysis + 4, float_count);
-    e.mem.set_u32(analysis + 8, words);
-    let tracks = e.mem.u32(anim + 0x10);
-    e.mem
-        .set_u32(analysis + 0xc, words.wrapping_add(tracks.wrapping_mul(2)));
-    e.mem.set_u32(analysis + 0x10, static_values);
-    let static_count = e.mem.u32(anim + 0x4c);
-    e.mem.set_u32(
-        analysis + 0x14,
-        static_values.wrapping_add(static_count.wrapping_mul(4)),
-    );
-    e.mem.set_u32(analysis + 0x18, result);
-    let float_static = e.mem.u32(anim + 0x50);
-    e.mem.set_u32(
-        analysis + 0x1c,
-        result.wrapping_add(float_static.wrapping_mul(4)),
-    );
-    e.call(RECOMPOSE, &args![analysis, transforms, floats]);
-    e.mem.free(analysis);
-    release(e, result);
-    release(e, table);
-    profile_record(e, LABEL_END);
+        let column = frame % block_size;
+        if chunk_count == 3 {
+            for row in 0..count {
+                let low = f64::from(e.mem.f32(cell(table, row, block_size, column)));
+                let high = f64::from(e.mem.f32(cell(table, row, block_size, column) + 4));
+                let value = (high * f64::from(time) + low * f64::from(rest)) as f32;
+                e.mem
+                    .set_f32(result.wrapping_add(row.wrapping_mul(4)), value);
+            }
+        } else {
+            for row in 0..count {
+                let low = f64::from(e.mem.f32(cell(table, row, block_size, column)));
+                let value = (low * f64::from(rest)) as f32;
+                e.mem
+                    .set_f32(result.wrapping_add(row.wrapping_mul(4)), value);
+            }
+            let second_stream =
+                u32::from(e.mem.u8(chunks + 0x2c)).wrapping_add(e.mem.u32(chunks + 0x24));
+            decompress_block(e, table, anim, data, count, second_stream);
+            let block_size = e.mem.u32(anim + 0x2c);
+            for row in 0..count {
+                let high = f64::from(e.mem.f32(cell(table, row, block_size, 0)));
+                let at = result.wrapping_add(row.wrapping_mul(4));
+                let value = (high * f64::from(time) + f64::from(e.mem.f32(at))) as f32;
+                e.mem.set_f32(at, value);
+            }
+        }
+        profile_record(e, LABEL_RECOMPOSE_CHUNK);
+        let analysis = locals + 0x5c;
+        e.mem.set_u32(analysis, transform_count);
+        e.mem.set_u32(analysis + 4, float_count);
+        e.mem.set_u32(analysis + 8, words);
+        let tracks = e.mem.u32(anim + 0x10);
+        e.mem
+            .set_u32(analysis + 0xc, words.wrapping_add(tracks.wrapping_mul(2)));
+        e.mem.set_u32(analysis + 0x10, static_values);
+        let static_count = e.mem.u32(anim + 0x4c);
+        e.mem.set_u32(
+            analysis + 0x14,
+            static_values.wrapping_add(static_count.wrapping_mul(4)),
+        );
+        e.mem.set_u32(analysis + 0x18, result);
+        let float_static = e.mem.u32(anim + 0x50);
+        e.mem.set_u32(
+            analysis + 0x1c,
+            result.wrapping_add(float_static.wrapping_mul(4)),
+        );
+        e.call(RECOMPOSE, &args![analysis, transforms, floats]);
+        release(e, result);
+        release(e, table);
+        profile_record(e, LABEL_END);
+    })
 }
 
 /// The profiling labels of the unit's other functions: `"LtSampleWave"`, `"StDecompressW"`,
@@ -592,6 +599,9 @@ fn swap_dword_through_x87(e: &mut Engine, at: u32) {
     e.mem.set_u32(at, x87_quiet_bits(loaded.swap_bytes()));
 }
 
+/// The endian conversion's frame: `SUB ESP,0x4c` and four pushes.
+const ENDIAN_FRAME_SIZE: u32 = 0x5c;
+
 // Translated from 00e2fc10 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map, `this` = the animation: the endian conversion of the stored data.
 /// Does nothing unless the word at `+0x44` is 4 and the first byte of the data (`+0x64`) is not
@@ -630,48 +640,51 @@ pub fn fn_00e2fc10(e: &mut Engine, this: Ptr) {
     }
     let transforms = e.mem.u32(t + 0x10);
     let floats = e.mem.u32(t + 0x14);
-    let stats = e.mem.alloc(0x38);
-    e.call(
-        ANALYSE_ENDIAN,
-        &args![
-            halfwords,
-            halfwords.wrapping_add(transforms.wrapping_mul(2)),
-            transforms,
-            floats,
-            stats
-        ],
-    );
-    let stat = |e: &Engine, index: u32| e.mem.i32(stats + 4 * index);
-    let first_count = stat(e, 2)
-        .wrapping_add(stat(e, 3))
-        .wrapping_add(stat(e, 1))
-        .wrapping_add(stat(e, 0));
-    let first = e.mem.u32(t + 0x48).wrapping_add(e.mem.u32(t + 0x64));
-    if first_count > 0 {
-        for index in 0..first_count as u32 {
-            swap_dword_through_x87(e, first.wrapping_add(index.wrapping_mul(4)));
+    // The statistics block sits at +0x24 of the exe's frame (`SUB ESP,0x4c` and four pushes,
+    // 00e2fc89).
+    e.with_stack(ENDIAN_FRAME_SIZE, |e, frame| {
+        let stats = frame.addr() + 0x24;
+        e.call(
+            ANALYSE_ENDIAN,
+            &args![
+                halfwords,
+                halfwords.wrapping_add(transforms.wrapping_mul(2)),
+                transforms,
+                floats,
+                stats
+            ],
+        );
+        let stat = |e: &Engine, index: u32| e.mem.i32(stats + 4 * index);
+        let first_count = stat(e, 2)
+            .wrapping_add(stat(e, 3))
+            .wrapping_add(stat(e, 1))
+            .wrapping_add(stat(e, 0));
+        let first = e.mem.u32(t + 0x48).wrapping_add(e.mem.u32(t + 0x64));
+        if first_count > 0 {
+            for index in 0..first_count as u32 {
+                swap_dword_through_x87(e, first.wrapping_add(index.wrapping_mul(4)));
+            }
         }
-    }
-    let pair_count = stat(e, 9)
-        .wrapping_add(stat(e, 10))
-        .wrapping_add(stat(e, 8))
-        .wrapping_add(stat(e, 7));
-    let data = e.mem.u32(t + 0x64);
-    let second = e.mem.u32(t + 0x38).wrapping_add(data);
-    let third = e.mem.u32(t + 0x3c).wrapping_add(data);
-    for index in 0..pair_count as u32 {
-        swap_dword_through_x87(e, second.wrapping_add(index.wrapping_mul(4)));
-        swap_dword_through_x87(e, third.wrapping_add(index.wrapping_mul(4)));
-    }
-    let table = e.mem.u32(t + 0x54).wrapping_add(e.mem.u32(t + 0x64));
-    let mut index: u32 = 0;
-    while index < e.mem.u32(t + 0x58) {
-        let at = table.wrapping_add(index.wrapping_mul(4));
-        let value = e.mem.u32(at);
-        e.mem.set_u32(at, value.swap_bytes());
-        index = index.wrapping_add(1);
-    }
-    e.mem.free(stats);
+        let pair_count = stat(e, 9)
+            .wrapping_add(stat(e, 10))
+            .wrapping_add(stat(e, 8))
+            .wrapping_add(stat(e, 7));
+        let data = e.mem.u32(t + 0x64);
+        let second = e.mem.u32(t + 0x38).wrapping_add(data);
+        let third = e.mem.u32(t + 0x3c).wrapping_add(data);
+        for index in 0..pair_count as u32 {
+            swap_dword_through_x87(e, second.wrapping_add(index.wrapping_mul(4)));
+            swap_dword_through_x87(e, third.wrapping_add(index.wrapping_mul(4)));
+        }
+        let table = e.mem.u32(t + 0x54).wrapping_add(e.mem.u32(t + 0x64));
+        let mut index: u32 = 0;
+        while index < e.mem.u32(t + 0x58) {
+            let at = table.wrapping_add(index.wrapping_mul(4));
+            let value = e.mem.u32(at);
+            e.mem.set_u32(at, value.swap_bytes());
+            index = index.wrapping_add(1);
+        }
+    });
 }
 
 // Translated from 00e300b0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -881,6 +894,10 @@ pub fn retrieve_from_cache(
     })
 }
 
+/// `samplePartialTracks`' frame: `SUB ESP,0x58`, four pushes, the return address and six
+/// argument words.
+const SAMPLE_TRACKS_FRAME_SIZE: u32 = 0x84;
+
 // Translated from 00e30980 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkaWaveletCompressedAnimation::samplePartialTracks` (Xbox PDB), stack `(time, transform_count,
 /// transforms, float_count, floats, cache)`, `RET 0x18`: the sampler that works from the cache (or
@@ -901,8 +918,8 @@ pub fn retrieve_from_cache(
 /// (`00e4f640`) with the analysis block `(transform count, float count, words, float words, static
 /// values, static float values, result, result floats)`. The x87 arithmetic runs in `f64`, rounded at
 /// each `float` store. A zero block size is a divide fault. `cache` is the address of the
-/// cache object; the helpers take the address of the stack slot that holds it, here a slot of a
-/// small frame.
+/// cache object; the helpers take the address of the stack slot that holds it, its own argument
+/// slot.
 pub fn hka_wavelet_compressed_animation_sample_partial_tracks(
     e: &mut Engine,
     this: Ptr,
@@ -913,158 +930,171 @@ pub fn hka_wavelet_compressed_animation_sample_partial_tracks(
     floats: u32,
     cache: u32,
 ) {
-    let t = this.addr();
-    profile_start_record(e, LABEL_SAMPLE, LABEL_STATIC);
-    let words = e.mem.u32(t + 0x44).wrapping_add(e.mem.u32(t + 0x64));
-    let tracks = e.mem.u32(t + 0x10);
-    let default_count = e.mem.u32(t + 0x34);
-    let mut count = default_count;
-    if transform_count != tracks || float_count != e.mem.u32(t + 0x14) {
-        let float_words = words.wrapping_add(tracks.wrapping_mul(2));
-        let stats = e.mem.alloc(0x38);
-        let sum = if float_count == 0 {
-            e.call(
-                CALC_DYNAMIC_STATS,
-                &args![words, float_words, transform_count, 0u32, stats],
-            );
-            e.mem
-                .u32(stats + 0x24)
-                .wrapping_add(e.mem.u32(stats + 0x20))
-        } else {
-            e.call(
-                CALC_DYNAMIC_STATS,
-                &args![words, float_words, tracks, float_count, stats],
-            );
-            e.mem
-                .u32(stats + 0x24)
-                .wrapping_add(e.mem.u32(stats + 0x28))
-                .wrapping_add(e.mem.u32(stats + 0x20))
-        };
-        count = sum.wrapping_add(e.mem.u32(stats + 0x1c));
-        e.mem.free(stats);
-    }
-    profile_record(e, LABEL_DECOMPRESS);
-    // The exe's frame slots the callees see: the one that held `time` (the frame goes there),
-    // the delta and the one that holds the cache pointer.
-    let slots = e.mem.alloc(12);
-    let (frame_slot, delta_slot, holder) = (slots, slots + 4, slots + 8);
-    e.mem.set_u32(frame_slot, time.to_bits());
-    e.mem.set_u32(holder, cache);
-    hka_animation_get_frame_and_delta(e, this, x87_quiet(time), frame_slot, delta_slot);
-    let delta = f64::from(x87_quiet(e.mem.f32(delta_slot)));
-    let rest_value = (1.0 - delta) as f32;
-    let block_size = e.mem.u32(t + 0x2c);
-    let table = reserve(e, block_size.wrapping_mul(count).wrapping_mul(4));
-    let result = reserve(e, count.wrapping_mul(4));
-    let first_frame = e.mem.u32(frame_slot);
-    let mut source = table;
-    let mut cached = 0;
-    if e.mem.u32(holder) != 0 {
-        cached = retrieve_from_cache(e, holder, t, first_frame, default_count);
-    }
-    if cached != 0 {
-        source = cached;
-    } else {
-        decompress_block_to_cache(e, t, first_frame, table, count);
-    }
-    profile_record(e, LABEL_INTERPOLATE);
-    let block_size = e.mem.u32(t + 0x2c);
-    let rest = f64::from(x87_quiet(rest_value));
-    let frame = e.mem.u32(frame_slot);
-    if block_size == 0 {
-        panic!("integer divide fault at 0x00e30b7c");
-    }
-    let column = frame % block_size;
-    if column.wrapping_add(1) != block_size {
-        let delta = f64::from(x87_quiet(e.mem.f32(delta_slot)));
-        let mut index = column;
-        for row in 0..count {
-            let next = f64::from(x87_quiet(
+    // The exe's frame (`SUB ESP,0x58` and four pushes, the return address, then the six
+    // argument words as the caller pushed them): the statistics and later the analysis block at
+    // +0x30.
+    e.with_stack(SAMPLE_TRACKS_FRAME_SIZE, |e, locals| {
+        let locals = locals.addr();
+        for (slot, word) in [
+            time.to_bits(),
+            transform_count,
+            transforms,
+            float_count,
+            floats,
+            cache,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            e.mem.set_u32(locals + 0x6c + 4 * slot as u32, word);
+        }
+        let t = this.addr();
+        profile_start_record(e, LABEL_SAMPLE, LABEL_STATIC);
+        let words = e.mem.u32(t + 0x44).wrapping_add(e.mem.u32(t + 0x64));
+        let tracks = e.mem.u32(t + 0x10);
+        let default_count = e.mem.u32(t + 0x34);
+        let mut count = default_count;
+        if transform_count != tracks || float_count != e.mem.u32(t + 0x14) {
+            let float_words = words.wrapping_add(tracks.wrapping_mul(2));
+            let stats = locals + 0x30;
+            let sum = if float_count == 0 {
+                e.call(
+                    CALC_DYNAMIC_STATS,
+                    &args![words, float_words, transform_count, 0u32, stats],
+                );
                 e.mem
-                    .f32(source.wrapping_add(index.wrapping_mul(4)).wrapping_add(4)),
-            ));
-            let this_value = f64::from(x87_quiet(
-                e.mem.f32(source.wrapping_add(index.wrapping_mul(4))),
-            ));
-            let value = (next * delta + this_value * rest) as f32;
-            e.mem
-                .set_f32(result.wrapping_add(row.wrapping_mul(4)), value);
-            index = index.wrapping_add(e.mem.u32(t + 0x2c));
-        }
-        if source != table {
-            let frame = e.mem.u32(frame_slot);
-            fn_00e2f910(e, t, frame, holder, default_count);
-        }
-    } else {
-        let mut index = column;
-        for row in 0..count {
-            let value = f64::from(x87_quiet(
-                e.mem.f32(source.wrapping_add(index.wrapping_mul(4))),
-            ));
-            e.mem.set_f32(
-                result.wrapping_add(row.wrapping_mul(4)),
-                (value * rest) as f32,
-            );
-            index = index.wrapping_add(e.mem.u32(t + 0x2c));
-        }
-        if source != table {
-            let frame = e.mem.u32(frame_slot);
-            fn_00e2f910(e, t, frame, holder, default_count);
+                    .u32(stats + 0x24)
+                    .wrapping_add(e.mem.u32(stats + 0x20))
+            } else {
+                e.call(
+                    CALC_DYNAMIC_STATS,
+                    &args![words, float_words, tracks, float_count, stats],
+                );
+                e.mem
+                    .u32(stats + 0x24)
+                    .wrapping_add(e.mem.u32(stats + 0x28))
+                    .wrapping_add(e.mem.u32(stats + 0x20))
+            };
+            count = sum.wrapping_add(e.mem.u32(stats + 0x1c));
         }
         profile_record(e, LABEL_DECOMPRESS);
-        let next_frame = e.mem.u32(frame_slot).wrapping_add(1);
-        e.mem.set_u32(frame_slot, next_frame);
-        let mut second = table;
+        // The exe's frame slots the callees see: the argument slot that held `time` (+0x6c; the frame
+        // goes there), the delta (+0x18) and the argument slot of the cache pointer (+0x80).
+        let (frame_slot, delta_slot, holder) = (locals + 0x6c, locals + 0x18, locals + 0x80);
+        hka_animation_get_frame_and_delta(e, this, x87_quiet(time), frame_slot, delta_slot);
+        let delta = f64::from(x87_quiet(e.mem.f32(delta_slot)));
+        let rest_value = (1.0 - delta) as f32;
+        let block_size = e.mem.u32(t + 0x2c);
+        let table = reserve(e, block_size.wrapping_mul(count).wrapping_mul(4));
+        let result = reserve(e, count.wrapping_mul(4));
+        let first_frame = e.mem.u32(frame_slot);
+        let mut source = table;
         let mut cached = 0;
         if e.mem.u32(holder) != 0 {
-            cached = retrieve_from_cache(e, holder, t, next_frame, default_count);
+            cached = retrieve_from_cache(e, holder, t, first_frame, default_count);
         }
         if cached != 0 {
-            second = cached;
+            source = cached;
         } else {
-            decompress_block_to_cache(e, t, next_frame, table, count);
+            decompress_block_to_cache(e, t, first_frame, table, count);
         }
         profile_record(e, LABEL_INTERPOLATE);
-        let delta = f64::from(x87_quiet(e.mem.f32(delta_slot)));
-        let mut index: u32 = 0;
-        for row in 0..count {
-            let value = f64::from(x87_quiet(
-                e.mem.f32(second.wrapping_add(index.wrapping_mul(4))),
-            ));
-            let at = result.wrapping_add(row.wrapping_mul(4));
-            let sum = f64::from(x87_quiet(e.mem.f32(at)));
-            e.mem.set_f32(at, (value * delta + sum) as f32);
-            index = index.wrapping_add(e.mem.u32(t + 0x2c));
+        let block_size = e.mem.u32(t + 0x2c);
+        let rest = f64::from(x87_quiet(rest_value));
+        let frame = e.mem.u32(frame_slot);
+        if block_size == 0 {
+            panic!("integer divide fault at 0x00e30b7c");
         }
-        if second != table {
-            let frame = e.mem.u32(frame_slot);
-            fn_00e2f910(e, t, frame, holder, default_count);
+        let column = frame % block_size;
+        if column.wrapping_add(1) != block_size {
+            let delta = f64::from(x87_quiet(e.mem.f32(delta_slot)));
+            let mut index = column;
+            for row in 0..count {
+                let next = f64::from(x87_quiet(
+                    e.mem
+                        .f32(source.wrapping_add(index.wrapping_mul(4)).wrapping_add(4)),
+                ));
+                let this_value = f64::from(x87_quiet(
+                    e.mem.f32(source.wrapping_add(index.wrapping_mul(4))),
+                ));
+                let value = (next * delta + this_value * rest) as f32;
+                e.mem
+                    .set_f32(result.wrapping_add(row.wrapping_mul(4)), value);
+                index = index.wrapping_add(e.mem.u32(t + 0x2c));
+            }
+            if source != table {
+                let frame = e.mem.u32(frame_slot);
+                fn_00e2f910(e, t, frame, holder, default_count);
+            }
+        } else {
+            let mut index = column;
+            for row in 0..count {
+                let value = f64::from(x87_quiet(
+                    e.mem.f32(source.wrapping_add(index.wrapping_mul(4))),
+                ));
+                e.mem.set_f32(
+                    result.wrapping_add(row.wrapping_mul(4)),
+                    (value * rest) as f32,
+                );
+                index = index.wrapping_add(e.mem.u32(t + 0x2c));
+            }
+            if source != table {
+                let frame = e.mem.u32(frame_slot);
+                fn_00e2f910(e, t, frame, holder, default_count);
+            }
+            profile_record(e, LABEL_DECOMPRESS);
+            let next_frame = e.mem.u32(frame_slot).wrapping_add(1);
+            e.mem.set_u32(frame_slot, next_frame);
+            let mut second = table;
+            let mut cached = 0;
+            if e.mem.u32(holder) != 0 {
+                cached = retrieve_from_cache(e, holder, t, next_frame, default_count);
+            }
+            if cached != 0 {
+                second = cached;
+            } else {
+                decompress_block_to_cache(e, t, next_frame, table, count);
+            }
+            profile_record(e, LABEL_INTERPOLATE);
+            let delta = f64::from(x87_quiet(e.mem.f32(delta_slot)));
+            let mut index: u32 = 0;
+            for row in 0..count {
+                let value = f64::from(x87_quiet(
+                    e.mem.f32(second.wrapping_add(index.wrapping_mul(4))),
+                ));
+                let at = result.wrapping_add(row.wrapping_mul(4));
+                let sum = f64::from(x87_quiet(e.mem.f32(at)));
+                e.mem.set_f32(at, (value * delta + sum) as f32);
+                index = index.wrapping_add(e.mem.u32(t + 0x2c));
+            }
+            if second != table {
+                let frame = e.mem.u32(frame_slot);
+                fn_00e2f910(e, t, frame, holder, default_count);
+            }
         }
-    }
-    profile_record(e, LABEL_RECOMPOSE);
-    let static_values = e.mem.u32(t + 0x48).wrapping_add(e.mem.u32(t + 0x64));
-    let analysis = e.mem.alloc(0x20);
-    e.mem.set_u32(analysis, transform_count);
-    e.mem.set_u32(analysis + 4, float_count);
-    e.mem.set_u32(analysis + 8, words);
-    let float_words = words.wrapping_add(e.mem.u32(t + 0x10).wrapping_mul(2));
-    e.mem.set_u32(analysis + 0xc, float_words);
-    e.mem.set_u32(analysis + 0x10, static_values);
-    e.mem.set_u32(
-        analysis + 0x14,
-        static_values.wrapping_add(e.mem.u32(t + 0x4c).wrapping_mul(4)),
-    );
-    e.mem.set_u32(analysis + 0x18, result);
-    e.mem.set_u32(
-        analysis + 0x1c,
-        result.wrapping_add(e.mem.u32(t + 0x50).wrapping_mul(4)),
-    );
-    e.call(RECOMPOSE, &args![analysis, transforms, floats]);
-    profile_record(e, LABEL_END);
-    release(e, result);
-    release(e, table);
-    e.mem.free(analysis);
-    e.mem.free(slots);
+        profile_record(e, LABEL_RECOMPOSE);
+        let static_values = e.mem.u32(t + 0x48).wrapping_add(e.mem.u32(t + 0x64));
+        let analysis = locals + 0x30;
+        e.mem.set_u32(analysis, transform_count);
+        e.mem.set_u32(analysis + 4, float_count);
+        e.mem.set_u32(analysis + 8, words);
+        let float_words = words.wrapping_add(e.mem.u32(t + 0x10).wrapping_mul(2));
+        e.mem.set_u32(analysis + 0xc, float_words);
+        e.mem.set_u32(analysis + 0x10, static_values);
+        e.mem.set_u32(
+            analysis + 0x14,
+            static_values.wrapping_add(e.mem.u32(t + 0x4c).wrapping_mul(4)),
+        );
+        e.mem.set_u32(analysis + 0x18, result);
+        e.mem.set_u32(
+            analysis + 0x1c,
+            result.wrapping_add(e.mem.u32(t + 0x50).wrapping_mul(4)),
+        );
+        e.call(RECOMPOSE, &args![analysis, transforms, floats]);
+        profile_record(e, LABEL_END);
+        release(e, result);
+        release(e, table);
+    })
 }
 
 /// This unit's translated functions, by exe address.
@@ -2577,5 +2607,63 @@ mod tests {
             0x00e3_0980,
             &args![animation, 0.3125f32, 2u32, transforms, 1u32, floats, cache],
         );
+    }
+
+    #[test]
+    fn sampling_from_chunks_keeps_its_blocks_at_the_exe_frame_offsets() {
+        let mut e = engine();
+        install_router(&mut e);
+        install_stream(&mut e);
+        install_callees(&mut e);
+        let (_, chunks) = setup(&mut e);
+        let transforms = e.mem.alloc(0x20);
+        let floats = e.mem.alloc(0x20);
+        // The frame block is the one just freed: the statistics at +0x24, the analysis block at
+        // +0x5c.
+        let frame = e.mem.alloc(SAMPLE_CHUNKS_FRAME_SIZE);
+        e.mem.free(frame);
+        e.call(
+            0x00e3_0200,
+            &args![5u32, 0.25f32, 3u32, transforms, 0u32, floats, chunks, 4u32],
+        );
+        assert_eq!(calls(&e, CALC_DYNAMIC_STATS)[0][4], frame + 0x24);
+        assert_eq!(calls(&e, RECOMPOSE)[0][0], frame + 0x5c);
+    }
+
+    #[test]
+    fn the_endian_pass_keeps_its_statistics_at_0x24_of_the_exe_frame() {
+        let mut e = engine();
+        let (animation, _) = endian_animation(&mut e);
+        stats_double(&mut e, [1, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0]);
+        let frame = e.mem.alloc(ENDIAN_FRAME_SIZE);
+        e.mem.free(frame);
+        e.call(0x00e2_fc10, &args![animation]);
+        assert_eq!(calls(&e, ANALYSE_ENDIAN)[0][4], frame + 0x24);
+    }
+
+    #[test]
+    fn sampling_tracks_keeps_its_slots_at_the_exe_frame_offsets() {
+        let mut e = engine();
+        let router = install_router(&mut e);
+        let base = e.mem.u32(router);
+        install_big_stream(&mut e);
+        decompress_doubles(&mut e);
+        let (animation, data) = sampling_animation(&mut e);
+        table_doubles(&mut e, data, base);
+        record_recompose(&mut e);
+        let transforms = e.mem.alloc(0x20);
+        let floats = e.mem.alloc(0x20);
+        // The frame block is the one just freed: the analysis block at +0x30, the delta at
+        // +0x18, and the argument words from +0x6c, the frame (2) in the slot of `time`.
+        let frame = e.mem.alloc(SAMPLE_TRACKS_FRAME_SIZE);
+        e.mem.free(frame);
+        e.call(
+            0x00e3_0980,
+            &args![animation, 0.3125f32, 2u32, transforms, 1u32, floats, 0u32],
+        );
+        assert_eq!(calls(&e, RECOMPOSE)[0][0], frame + 0x30);
+        assert_eq!(e.mem.f32(frame + 0x18), 0.5);
+        let arguments: Vec<u32> = (0..6).map(|i| e.mem.u32(frame + 0x6c + 4 * i)).collect();
+        assert_eq!(arguments, vec![2, 2, transforms, 1, floats, 0]);
     }
 }

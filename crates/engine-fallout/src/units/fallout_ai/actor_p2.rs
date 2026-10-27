@@ -5373,7 +5373,7 @@ const SET_ACTION_FLAG: u32 = 0x005a_c750;
 const CREATE_MESSAGE: u32 = 0x0040_3df0;
 /// The same shape as [`CREATE_MESSAGE`], used by `UnEquipObject`.
 const CREATE_MESSAGE_ALT: u32 = 0x004c_69f0;
-/// `cdecl`, one word: shows the message `CREATE_MESSAGE` returned.
+/// `cdecl`, six words: shows the message `CREATE_MESSAGE` returned.
 const SHOW_MESSAGE: u32 = 0x0070_52f0;
 /// The icon path `Interface\Icons\Message Icons\glow_message_vaultboy_sad.dds`.
 const MESSAGE_ICON_PATH: u32 = 0x0102_08a0;
@@ -5619,10 +5619,14 @@ const BIPED_SLOT_COUNT: u32 = 0x14;
 /// `SHOW_MESSAGE`.
 fn show_message(e: &mut Engine, creator: u32, setting: u32, icon: u32) {
     let duration: f32 = e.global(MESSAGE_DURATION);
-    let message = e
-        .call(creator, &args![setting, 0u32, icon, 0u32, duration, 0u32])
-        .u32();
-    e.call(SHOW_MESSAGE, &args![message]);
+    // 0088c911: the creator (00403df0 / 004c69f0, plain `RET`) takes only the
+    // setting (ECX); the five pushed words are the rest of the cdecl `007052f0`
+    // (ADD ESP,0x18).
+    let message = e.call(creator, &args![setting]).u32();
+    e.call(
+        SHOW_MESSAGE,
+        &args![message, 0u32, icon, 0u32, duration, 0u32],
+    );
 }
 
 // Translated from 0088c650 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -12546,12 +12550,20 @@ mod tests {
         }
     }
 
-    /// Messages created so far, as (setting object, icon).
-    fn shown_messages(created: &CallRecord) -> Vec<(u32, u32)> {
+    /// Messages shown so far, as (setting object, icon): the creator takes only
+    /// the setting (ECX); the icon is the third word of `SHOW_MESSAGE`.
+    fn shown_messages(created: &CallRecord, shown: &CallRecord) -> Vec<(u32, u32)> {
+        let created = created.borrow();
+        let shown = shown.borrow();
+        assert_eq!(created.len(), shown.len());
         created
-            .borrow()
             .iter()
-            .map(|call| (call[0], call[2]))
+            .zip(shown.iter())
+            .map(|(made, call)| {
+                assert_eq!(made.len(), 1);
+                assert_eq!(call.len(), 6);
+                (made[0], call[2])
+            })
             .collect()
     }
 
@@ -12602,11 +12614,11 @@ mod tests {
         equip(&mut e, actor, item, 1, 0, [0, 0, 0]);
         assert_eq!(*tested.borrow(), vec![vec![item.addr() + 0x70]]);
         assert_eq!(
-            shown_messages(&created),
+            shown_messages(&created, &shown),
             vec![(POWER_ARMOR_MESSAGE, MESSAGE_ICON_PATH)]
         );
-        assert_eq!(created.borrow()[0][4], 2.0f32.to_bits());
-        assert_eq!(*shown.borrow(), vec![vec![0x5151]]);
+        assert_eq!(shown.borrow()[0][4], 2.0f32.to_bits());
+        assert_eq!(shown.borrow()[0][0], 0x5151);
         assert!(applied.borrow().is_empty());
         // A non-zero byte at +0x7c7 of the player lets the armor through.
         e.mem.set_u8(actor.addr() + 0x7c7, 1);
@@ -12628,10 +12640,11 @@ mod tests {
         }
         double(&mut e, EXTRA_LIST_CAN_NOT_WEAR, eax(1));
         let created = record(&mut e, CREATE_MESSAGE, eax(0x5151));
+        let shown = record(&mut e, SHOW_MESSAGE, Ret::default());
         let applied = record(&mut e, INVENTORY_APPLY_EQUIP, Ret::default());
         equip(&mut e, actor, item, 1, 0x1234, [0, 0, 0]);
         assert_eq!(
-            shown_messages(&created),
+            shown_messages(&created, &shown),
             vec![(CANNOT_WEAR_MESSAGE, MESSAGE_ICON_PATH)]
         );
         assert!(applied.borrow().is_empty());
@@ -12702,12 +12715,13 @@ mod tests {
         // Broken: the message for the player, no equip, no use flag.
         double(&mut e, FORM_HEALTH, eax(0));
         let created = record(&mut e, CREATE_MESSAGE, eax(0x5151));
+        let shown = record(&mut e, SHOW_MESSAGE, Ret::default());
         let before = applied.borrow().len();
         flags.borrow_mut().clear();
         equip(&mut e, actor, item, 1, 0, [0, 0, 0]);
         assert_eq!(applied.borrow().len(), before);
         assert_eq!(
-            shown_messages(&created),
+            shown_messages(&created, &shown),
             vec![(BROKEN_ITEM_MESSAGE, MESSAGE_ICON_PATH)]
         );
         assert!(flags.borrow().is_empty());
@@ -12788,11 +12802,12 @@ mod tests {
         double(&mut e, FORM_HEALTH, eax(0));
         slot(&mut e, ACTOR_TABLE, VSLOT_ACTOR_FLAG_0X360, eax(1));
         let created = record(&mut e, CREATE_MESSAGE, eax(0x5151));
+        let shown = record(&mut e, SHOW_MESSAGE, Ret::default());
         let applied = record(&mut e, INVENTORY_APPLY_EQUIP, Ret::default());
         let flags = record(&mut e, SET_ACTION_FLAG, Ret::default());
         equip(&mut e, actor, item, 1, 0, [0, 0, 0]);
         assert_eq!(
-            shown_messages(&created),
+            shown_messages(&created, &shown),
             vec![(BROKEN_ITEM_MESSAGE, MESSAGE_ICON_PATH)]
         );
         assert!(applied.borrow().is_empty());
@@ -12815,9 +12830,13 @@ mod tests {
         }
         double(&mut e, ACTOR_CAN_USE_FORM, eax(0));
         let created = record(&mut e, CREATE_MESSAGE, eax(0x5151));
+        let shown = record(&mut e, SHOW_MESSAGE, Ret::default());
         let flags = record(&mut e, SET_ACTION_FLAG, Ret::default());
         equip(&mut e, actor, item, 1, 0, [0, 0, 0]);
-        assert_eq!(shown_messages(&created), vec![(EQUIP_FAILED_MESSAGE, 0)]);
+        assert_eq!(
+            shown_messages(&created, &shown),
+            vec![(EQUIP_FAILED_MESSAGE, 0)]
+        );
         assert!(flags.borrow().is_empty());
         // The light type goes the same way, silently for another actor.
         e.mem.set_u8(item.addr() + 4, 0x1e);
@@ -12926,12 +12945,13 @@ mod tests {
         // The form refuses: only the player is told.
         slot_at(&mut e, FORM_TABLE, FORM_VSLOT_0X94, eax(1));
         let created = record(&mut e, CREATE_MESSAGE, eax(0x5151));
+        let shown = record(&mut e, SHOW_MESSAGE, Ret::default());
         equip(&mut e, actor, item, 1, 0x1234, [0, 0, 0]);
         assert!(created.borrow().is_empty());
         make_player(&mut e, actor);
         equip(&mut e, actor, item, 1, 0x1234, [0, 0, 0]);
         assert_eq!(
-            shown_messages(&created),
+            shown_messages(&created, &shown),
             vec![(CANNOT_USE_MESSAGE, MESSAGE_ICON_PATH)]
         );
         assert_eq!(eaten.borrow().len(), 2);
@@ -13048,11 +13068,12 @@ mod tests {
         let (actor, item) = equip_world(&mut e, 0x30);
         make_player(&mut e, actor);
         let created = record(&mut e, CREATE_MESSAGE, eax(0x5151));
+        let shown = record(&mut e, SHOW_MESSAGE, Ret::default());
         let notified = record(&mut e, ACTOR_EQUIP_NOTIFICATION, Ret::default());
         let flags = record(&mut e, SET_ACTION_FLAG, Ret::default());
         equip(&mut e, actor, item, 1, 0x1234, [0, 0, 1]);
         assert_eq!(
-            shown_messages(&created),
+            shown_messages(&created, &shown),
             vec![(CANNOT_WEAR_MESSAGE, MESSAGE_ICON_PATH)]
         );
         assert_eq!(
@@ -13273,8 +13294,14 @@ mod tests {
             actor_un_equip_object(&mut e, actor, item, 1, Ptr::new(0x1234), 0, 0, 0),
             0
         );
-        assert_eq!(shown_messages(&created), vec![(CANNOT_REMOVE_MESSAGE, 0)]);
-        assert_eq!(*shown.borrow(), vec![vec![0x5252]]);
+        assert_eq!(
+            shown_messages(&created, &shown),
+            vec![(CANNOT_REMOVE_MESSAGE, 0)]
+        );
+        assert_eq!(
+            *shown.borrow(),
+            vec![vec![0x5252, 0, 0, 0, 2.0f32.to_bits(), 0]]
+        );
         assert!(removed.borrow().is_empty());
         // The virtual +0x22c lets it through.
         slot(&mut e, ACTOR_TABLE, VSLOT_IS_PROCESS_FLAG_0X22C, eax(1));

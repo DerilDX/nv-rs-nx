@@ -136,27 +136,6 @@ layout! {
     }
 }
 
-/// Temporary objects the game keeps on its stack and passes by address.
-struct Temps(Vec<u32>);
-
-impl Temps {
-    fn new() -> Self {
-        Temps(Vec::new())
-    }
-
-    fn alloc(&mut self, e: &mut Engine, size: u32) -> u32 {
-        let block = e.mem.alloc(size);
-        self.0.push(block);
-        block
-    }
-
-    fn free(self, e: &mut Engine) {
-        for block in self.0 {
-            e.mem.free(block);
-        }
-    }
-}
-
 fn pointer_value(e: &mut Engine, slot: u32) -> u32 {
     e.call(POINTER_VALUE, &args![slot]).u32()
 }
@@ -175,21 +154,18 @@ fn setting_int(e: &mut Engine, setting: u32) -> i32 {
     e.mem.i32(pointer)
 }
 
-/// A new zero `NiPoint3` temporary.
-fn zero_point(e: &mut Engine, temps: &mut Temps) -> u32 {
-    let point = temps.alloc(e, 0xc);
+/// A zero `NiPoint3` built in the caller's local `point`.
+fn zero_point(e: &mut Engine, point: u32) -> u32 {
     e.call(POINT_CONSTRUCT, &args![point, 0.0f32, 0.0f32, 0.0f32]);
     point
 }
 
-/// Looks a child up by name: builds an `NiFixedString`, calls the virtual
-/// `GetObjectByName` (slot +0x9C) and destroys the string again.
-fn find_child_by_name(e: &mut Engine, parent: u32, name: u32) -> u32 {
-    let fixed = e.mem.alloc(4);
+/// Looks a child up by name: builds an `NiFixedString` in the caller's local `fixed`, calls
+/// the virtual `GetObjectByName` (slot +0x9C) and destroys the string again.
+fn find_child_by_name(e: &mut Engine, fixed: u32, parent: u32, name: u32) -> u32 {
     e.call(FIXED_STRING_CONSTRUCT, &args![fixed, name]);
     let child = e.vcall(parent, 0x9c, &args![fixed]).u32();
     e.call(FIXED_STRING_DESTRUCT, &args![fixed]);
-    e.mem.free(fixed);
     child
 }
 
@@ -232,227 +208,234 @@ fn renderer_ratio(e: &mut Engine) -> f32 {
 pub fn forendered_menu_race_sex_initialize(e: &mut Engine, this: Ptr<FORenderedMenuRaceSex>) {
     type M = FORenderedMenuRaceSex;
     let me = this.addr();
-    let mut temps = Temps::new();
-    e.set(this, M::bFakeDistortActive, false);
-    // The first fake distortion happens a random time after the start.
-    let ticks = e.call(0x0082_5c00, &args![0x011f_6394u32]).u32() as f64;
-    let random = e.call(0x00ec_adb8, &args![]).i32();
-    let modulus = setting_int(e, 0x011d_b4f8);
-    let remainder = random.wrapping_rem(modulus);
-    e.set(
-        this,
-        M::fNextFakeDistortTime,
-        (remainder as f64 + ticks) as f32,
-    );
-    let duration = setting_float(e, 0x011d_b4d0);
-    e.set(this, M::fFakeDistortDuration, duration);
-    let color = temps.alloc(e, 0x10);
-    e.call(
-        COLOR_A_CONSTRUCT,
-        &args![color, 0.0f32, 0.0f32, 0.0f32, 0.0f32],
-    );
-    let holder = e.call(0x0071_8b60, &args![]).u32();
-    if e.call(0x0071_9060, &args![holder, 3u32, color]).bool() {
-        e.call(0x007f_7fb0, &args![me, color]);
-    }
-    // The menu geometry.
-    let geometry_slot = me + 0xf8;
-    let node;
-    if pointer_value(e, geometry_slot) == 0 {
-        let owner = e.call(0x0096_11e0, &args![me]).u32();
-        let menu = e.call(0x00a0_3c90, &args![owner]).u32();
-        let name = e.call(0x007f_d640, &args![menu]).u32();
-        let loader: u32 = e.global(0x011c_3b3c);
-        node = e
-            .call(
-                0x0044_7080,
-                &args![loader, name, 0u32, 1u32, 0u32, 0u32, 0u32],
-            )
-            .u32();
-        assign_pointer(e, geometry_slot, node);
-        e.call(0x004b_7660, &args![node]);
-    } else {
-        node = pointer_value(e, geometry_slot);
-    }
-    let scale = setting_float(e, 0x011d_b544);
-    e.call(0x0044_0490, &args![node, scale]);
-    e.call(0x004d_c540, &args![me, node]);
-    let body = find_child_by_name(e, node, 0x0107_8a54);
-    e.call(0x007f_ae70, &args![me, 0u32]);
-    e.call(0x0081_0530, &args![me, 0u32]);
-    assign_pointer(e, me + 0xfc, 0);
-    assign_pointer(e, me + 0x104, 0);
-    // The four buttons and their glows, by name.
-    let names = [
-        0x0107_8a48u32,
-        0x0107_8a3c,
-        0x0107_8a30,
-        0x0107_8a24,
-        0x0107_8a18,
-        0x0107_8a0c,
-        0x0107_8a00,
-        0x0107_89f4,
-    ];
-    for (i, name) in names.iter().enumerate() {
-        let fixed = temps.alloc(e, 4);
-        e.call(FIXED_STRING_CONSTRUCT, &args![fixed, *name]);
-        let child = e.vcall(node, 0x9c, &args![fixed]).u32();
-        assign_pointer(e, me + 0xd8 + 4 * i as u32, child);
-        e.call(FIXED_STRING_DESTRUCT, &args![fixed]);
-    }
-    e.set(this, M::fDistortStart, 0.0);
-    e.set(this, M::fDistortPos, 0.0);
-    e.call(0x008d_7f00, &args![me, 0.0f32]);
-    // Rotation of the geometry: the product of two rotations by the same
-    // angle.
-    let first = temps.alloc(e, 0x24);
-    e.call(MATRIX_CONSTRUCT, &args![first]);
-    let second = temps.alloc(e, 0x24);
-    e.call(MATRIX_CONSTRUCT, &args![second]);
-    let angle: f32 = e.global(FRUSTUM_ANGLE);
-    e.call(0x0043_f850, &args![first, angle]);
-    e.call(0x004a_0c90, &args![second, angle]);
-    let product = temps.alloc(e, 0x30);
-    let rotation = e.call(0x0043_f8d0, &args![second, product, first]).u32();
-    e.call(SET_ROTATE, &args![node, rotation]);
-    // Position of the geometry; the depth depends on the menu's context.
-    let context = e.call(0x009b_6600, &args![me]).i32();
-    let mut depth: f32 = if context == 1 || e.call(0x009b_6600, &args![me]).i32() == 0 {
-        e.global(0x0101_e33c)
-    } else {
-        setting_float(e, 0x011d_b570)
-    };
-    if !e.call(0x0070_7b50, &args![]).bool() && e.mem.u8(0x011f_9426) == 0 {
-        depth = (depth as f64 * e.global::<f64>(0x0101_de30)) as f32;
-    }
-    let context = e.call(0x009b_6600, &args![me]).i32();
-    if context == 1 || e.call(0x009b_6600, &args![me]).i32() == 0 {
-        let z = setting_float(e, 0x011d_b5cc);
-        e.call(SET_TRANSLATE, &args![node, depth, 0.0f32, z]);
-    } else {
-        let z = setting_float(e, 0x011d_b5cc);
-        let y = setting_float(e, 0x011d_b594);
-        e.call(SET_TRANSLATE, &args![node, depth, y, z]);
-    }
-    let point = zero_point(e, &mut temps);
-    e.call(SET_TRANSLATE_POINT, &args![node, point]);
-    // The menu camera.
-    let memory = e.call(ALLOCATE, &args![0x114u32]).u32();
-    let camera = if memory != 0 {
-        e.call(0x00a7_12f0, &args![memory]).u32()
-    } else {
-        0
-    };
-    let background = temps.alloc(e, 0x10);
-    e.call(
-        COLOR_A_CONSTRUCT,
-        &args![background, 0.0f32, 1.0f32, 1.0f32, 0.0f32],
-    );
-    e.call(0x0071_2e60, &args![camera, background]);
-    let axes = temps.alloc(e, 0x24);
-    e.call(MATRIX_CONSTRUCT, &args![axes]);
-    // (The matrix built here is not used afterwards.)
-    e.call(0x0071_33b0, &args![axes, 0u32, 0.0f32, 0.0f32, 1.0f32]);
-    e.call(0x0071_33b0, &args![axes, 1u32, 1.0f32, 0.0f32, 0.0f32]);
-    e.call(0x0071_33b0, &args![axes, 2u32, 0.0f32, 1.0f32, 0.0f32]);
-    e.call(SET_ROTATE, &args![camera, IDENTITY_MATRIX]);
-    e.call(0x0073_3fd0, &args![camera, 1.0f32]);
-    let frustum = temps.alloc(e, 0x20);
-    e.call(0x00a7_1b70, &args![frustum, 0u32]);
-    let ratio = renderer_ratio(e);
-    e.call(0x0050_7700, &args![camera, ratio]);
-    let wide = e.mem.u8(0x011f_9426) != 0;
-    let width = if wide {
-        e.global::<u32>(0x011f_9434)
-    } else {
-        e.call(0x004d_c200, &args![]).u32()
-    };
-    let height = e.call(0x004d_c1f0, &args![]).u32();
-    let aspect = (width as i32 as f64 / height as i32 as f64) as f32;
-    let k: f32 = e.global(FRUSTUM_SCALE);
-    let fov = fov_value(e);
-    let t = trig(e, fov);
-    e.mem.set_f32(frustum, (-(t as f64) * k as f64) as f32);
-    let t = trig(e, fov);
-    e.mem.set_f32(frustum + 4, (t as f64 * k as f64) as f32);
-    let t = trig(e, fov);
-    e.mem.set_f32(
-        frustum + 0xc,
-        (-(t as f64) * aspect as f64 * k as f64) as f32,
-    );
-    let t = trig(e, fov);
-    e.mem
-        .set_f32(frustum + 8, (t as f64 * aspect as f64 * k as f64) as f32);
-    e.mem.set_u8(frustum + 0x18, 0);
-    e.call(0x00a6_faf0, &args![camera, frustum]);
-    let angle = setting_float(e, 0x011d_b5ec);
-    e.call(0x0070_9d50, &args![camera, angle]);
-    let point = zero_point(e, &mut temps);
-    e.call(SET_TRANSLATE_POINT, &args![camera, point]);
-    e.call(0x007f_d620, &args![me, camera]);
-    // The shape found by name: its scene node (virtual +0x18), or the node
-    // of its first child (virtual +0xC).
-    if e.vcall(body, 0x18, &args![]).u32() != 0 {
-        let found = e.vcall(body, 0x18, &args![]).u32();
-        e.call(0x007f_9010, &args![me, found]);
-    } else if e.vcall(body, 0xc, &args![]).u32() != 0 {
-        let child = e.vcall(body, 0xc, &args![]).u32();
-        let child = e.call(0x0043_b4a0, &args![child, 0u32]).u32();
-        let found = e.vcall(child, 0x18, &args![]).u32();
-        e.call(0x007f_9010, &args![me, found]);
-    }
-    e.call(0x004d_c540, &args![me, node]);
-    let value = e.call(0x0040_df90, &args![]).u32();
-    let holder = e.call(0x007f_a950, &args![me]).u32();
-    e.call(0x00a5_b230, &args![holder, value]);
-    let memory = e.call(ALLOCATE, &args![0x1cu32]).u32();
-    let entry = if memory != 0 {
-        e.call(0x0043_91c0, &args![memory]).u32()
-    } else {
-        0
-    };
-    let holder = e.call(0x007f_a950, &args![me]).u32();
-    e.call(0x0043_9410, &args![holder, entry]);
-    // The scene graph: the geometry's radius decides the node scale, and
-    // when the graph has no entry for the scene yet it gets a light.
-    let bound = e.call(0x0043_d450, &args![node]).u32();
-    let radius = e.call(0x0084_d030, &args![bound]).f32();
-    let radius = (radius as f64 * e.global::<f64>(SCALE_DOUBLE)) as f32;
-    let graph = e.call(SCENE_NODE_GETTER, &args![1u32]).u32();
-    let existing = e.call(0x00b5_ca70, &args![graph, node, radius]).u32();
-    if existing == 0 {
-        let memory = e.call(ALLOCATE, &args![0xfcu32]).u32();
-        let light = if memory != 0 {
-            e.call(0x00a7_d670, &args![memory]).u32()
+    // The exe's frame (`SUB ESP,0x208` under the exception record, then `ESI` and the record
+    // link): the colours at `EBP-0x78` and `EBP-0x34`, the body's name at `EBP-0x104`, the
+    // button names from `EBP-0x108` down by 4, the rotations at `EBP-0x58` and `EBP-0xec`, their
+    // product at `EBP-0x148`, the zero points at `EBP-0x24`, `EBP-0x18` and `EBP-0x100`, the
+    // axes at `EBP-0x9c`, the frustum at `EBP-0xb8` and the light colours at `EBP-0x16c`,
+    // `EBP-0x178` and `EBP-0x184`.
+    e.with_stack(0x21c, |e, frame| {
+        let local = |offset: u32| frame.addr() + offset;
+        e.set(this, M::bFakeDistortActive, false);
+        // The first fake distortion happens a random time after the start.
+        let ticks = e.call(0x0082_5c00, &args![0x011f_6394u32]).u32() as f64;
+        let random = e.call(0x00ec_adb8, &args![]).i32();
+        let modulus = setting_int(e, 0x011d_b4f8);
+        let remainder = random.wrapping_rem(modulus);
+        e.set(
+            this,
+            M::fNextFakeDistortTime,
+            (remainder as f64 + ticks) as f32,
+        );
+        let duration = setting_float(e, 0x011d_b4d0);
+        e.set(this, M::fFakeDistortDuration, duration);
+        let color = local(0x1a4);
+        e.call(
+            COLOR_A_CONSTRUCT,
+            &args![color, 0.0f32, 0.0f32, 0.0f32, 0.0f32],
+        );
+        let holder = e.call(0x0071_8b60, &args![]).u32();
+        if e.call(0x0071_9060, &args![holder, 3u32, color]).bool() {
+            e.call(0x007f_7fb0, &args![me, color]);
+        }
+        // The menu geometry.
+        let geometry_slot = me + 0xf8;
+        let node;
+        if pointer_value(e, geometry_slot) == 0 {
+            let owner = e.call(0x0096_11e0, &args![me]).u32();
+            let menu = e.call(0x00a0_3c90, &args![owner]).u32();
+            let name = e.call(0x007f_d640, &args![menu]).u32();
+            let loader: u32 = e.global(0x011c_3b3c);
+            node = e
+                .call(
+                    0x0044_7080,
+                    &args![loader, name, 0u32, 1u32, 0u32, 0u32, 0u32],
+                )
+                .u32();
+            assign_pointer(e, geometry_slot, node);
+            e.call(0x004b_7660, &args![node]);
+        } else {
+            node = pointer_value(e, geometry_slot);
+        }
+        let scale = setting_float(e, 0x011d_b544);
+        e.call(0x0044_0490, &args![node, scale]);
+        e.call(0x004d_c540, &args![me, node]);
+        let body = find_child_by_name(e, local(0x118), node, 0x0107_8a54);
+        e.call(0x007f_ae70, &args![me, 0u32]);
+        e.call(0x0081_0530, &args![me, 0u32]);
+        assign_pointer(e, me + 0xfc, 0);
+        assign_pointer(e, me + 0x104, 0);
+        // The four buttons and their glows, by name.
+        let names = [
+            0x0107_8a48u32,
+            0x0107_8a3c,
+            0x0107_8a30,
+            0x0107_8a24,
+            0x0107_8a18,
+            0x0107_8a0c,
+            0x0107_8a00,
+            0x0107_89f4,
+        ];
+        for (i, name) in names.iter().enumerate() {
+            let fixed = local(0x114 - 4 * i as u32);
+            e.call(FIXED_STRING_CONSTRUCT, &args![fixed, *name]);
+            let child = e.vcall(node, 0x9c, &args![fixed]).u32();
+            assign_pointer(e, me + 0xd8 + 4 * i as u32, child);
+            e.call(FIXED_STRING_DESTRUCT, &args![fixed]);
+        }
+        e.set(this, M::fDistortStart, 0.0);
+        e.set(this, M::fDistortPos, 0.0);
+        e.call(0x008d_7f00, &args![me, 0.0f32]);
+        // Rotation of the geometry: the product of two rotations by the same
+        // angle.
+        let first = local(0x1c4);
+        e.call(MATRIX_CONSTRUCT, &args![first]);
+        let second = local(0x130);
+        e.call(MATRIX_CONSTRUCT, &args![second]);
+        let angle: f32 = e.global(FRUSTUM_ANGLE);
+        e.call(0x0043_f850, &args![first, angle]);
+        e.call(0x004a_0c90, &args![second, angle]);
+        let product = local(0xd4);
+        let rotation = e.call(0x0043_f8d0, &args![second, product, first]).u32();
+        e.call(SET_ROTATE, &args![node, rotation]);
+        // Position of the geometry; the depth depends on the menu's context.
+        let context = e.call(0x009b_6600, &args![me]).i32();
+        let mut depth: f32 = if context == 1 || e.call(0x009b_6600, &args![me]).i32() == 0 {
+            e.global(0x0101_e33c)
+        } else {
+            setting_float(e, 0x011d_b570)
+        };
+        if !e.call(0x0070_7b50, &args![]).bool() && e.mem.u8(0x011f_9426) == 0 {
+            depth = (depth as f64 * e.global::<f64>(0x0101_de30)) as f32;
+        }
+        let context = e.call(0x009b_6600, &args![me]).i32();
+        if context == 1 || e.call(0x009b_6600, &args![me]).i32() == 0 {
+            let z = setting_float(e, 0x011d_b5cc);
+            e.call(SET_TRANSLATE, &args![node, depth, 0.0f32, z]);
+        } else {
+            let z = setting_float(e, 0x011d_b5cc);
+            let y = setting_float(e, 0x011d_b594);
+            e.call(SET_TRANSLATE, &args![node, depth, y, z]);
+        }
+        let point = zero_point(e, local(0x1f8));
+        e.call(SET_TRANSLATE_POINT, &args![node, point]);
+        // The menu camera.
+        let memory = e.call(ALLOCATE, &args![0x114u32]).u32();
+        let camera = if memory != 0 {
+            e.call(0x00a7_12f0, &args![memory]).u32()
         } else {
             0
         };
-        e.vcall(node, 0xdc, &args![light, 1u32]);
-        let ambient = temps.alloc(e, 0xc);
-        let green: f32 = e.global(0x0104_f7c4);
-        let color = e
-            .call(COLOR_CONSTRUCT, &args![ambient, 0.0f32, green, 0.0f32])
-            .u32();
-        e.call(SET_VECTOR, &args![light, color]);
+        let background = local(0x1e8);
+        e.call(
+            COLOR_A_CONSTRUCT,
+            &args![background, 0.0f32, 1.0f32, 1.0f32, 0.0f32],
+        );
+        e.call(0x0071_2e60, &args![camera, background]);
+        let axes = local(0x180);
+        e.call(MATRIX_CONSTRUCT, &args![axes]);
+        // (The matrix built here is not used afterwards.)
+        e.call(0x0071_33b0, &args![axes, 0u32, 0.0f32, 0.0f32, 1.0f32]);
+        e.call(0x0071_33b0, &args![axes, 1u32, 1.0f32, 0.0f32, 0.0f32]);
+        e.call(0x0071_33b0, &args![axes, 2u32, 0.0f32, 1.0f32, 0.0f32]);
+        e.call(SET_ROTATE, &args![camera, IDENTITY_MATRIX]);
+        e.call(0x0073_3fd0, &args![camera, 1.0f32]);
+        let frustum = local(0x164);
+        e.call(0x00a7_1b70, &args![frustum, 0u32]);
+        let ratio = renderer_ratio(e);
+        e.call(0x0050_7700, &args![camera, ratio]);
+        let wide = e.mem.u8(0x011f_9426) != 0;
+        let width = if wide {
+            e.global::<u32>(0x011f_9434)
+        } else {
+            e.call(0x004d_c200, &args![]).u32()
+        };
+        let height = e.call(0x004d_c1f0, &args![]).u32();
+        let aspect = (width as i32 as f64 / height as i32 as f64) as f32;
         let k: f32 = e.global(FRUSTUM_SCALE);
-        let diffuse = temps.alloc(e, 0xc);
-        let color = e.call(COLOR_CONSTRUCT, &args![diffuse, k, k, k]).u32();
-        e.call(0x004b_c2e0, &args![light, color]);
-        let specular = temps.alloc(e, 0xc);
-        let red: f32 = e.global(0x0101_3974);
-        let color = e
-            .call(COLOR_CONSTRUCT, &args![specular, red, 0.0f32, 0.0f32])
-            .u32();
-        e.call(0x0050_dd50, &args![light, color]);
-        e.call(0x0050_dd20, &args![light, 1.0f32]);
-        let point = zero_point(e, &mut temps);
-        e.call(SET_TRANSLATE_POINT, &args![light, point]);
+        let fov = fov_value(e);
+        let t = trig(e, fov);
+        e.mem.set_f32(frustum, (-(t as f64) * k as f64) as f32);
+        let t = trig(e, fov);
+        e.mem.set_f32(frustum + 4, (t as f64 * k as f64) as f32);
+        let t = trig(e, fov);
+        e.mem.set_f32(
+            frustum + 0xc,
+            (-(t as f64) * aspect as f64 * k as f64) as f32,
+        );
+        let t = trig(e, fov);
+        e.mem
+            .set_f32(frustum + 8, (t as f64 * aspect as f64 * k as f64) as f32);
+        e.mem.set_u8(frustum + 0x18, 0);
+        e.call(0x00a6_faf0, &args![camera, frustum]);
+        let angle = setting_float(e, 0x011d_b5ec);
+        e.call(0x0070_9d50, &args![camera, angle]);
+        let point = zero_point(e, local(0x204));
+        e.call(SET_TRANSLATE_POINT, &args![camera, point]);
+        e.call(0x007f_d620, &args![me, camera]);
+        // The shape found by name: its scene node (virtual +0x18), or the node
+        // of its first child (virtual +0xC).
+        if e.vcall(body, 0x18, &args![]).u32() != 0 {
+            let found = e.vcall(body, 0x18, &args![]).u32();
+            e.call(0x007f_9010, &args![me, found]);
+        } else if e.vcall(body, 0xc, &args![]).u32() != 0 {
+            let child = e.vcall(body, 0xc, &args![]).u32();
+            let child = e.call(0x0043_b4a0, &args![child, 0u32]).u32();
+            let found = e.vcall(child, 0x18, &args![]).u32();
+            e.call(0x007f_9010, &args![me, found]);
+        }
+        e.call(0x004d_c540, &args![me, node]);
+        let value = e.call(0x0040_df90, &args![]).u32();
+        let holder = e.call(0x007f_a950, &args![me]).u32();
+        e.call(0x00a5_b230, &args![holder, value]);
+        let memory = e.call(ALLOCATE, &args![0x1cu32]).u32();
+        let entry = if memory != 0 {
+            e.call(0x0043_91c0, &args![memory]).u32()
+        } else {
+            0
+        };
+        let holder = e.call(0x007f_a950, &args![me]).u32();
+        e.call(0x0043_9410, &args![holder, entry]);
+        // The scene graph: the geometry's radius decides the node scale, and
+        // when the graph has no entry for the scene yet it gets a light.
+        let bound = e.call(0x0043_d450, &args![node]).u32();
+        let radius = e.call(0x0084_d030, &args![bound]).f32();
+        let radius = (radius as f64 * e.global::<f64>(SCALE_DOUBLE)) as f32;
         let graph = e.call(SCENE_NODE_GETTER, &args![1u32]).u32();
-        e.call(0x00b5_c940, &args![graph, light, 0u32]);
-        forendered_menu_race_sex_init_light(e, this);
-    }
-    e.call(0x007f_c150, &args![me]);
-    temps.free(e);
+        let existing = e.call(0x00b5_ca70, &args![graph, node, radius]).u32();
+        if existing == 0 {
+            let memory = e.call(ALLOCATE, &args![0xfcu32]).u32();
+            let light = if memory != 0 {
+                e.call(0x00a7_d670, &args![memory]).u32()
+            } else {
+                0
+            };
+            e.vcall(node, 0xdc, &args![light, 1u32]);
+            let ambient = local(0xb0);
+            let green: f32 = e.global(0x0104_f7c4);
+            let color = e
+                .call(COLOR_CONSTRUCT, &args![ambient, 0.0f32, green, 0.0f32])
+                .u32();
+            e.call(SET_VECTOR, &args![light, color]);
+            let k: f32 = e.global(FRUSTUM_SCALE);
+            let diffuse = local(0xa4);
+            let color = e.call(COLOR_CONSTRUCT, &args![diffuse, k, k, k]).u32();
+            e.call(0x004b_c2e0, &args![light, color]);
+            let specular = local(0x98);
+            let red: f32 = e.global(0x0101_3974);
+            let color = e
+                .call(COLOR_CONSTRUCT, &args![specular, red, 0.0f32, 0.0f32])
+                .u32();
+            e.call(0x0050_dd50, &args![light, color]);
+            e.call(0x0050_dd20, &args![light, 1.0f32]);
+            let point = zero_point(e, local(0x11c));
+            e.call(SET_TRANSLATE_POINT, &args![light, point]);
+            let graph = e.call(SCENE_NODE_GETTER, &args![1u32]).u32();
+            e.call(0x00b5_c940, &args![graph, light, 0u32]);
+            forendered_menu_race_sex_init_light(e, this);
+        }
+        e.call(0x007f_c150, &args![me]);
+    });
 }
 
 // Translated from 007fd620 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -491,162 +474,167 @@ pub fn fn_007fd660(e: &mut Engine, this: Ptr<FORenderedMenuRaceSex>, scale: f32)
 /// tile menu's object) and the buttons.
 pub fn forendered_menu_race_sex_on_menu_open(e: &mut Engine, this: Ptr<FORenderedMenuRaceSex>) {
     let me = this.addr();
-    let mut temps = Temps::new();
-    let global_a: u32 = e.global(0x011d_ea0c);
-    e.call(0x0087_1dc0, &args![global_a]);
-    e.mem.set_u8(0x011a_d884, 0);
-    if !e.call(0x0097_4d90, &args![me]).bool() {
-        return;
-    }
-    let cell_node = e.call(0x0055_85e0, &args![me]).u32();
-    let point = zero_point(e, &mut temps);
-    e.call(SET_TRANSLATE_POINT, &args![cell_node, point]);
-    let owner = e.call(0x0096_11e0, &args![me]).u32();
-    let menu_node = e.call(0x00a0_3c90, &args![owner]).u32();
-    if e.call(0x0068_38b0, &args![me]).u32() != 0 {
-        let object = e.call(0x0068_38b0, &args![me]).u32();
-        e.call(SET_CULLED, &args![object, 0u32]);
-    }
-    e.call(0x007f_b040, &args![me]);
-    let graph = e.call(SCENE_NODE_GETTER, &args![1u32]).u32();
-    let cell_node = e.call(0x0055_85e0, &args![me]).u32();
-    e.vcall(graph, 0xdc, &args![cell_node, 1u32]);
-    let controls = controls_get_instance(e);
-    e.call(0x00a2_53d0, &args![controls]);
-    // The world / player manager: prepares the player for the menu.
-    let manager: u32 = e.global(0x011d_ea3c);
-    let player_manager = e.call(0x008d_8520, &args![manager]).u32();
-    e.vcall(player_manager, 0x458, &args![manager, 0u32]);
-    e.call(0x0088_4f80, &args![manager]);
-    e.call(0x008b_3a80, &args![manager, 0x400u32]);
-    let object = e.call(0x0095_0a60, &args![manager, 0u32]).u32();
-    e.call(0x0049_6080, &args![object, 0x14u32, 0.0f32]);
-    let object = e.call(0x0095_0a60, &args![manager, 0u32]).u32();
-    e.call(0x008e_eaa0, &args![object, 0x17u32]);
-    let object = e.call(0x0095_0a60, &args![manager, 0u32]).u32();
-    e.call(0x0049_4740, &args![object, 0u32, 1u32, -1i32, -1i32]);
-    e.vcall(manager, 0x2f8, &args![0.0f32]);
-    let player = e.call(0x0095_0bb0, &args![manager, 0u32]).u32();
-    assign_pointer(e, me + 0xfc, player);
-    // Save the player's placement.
-    let player = pointer_value(e, me + 0xfc);
-    let translation = e.call(GET_TRANSLATE, &args![player]).u32();
-    copy_words(e, translation, me + 0x110, 3);
-    let player = pointer_value(e, me + 0xfc);
-    let rotation = e.call(GET_ROTATE, &args![player]).u32();
-    copy_words(e, rotation, me + 0x11c, 9);
-    let player = pointer_value(e, me + 0xfc);
-    let fixed = temps.alloc(e, 4);
-    e.call(FIXED_STRING_CONSTRUCT, &args![fixed, BIP01_NAME]);
-    let bone = e.vcall(player, 0x9c, &args![fixed]).u32();
-    let bone_translation = e.call(GET_TRANSLATE, &args![bone]).u32();
-    copy_words(e, bone_translation, me + 0x140, 3);
-    e.call(FIXED_STRING_DESTRUCT, &args![fixed]);
-    let player = pointer_value(e, me + 0xfc);
-    let parent = e.call(0x0096_11e0, &args![player]).u32();
-    assign_pointer(e, me + 0x10c, parent);
-    let player = pointer_value(e, me + 0xfc);
-    let culled = e.call(0x0045_6610, &args![player]).u8();
-    e.mem.set_u8(me + 0x14c, culled);
-    // A new parent node for the player.
-    let memory = e.call(ALLOCATE, &args![0xacu32]).u32();
-    let parent = if memory != 0 {
-        e.call(0x00a5_ecb0, &args![memory, 0u32]).u32()
-    } else {
-        0
-    };
-    assign_pointer(e, me + 0x100, parent);
-    let graph = e.call(SCENE_NODE_GETTER, &args![3u32]).u32();
-    let parent = pointer_value(e, me + 0x100);
-    e.vcall(graph, 0xdc, &args![parent, 1u32]);
-    let loader: u32 = e.global(0x011c_3b3c);
-    let lights = e
-        .call(
-            0x0044_7080,
-            &args![loader, 0x0107_77a0u32, 0u32, 1u32, 0u32, 0u32, 0u32],
-        )
-        .u32();
-    assign_pointer(e, me + 0x108, lights);
-    let parent = pointer_value(e, me + 0x100);
-    let player = pointer_value(e, me + 0xfc);
-    e.vcall(parent, 0xdc, &args![player, 1u32]);
-    let parent = pointer_value(e, me + 0x100);
-    let lights = pointer_value(e, me + 0x108);
-    e.vcall(parent, 0xdc, &args![lights, 1u32]);
-    let player = pointer_value(e, me + 0xfc);
-    let bound = e.call(0x0043_d450, &args![player]).u32();
-    let radius = e.call(0x0084_d030, &args![bound]).f32();
-    let radius = (radius as f64 * e.global::<f64>(SCALE_DOUBLE)) as f32;
-    let lights = pointer_value(e, me + 0x108);
-    let light_node = e.vcall(lights, 0xc, &args![]).u32();
-    let graph = e.call(SCENE_NODE_GETTER, &args![3u32]).u32();
-    e.call(0x00b5_ca70, &args![graph, light_node, radius]);
-    let parent = pointer_value(e, me + 0x100);
-    let angle: f32 = e.global(0x0102_b3c8);
-    e.call(0x0064_04b0, &args![parent, angle, 0.0f32, 0.0f32, 1.0f32]);
-    let player = pointer_value(e, me + 0xfc);
-    let height: f32 = e.global(0x0102_caf8);
-    e.call(SET_TRANSLATE, &args![player, 0.0f32, height, 0.0f32]);
-    let player = pointer_value(e, me + 0xfc);
-    e.call(SET_ROTATE, &args![player, IDENTITY_MATRIX]);
-    let point = zero_point(e, &mut temps);
-    let parent = pointer_value(e, me + 0x100);
-    e.call(SET_TRANSLATE_POINT, &args![parent, point]);
-    let parent = pointer_value(e, me + 0x100);
-    e.call(0x007f_df10, &args![menu_node, parent]);
-    // The camera of the cloned scene.
-    let memory = e.call(ALLOCATE, &args![0x114u32]).u32();
-    let camera = if memory != 0 {
-        e.call(0x00a7_12f0, &args![memory]).u32()
-    } else {
-        0
-    };
-    assign_pointer(e, me + 0x104, camera);
-    let background = temps.alloc(e, 0x10);
-    e.call(
-        COLOR_A_CONSTRUCT,
-        &args![background, 0.0f32, 1.0f32, 1.0f32, 0.0f32],
-    );
-    let camera = pointer_value(e, me + 0x104);
-    e.call(0x0071_2e60, &args![camera, background]);
-    let camera = pointer_value(e, me + 0x104);
-    e.call(0x0073_3fd0, &args![camera, 1.0f32]);
-    let up = temps.alloc(e, 0xc);
-    e.call(COLOR_CONSTRUCT, &args![up, 0.0f32, 1.0f32, 0.0f32]);
-    let forward = temps.alloc(e, 0xc);
-    let forward = e
-        .call(COLOR_CONSTRUCT, &args![forward, 0.0f32, 0.0f32, 1.0f32])
-        .u32();
-    let camera = pointer_value(e, me + 0x104);
-    e.call(0x00a7_01b0, &args![camera, up, forward]);
-    let frustum = temps.alloc(e, 0x20);
-    e.call(0x00a7_1b70, &args![frustum, 0u32]);
-    let ratio = renderer_ratio(e);
-    let camera = pointer_value(e, me + 0x104);
-    e.call(0x0050_7700, &args![camera, ratio]);
-    let fov = fov_value(e);
-    let t = trig(e, fov);
-    e.mem.set_f32(frustum, -t);
-    let t = trig(e, fov);
-    e.mem.set_f32(frustum + 4, t);
-    let t = trig(e, fov);
-    e.mem.set_f32(frustum + 0xc, -t);
-    let t = trig(e, fov);
-    e.mem.set_f32(frustum + 8, t);
-    e.mem.set_u8(frustum + 0x18, 0);
-    let camera = pointer_value(e, me + 0x104);
-    e.call(0x00a6_faf0, &args![camera, frustum]);
-    let point = zero_point(e, &mut temps);
-    let camera = pointer_value(e, me + 0x104);
-    e.call(SET_TRANSLATE_POINT, &args![camera, point]);
-    let player = pointer_value(e, me + 0xfc);
-    e.call(SET_CULLED, &args![player, 0u32]);
-    let k: f32 = e.global(0x0107_8a5c);
-    e.call(0x007b_1970, &args![menu_node, k, 1u32]);
-    e.call(0x007b_1b60, &args![menu_node, 0.0f32, 1u32]);
-    let value = e.call(0x007d_cc00, &args![menu_node]).u32();
-    forendered_menu_race_sex_light_button(e, this, value);
-    temps.free(e);
+    // The exe's frame (`SUB ESP,0xcc` under the exception record, then `ESI`, `EDI` and the
+    // record link): the zero points at `EBP-0x24`, `EBP-0x6c` and `EBP-0x18`, the bone name at
+    // `EBP-0x7c`, the colour at `EBP-0x34`, the up and forward vectors at `EBP-0x40` and
+    // `EBP-0x98`, the frustum at `EBP-0x60`.
+    e.with_stack(0xe4, |e, frame| {
+        let local = |offset: u32| frame.addr() + offset;
+        let global_a: u32 = e.global(0x011d_ea0c);
+        e.call(0x0087_1dc0, &args![global_a]);
+        e.mem.set_u8(0x011a_d884, 0);
+        if !e.call(0x0097_4d90, &args![me]).bool() {
+            return;
+        }
+        let cell_node = e.call(0x0055_85e0, &args![me]).u32();
+        let point = zero_point(e, local(0xc0));
+        e.call(SET_TRANSLATE_POINT, &args![cell_node, point]);
+        let owner = e.call(0x0096_11e0, &args![me]).u32();
+        let menu_node = e.call(0x00a0_3c90, &args![owner]).u32();
+        if e.call(0x0068_38b0, &args![me]).u32() != 0 {
+            let object = e.call(0x0068_38b0, &args![me]).u32();
+            e.call(SET_CULLED, &args![object, 0u32]);
+        }
+        e.call(0x007f_b040, &args![me]);
+        let graph = e.call(SCENE_NODE_GETTER, &args![1u32]).u32();
+        let cell_node = e.call(0x0055_85e0, &args![me]).u32();
+        e.vcall(graph, 0xdc, &args![cell_node, 1u32]);
+        let controls = controls_get_instance(e);
+        e.call(0x00a2_53d0, &args![controls]);
+        // The world / player manager: prepares the player for the menu.
+        let manager: u32 = e.global(0x011d_ea3c);
+        let player_manager = e.call(0x008d_8520, &args![manager]).u32();
+        e.vcall(player_manager, 0x458, &args![manager, 0u32]);
+        e.call(0x0088_4f80, &args![manager]);
+        e.call(0x008b_3a80, &args![manager, 0x400u32]);
+        let object = e.call(0x0095_0a60, &args![manager, 0u32]).u32();
+        e.call(0x0049_6080, &args![object, 0x14u32, 0.0f32]);
+        let object = e.call(0x0095_0a60, &args![manager, 0u32]).u32();
+        e.call(0x008e_eaa0, &args![object, 0x17u32]);
+        let object = e.call(0x0095_0a60, &args![manager, 0u32]).u32();
+        e.call(0x0049_4740, &args![object, 0u32, 1u32, -1i32, -1i32]);
+        e.vcall(manager, 0x2f8, &args![0.0f32]);
+        let player = e.call(0x0095_0bb0, &args![manager, 0u32]).u32();
+        assign_pointer(e, me + 0xfc, player);
+        // Save the player's placement.
+        let player = pointer_value(e, me + 0xfc);
+        let translation = e.call(GET_TRANSLATE, &args![player]).u32();
+        copy_words(e, translation, me + 0x110, 3);
+        let player = pointer_value(e, me + 0xfc);
+        let rotation = e.call(GET_ROTATE, &args![player]).u32();
+        copy_words(e, rotation, me + 0x11c, 9);
+        let player = pointer_value(e, me + 0xfc);
+        let fixed = local(0x68);
+        e.call(FIXED_STRING_CONSTRUCT, &args![fixed, BIP01_NAME]);
+        let bone = e.vcall(player, 0x9c, &args![fixed]).u32();
+        let bone_translation = e.call(GET_TRANSLATE, &args![bone]).u32();
+        copy_words(e, bone_translation, me + 0x140, 3);
+        e.call(FIXED_STRING_DESTRUCT, &args![fixed]);
+        let player = pointer_value(e, me + 0xfc);
+        let parent = e.call(0x0096_11e0, &args![player]).u32();
+        assign_pointer(e, me + 0x10c, parent);
+        let player = pointer_value(e, me + 0xfc);
+        let culled = e.call(0x0045_6610, &args![player]).u8();
+        e.mem.set_u8(me + 0x14c, culled);
+        // A new parent node for the player.
+        let memory = e.call(ALLOCATE, &args![0xacu32]).u32();
+        let parent = if memory != 0 {
+            e.call(0x00a5_ecb0, &args![memory, 0u32]).u32()
+        } else {
+            0
+        };
+        assign_pointer(e, me + 0x100, parent);
+        let graph = e.call(SCENE_NODE_GETTER, &args![3u32]).u32();
+        let parent = pointer_value(e, me + 0x100);
+        e.vcall(graph, 0xdc, &args![parent, 1u32]);
+        let loader: u32 = e.global(0x011c_3b3c);
+        let lights = e
+            .call(
+                0x0044_7080,
+                &args![loader, 0x0107_77a0u32, 0u32, 1u32, 0u32, 0u32, 0u32],
+            )
+            .u32();
+        assign_pointer(e, me + 0x108, lights);
+        let parent = pointer_value(e, me + 0x100);
+        let player = pointer_value(e, me + 0xfc);
+        e.vcall(parent, 0xdc, &args![player, 1u32]);
+        let parent = pointer_value(e, me + 0x100);
+        let lights = pointer_value(e, me + 0x108);
+        e.vcall(parent, 0xdc, &args![lights, 1u32]);
+        let player = pointer_value(e, me + 0xfc);
+        let bound = e.call(0x0043_d450, &args![player]).u32();
+        let radius = e.call(0x0084_d030, &args![bound]).f32();
+        let radius = (radius as f64 * e.global::<f64>(SCALE_DOUBLE)) as f32;
+        let lights = pointer_value(e, me + 0x108);
+        let light_node = e.vcall(lights, 0xc, &args![]).u32();
+        let graph = e.call(SCENE_NODE_GETTER, &args![3u32]).u32();
+        e.call(0x00b5_ca70, &args![graph, light_node, radius]);
+        let parent = pointer_value(e, me + 0x100);
+        let angle: f32 = e.global(0x0102_b3c8);
+        e.call(0x0064_04b0, &args![parent, angle, 0.0f32, 0.0f32, 1.0f32]);
+        let player = pointer_value(e, me + 0xfc);
+        let height: f32 = e.global(0x0102_caf8);
+        e.call(SET_TRANSLATE, &args![player, 0.0f32, height, 0.0f32]);
+        let player = pointer_value(e, me + 0xfc);
+        e.call(SET_ROTATE, &args![player, IDENTITY_MATRIX]);
+        let point = zero_point(e, local(0x78));
+        let parent = pointer_value(e, me + 0x100);
+        e.call(SET_TRANSLATE_POINT, &args![parent, point]);
+        let parent = pointer_value(e, me + 0x100);
+        e.call(0x007f_df10, &args![menu_node, parent]);
+        // The camera of the cloned scene.
+        let memory = e.call(ALLOCATE, &args![0x114u32]).u32();
+        let camera = if memory != 0 {
+            e.call(0x00a7_12f0, &args![memory]).u32()
+        } else {
+            0
+        };
+        assign_pointer(e, me + 0x104, camera);
+        let background = local(0xb0);
+        e.call(
+            COLOR_A_CONSTRUCT,
+            &args![background, 0.0f32, 1.0f32, 1.0f32, 0.0f32],
+        );
+        let camera = pointer_value(e, me + 0x104);
+        e.call(0x0071_2e60, &args![camera, background]);
+        let camera = pointer_value(e, me + 0x104);
+        e.call(0x0073_3fd0, &args![camera, 1.0f32]);
+        let up = local(0xa4);
+        e.call(COLOR_CONSTRUCT, &args![up, 0.0f32, 1.0f32, 0.0f32]);
+        let forward = local(0x4c);
+        let forward = e
+            .call(COLOR_CONSTRUCT, &args![forward, 0.0f32, 0.0f32, 1.0f32])
+            .u32();
+        let camera = pointer_value(e, me + 0x104);
+        e.call(0x00a7_01b0, &args![camera, up, forward]);
+        let frustum = local(0x84);
+        e.call(0x00a7_1b70, &args![frustum, 0u32]);
+        let ratio = renderer_ratio(e);
+        let camera = pointer_value(e, me + 0x104);
+        e.call(0x0050_7700, &args![camera, ratio]);
+        let fov = fov_value(e);
+        let t = trig(e, fov);
+        e.mem.set_f32(frustum, -t);
+        let t = trig(e, fov);
+        e.mem.set_f32(frustum + 4, t);
+        let t = trig(e, fov);
+        e.mem.set_f32(frustum + 0xc, -t);
+        let t = trig(e, fov);
+        e.mem.set_f32(frustum + 8, t);
+        e.mem.set_u8(frustum + 0x18, 0);
+        let camera = pointer_value(e, me + 0x104);
+        e.call(0x00a6_faf0, &args![camera, frustum]);
+        let point = zero_point(e, local(0xcc));
+        let camera = pointer_value(e, me + 0x104);
+        e.call(SET_TRANSLATE_POINT, &args![camera, point]);
+        let player = pointer_value(e, me + 0xfc);
+        e.call(SET_CULLED, &args![player, 0u32]);
+        let k: f32 = e.global(0x0107_8a5c);
+        e.call(0x007b_1970, &args![menu_node, k, 1u32]);
+        e.call(0x007b_1b60, &args![menu_node, 0.0f32, 1u32]);
+        let value = e.call(0x007d_cc00, &args![menu_node]).u32();
+        forendered_menu_race_sex_light_button(e, this, value);
+    });
 }
 
 // Translated from 007fdf10 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -669,59 +657,60 @@ pub fn controls_get_instance(e: &mut Engine) -> u32 {
 /// the pointers.
 pub fn fn_007fdf40(e: &mut Engine, this: Ptr<FORenderedMenuRaceSex>) {
     let me = this.addr();
-    e.mem.set_u8(0x011a_d884, 1);
-    if !e.call(0x0097_4d90, &args![me]).bool() {
-        return;
-    }
-    if e.call(0x0068_38b0, &args![me]).u32() != 0 {
-        let object = e.call(0x0068_38b0, &args![me]).u32();
-        e.call(SET_CULLED, &args![object, 1u32]);
-        let mut temps = Temps::new();
-        let point = zero_point(e, &mut temps);
-        let object = e.call(0x0068_38b0, &args![me]).u32();
-        e.call(SET_TRANSLATE_POINT, &args![object, point]);
-        temps.free(e);
-    }
-    // Detach the lights, the player and the parent node.
-    let parent = pointer_value(e, me + 0x100);
-    let lights = pointer_value(e, me + 0x108);
-    e.vcall(parent, 0xe8, &args![lights]);
-    let parent = pointer_value(e, me + 0x100);
-    let player = pointer_value(e, me + 0xfc);
-    e.vcall(parent, 0xe8, &args![player]);
-    let graph = e.call(SCENE_NODE_GETTER, &args![3u32]).u32();
-    let parent = pointer_value(e, me + 0x100);
-    e.vcall(graph, 0xe8, &args![parent]);
-    assign_pointer(e, me + 0x100, 0);
-    let graph = e.call(SCENE_NODE_GETTER, &args![1u32]).u32();
-    let cell_node = e.call(0x0055_85e0, &args![me]).u32();
-    e.vcall(graph, 0xe8, &args![cell_node]);
-    // Put the player back with its saved placement.
-    let original_parent = pointer_value(e, me + 0x10c);
-    let player = pointer_value(e, me + 0xfc);
-    e.vcall(original_parent, 0xdc, &args![player, 1u32]);
-    let player = pointer_value(e, me + 0xfc);
-    let fixed = e.mem.alloc(4);
-    e.call(FIXED_STRING_CONSTRUCT, &args![fixed, BIP01_NAME]);
-    let bone = e.vcall(player, 0x9c, &args![fixed]).u32();
-    e.call(SET_VECTOR, &args![bone, me + 0x140]);
-    e.call(FIXED_STRING_DESTRUCT, &args![fixed]);
-    e.mem.free(fixed);
-    let player = pointer_value(e, me + 0xfc);
-    e.call(SET_ROTATE, &args![player, me + 0x11c]);
-    let player = pointer_value(e, me + 0xfc);
-    e.call(SET_VECTOR, &args![player, me + 0x110]);
-    let culled = e.mem.u8(me + 0x14c);
-    let player = pointer_value(e, me + 0xfc);
-    e.call(SET_CULLED, &args![player, culled as u32]);
-    assign_pointer(e, me + 0xfc, 0);
-    assign_pointer(e, me + 0x104, 0);
-    assign_pointer(e, me + 0xf8, 0);
-    let graph = e.call(SCENE_NODE_GETTER, &args![1u32]).u32();
-    e.call(0x00b5_d180, &args![graph]);
-    e.call(0x007f_b0b0, &args![me]);
-    forendered_menu_race_sex_light_button(e, this, u32::MAX);
-    assign_pointer(e, me + 0x108, 0);
+    // The exe's frame (`SUB ESP,0x34` under the exception record, then the record link): the
+    // zero point at `EBP-0x18` (+0x2c), the bone name at `EBP-0x1c` (+0x28).
+    e.with_stack(0x44, |e, frame| {
+        e.mem.set_u8(0x011a_d884, 1);
+        if !e.call(0x0097_4d90, &args![me]).bool() {
+            return;
+        }
+        if e.call(0x0068_38b0, &args![me]).u32() != 0 {
+            let object = e.call(0x0068_38b0, &args![me]).u32();
+            e.call(SET_CULLED, &args![object, 1u32]);
+            let point = zero_point(e, frame.addr() + 0x2c);
+            let object = e.call(0x0068_38b0, &args![me]).u32();
+            e.call(SET_TRANSLATE_POINT, &args![object, point]);
+        }
+        // Detach the lights, the player and the parent node.
+        let parent = pointer_value(e, me + 0x100);
+        let lights = pointer_value(e, me + 0x108);
+        e.vcall(parent, 0xe8, &args![lights]);
+        let parent = pointer_value(e, me + 0x100);
+        let player = pointer_value(e, me + 0xfc);
+        e.vcall(parent, 0xe8, &args![player]);
+        let graph = e.call(SCENE_NODE_GETTER, &args![3u32]).u32();
+        let parent = pointer_value(e, me + 0x100);
+        e.vcall(graph, 0xe8, &args![parent]);
+        assign_pointer(e, me + 0x100, 0);
+        let graph = e.call(SCENE_NODE_GETTER, &args![1u32]).u32();
+        let cell_node = e.call(0x0055_85e0, &args![me]).u32();
+        e.vcall(graph, 0xe8, &args![cell_node]);
+        // Put the player back with its saved placement.
+        let original_parent = pointer_value(e, me + 0x10c);
+        let player = pointer_value(e, me + 0xfc);
+        e.vcall(original_parent, 0xdc, &args![player, 1u32]);
+        let player = pointer_value(e, me + 0xfc);
+        let fixed = frame.addr() + 0x28;
+        e.call(FIXED_STRING_CONSTRUCT, &args![fixed, BIP01_NAME]);
+        let bone = e.vcall(player, 0x9c, &args![fixed]).u32();
+        e.call(SET_VECTOR, &args![bone, me + 0x140]);
+        e.call(FIXED_STRING_DESTRUCT, &args![fixed]);
+        let player = pointer_value(e, me + 0xfc);
+        e.call(SET_ROTATE, &args![player, me + 0x11c]);
+        let player = pointer_value(e, me + 0xfc);
+        e.call(SET_VECTOR, &args![player, me + 0x110]);
+        let culled = e.mem.u8(me + 0x14c);
+        let player = pointer_value(e, me + 0xfc);
+        e.call(SET_CULLED, &args![player, culled as u32]);
+        assign_pointer(e, me + 0xfc, 0);
+        assign_pointer(e, me + 0x104, 0);
+        assign_pointer(e, me + 0xf8, 0);
+        let graph = e.call(SCENE_NODE_GETTER, &args![1u32]).u32();
+        e.call(0x00b5_d180, &args![graph]);
+        e.call(0x007f_b0b0, &args![me]);
+        forendered_menu_race_sex_light_button(e, this, u32::MAX);
+        assign_pointer(e, me + 0x108, 0);
+    });
 }
 
 // Translated from 007fe1f0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -742,77 +731,81 @@ pub fn forendered_menu_race_sex_draw(
     _unused_2: u32,
 ) {
     let me = this.addr();
-    let mut temps = Temps::new();
-    let root = e.call(0x0043_c4b0, &args![]).u32();
-    let source = e.call(0x0043_c4b0, &args![]).u32();
-    let object = e.call(0x004a_0ea0, &args![]).u32();
-    let target = e
-        .call(
-            0x00b6_e110,
-            &args![object, source, 0x30u32, 0u32, 0u32, 0u32],
-        )
-        .u32();
-    let render_target = temps.alloc(e, 4);
-    e.call(0x0063_3c90, &args![render_target, target]);
-    // The background colour.
-    let default_color = temps.alloc(e, 0x10);
-    e.call(
-        COLOR_A_CONSTRUCT,
-        &args![default_color, 0.0f32, 0.0f32, 0.0f32, 0.0f32],
-    );
-    let background = temps.alloc(e, 0x10);
-    e.call(
-        COLOR_A_CONSTRUCT,
-        &args![background, 0.0f32, 0.0f32, 0.0f32, 0.0f32],
-    );
-    let current = e.call(0x0050_3650, &args![me]).u32();
-    copy_words(e, current, background, 4);
-    e.mem.set_f32(background + 0xc, 1.0);
-    // (The flag byte tested here was just set to 1, so this always runs.)
-    let fixed = temps.alloc(e, 0x10);
-    let (red, green, blue): (f32, f32, f32) = (
-        e.global(0x0105_559c),
-        e.global(0x0107_8a60),
-        e.global(0x0107_8a64),
-    );
-    let color = e
-        .call(COLOR_A_CONSTRUCT, &args![fixed, red, green, blue, 1.0f32])
-        .u32();
-    copy_words(e, color, background, 4);
-    e.vcall(root, 0xb4, &args![default_color]);
-    e.vcall(root, 0xac, &args![background]);
-    let target = pointer_value(e, render_target);
-    let texture = e.call(0x00b6_b260, &args![target]).u32();
-    e.call(0x00b6_b8d0, &args![7u32, texture]);
-    let accumulator = temps.alloc(e, 0x100);
-    e.call(0x004a_0eb0, &args![accumulator, 0u32]);
-    let interface = e.call(INTERFACE_GETTER, &args![]).u32();
-    let shader = e.call(0x007f_d640, &args![interface]).u32();
-    let shader_pointer = temps.alloc(e, 4);
-    e.call(0x0063_3c90, &args![shader_pointer, shader]);
-    let shader = pointer_value(e, shader_pointer);
-    e.call(0x004a_0fd0, &args![accumulator, shader]);
-    e.call(0x00c4_f270, &args![accumulator, 1u32]);
-    let nodes = e.call(SCENE_NODE_GETTER, &args![3u32]).u32();
-    let parent = pointer_value(e, me + 0x104);
-    e.call(0x00b6_bee0, &args![parent, nodes, accumulator]);
-    let shader = pointer_value(e, shader_pointer);
-    let parent = pointer_value(e, me + 0x104);
-    e.call(0x00b6_c0d0, &args![parent, shader, 0u32]);
-    e.call(0x00c4_f2d0, &args![accumulator]);
-    e.call(0x004a_0fd0, &args![accumulator, 0u32]);
-    assign_pointer(e, shader_pointer, 0);
-    e.call(0x00b6_b790, &args![]);
-    let target = pointer_value(e, render_target);
-    e.call(0x007f_ba00, &args![me, argument, 0u32, target]);
-    let target = pointer_value(e, render_target);
-    let object = e.call(0x004a_0ea0, &args![]).u32();
-    e.call(0x00b6_da10, &args![object, target]);
-    assign_pointer(e, render_target, 0);
-    e.call(NI_POINTER_DESTRUCT, &args![shader_pointer]);
-    e.call(0x004a_0f60, &args![accumulator]);
-    e.call(NI_POINTER_DESTRUCT, &args![render_target]);
-    temps.free(e);
+    // The exe's frame (`SUB ESP,0x110` under the exception record, then the record link): the
+    // render target at `EBP-0xe0`, the colours at `EBP-0x108`, `EBP-0xf8` and `EBP-0x118`, the
+    // accumulator at `EBP-0xdc`, the shader pointer at `EBP-0xe8`.
+    e.with_stack(0x120, |e, frame| {
+        let local = |offset: u32| frame.addr() + offset;
+        let root = e.call(0x0043_c4b0, &args![]).u32();
+        let source = e.call(0x0043_c4b0, &args![]).u32();
+        let object = e.call(0x004a_0ea0, &args![]).u32();
+        let target = e
+            .call(
+                0x00b6_e110,
+                &args![object, source, 0x30u32, 0u32, 0u32, 0u32],
+            )
+            .u32();
+        let render_target = local(0x40);
+        e.call(0x0063_3c90, &args![render_target, target]);
+        // The background colour.
+        let default_color = local(0x18);
+        e.call(
+            COLOR_A_CONSTRUCT,
+            &args![default_color, 0.0f32, 0.0f32, 0.0f32, 0.0f32],
+        );
+        let background = local(0x28);
+        e.call(
+            COLOR_A_CONSTRUCT,
+            &args![background, 0.0f32, 0.0f32, 0.0f32, 0.0f32],
+        );
+        let current = e.call(0x0050_3650, &args![me]).u32();
+        copy_words(e, current, background, 4);
+        e.mem.set_f32(background + 0xc, 1.0);
+        // (The flag byte tested here was just set to 1, so this always runs.)
+        let fixed = local(0x8);
+        let (red, green, blue): (f32, f32, f32) = (
+            e.global(0x0105_559c),
+            e.global(0x0107_8a60),
+            e.global(0x0107_8a64),
+        );
+        let color = e
+            .call(COLOR_A_CONSTRUCT, &args![fixed, red, green, blue, 1.0f32])
+            .u32();
+        copy_words(e, color, background, 4);
+        e.vcall(root, 0xb4, &args![default_color]);
+        e.vcall(root, 0xac, &args![background]);
+        let target = pointer_value(e, render_target);
+        let texture = e.call(0x00b6_b260, &args![target]).u32();
+        e.call(0x00b6_b8d0, &args![7u32, texture]);
+        let accumulator = local(0x44);
+        e.call(0x004a_0eb0, &args![accumulator, 0u32]);
+        let interface = e.call(INTERFACE_GETTER, &args![]).u32();
+        let shader = e.call(0x007f_d640, &args![interface]).u32();
+        let shader_pointer = local(0x38);
+        e.call(0x0063_3c90, &args![shader_pointer, shader]);
+        let shader = pointer_value(e, shader_pointer);
+        e.call(0x004a_0fd0, &args![accumulator, shader]);
+        e.call(0x00c4_f270, &args![accumulator, 1u32]);
+        let nodes = e.call(SCENE_NODE_GETTER, &args![3u32]).u32();
+        let parent = pointer_value(e, me + 0x104);
+        e.call(0x00b6_bee0, &args![parent, nodes, accumulator]);
+        let shader = pointer_value(e, shader_pointer);
+        let parent = pointer_value(e, me + 0x104);
+        e.call(0x00b6_c0d0, &args![parent, shader, 0u32]);
+        e.call(0x00c4_f2d0, &args![accumulator]);
+        e.call(0x004a_0fd0, &args![accumulator, 0u32]);
+        assign_pointer(e, shader_pointer, 0);
+        e.call(0x00b6_b790, &args![]);
+        let target = pointer_value(e, render_target);
+        e.call(0x007f_ba00, &args![me, argument, 0u32, target]);
+        let target = pointer_value(e, render_target);
+        let object = e.call(0x004a_0ea0, &args![]).u32();
+        e.call(0x00b6_da10, &args![object, target]);
+        assign_pointer(e, render_target, 0);
+        e.call(NI_POINTER_DESTRUCT, &args![shader_pointer]);
+        e.call(0x004a_0f60, &args![accumulator]);
+        e.call(NI_POINTER_DESTRUCT, &args![render_target]);
+    });
 }
 
 // Translated from 007fe4e0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -841,49 +834,52 @@ pub fn forendered_menu_race_sex_on_idle(e: &mut Engine, this: Ptr<FORenderedMenu
 /// `005b5e40` and leaves.
 pub fn forendered_menu_race_sex_init_light(e: &mut Engine, this: Ptr<FORenderedMenuRaceSex>) {
     let me = this.addr();
-    let mut temps = Temps::new();
-    let graph = e.call(SCENE_NODE_GETTER, &args![1u32]).u32();
-    if !e
-        .call(0x007f_c400, &args![me, 0x0107_8210u32, graph])
-        .bool()
-    {
-        e.call(0x005b_5e40, &args![0x0107_8a68u32]);
-        return;
-    }
-    let light = e.call(0x0068_38b0, &args![me]).u32();
-    if light == 0 {
-        return;
-    }
-    let black = temps.alloc(e, 0xc);
-    let color = e
-        .call(COLOR_CONSTRUCT, &args![black, 0.0f32, 0.0f32, 0.0f32])
-        .u32();
-    e.call(0x004b_c2e0, &args![light, color]);
-    let black = temps.alloc(e, 0xc);
-    let color = e
-        .call(COLOR_CONSTRUCT, &args![black, 0.0f32, 0.0f32, 0.0f32])
-        .u32();
-    e.call(0x004b_c280, &args![light, color]);
-    e.call(0x0050_c630, &args![light, 0.0f32]);
-    e.call(0x0050_c660, &args![light, 0.0f32]);
-    e.call(0x0050_c690, &args![light, 0.0f32]);
-    e.call(0x0050_dd20, &args![light, 1.0f32]);
-    let level: f32 = e.global(0x0101_7b78);
-    let specular = temps.alloc(e, 0xc);
-    let color = e
-        .call(COLOR_CONSTRUCT, &args![specular, level, 0.0f32, 0.0f32])
-        .u32();
-    e.call(0x0050_dd50, &args![light, color]);
-    let white = temps.alloc(e, 0xc);
-    let color = e
-        .call(COLOR_CONSTRUCT, &args![white, 1.0f32, 1.0f32, 1.0f32])
-        .u32();
-    e.call(0x006b_0570, &args![me, color]);
-    e.call(0x0096_5580, &args![me, 1.0f32]);
-    e.call(0x007f_99b0, &args![me, 1.0f32]);
-    let point = zero_point(e, &mut temps);
-    e.call(SET_TRANSLATE_POINT, &args![light, point]);
-    temps.free(e);
+    // The exe's frame (`SUB ESP,0x44` under `EBP`): the colours at `EBP-0x28`, `EBP-0x34`,
+    // `EBP-0x40` and `EBP-0x1c`, the zero point at `EBP-0x10`.
+    e.with_stack(0x44, |e, frame| {
+        let local = |offset: u32| frame.addr() + offset;
+        let graph = e.call(SCENE_NODE_GETTER, &args![1u32]).u32();
+        if !e
+            .call(0x007f_c400, &args![me, 0x0107_8210u32, graph])
+            .bool()
+        {
+            e.call(0x005b_5e40, &args![0x0107_8a68u32]);
+            return;
+        }
+        let light = e.call(0x0068_38b0, &args![me]).u32();
+        if light == 0 {
+            return;
+        }
+        let black = local(0x1c);
+        let color = e
+            .call(COLOR_CONSTRUCT, &args![black, 0.0f32, 0.0f32, 0.0f32])
+            .u32();
+        e.call(0x004b_c2e0, &args![light, color]);
+        let black = local(0x10);
+        let color = e
+            .call(COLOR_CONSTRUCT, &args![black, 0.0f32, 0.0f32, 0.0f32])
+            .u32();
+        e.call(0x004b_c280, &args![light, color]);
+        e.call(0x0050_c630, &args![light, 0.0f32]);
+        e.call(0x0050_c660, &args![light, 0.0f32]);
+        e.call(0x0050_c690, &args![light, 0.0f32]);
+        e.call(0x0050_dd20, &args![light, 1.0f32]);
+        let level: f32 = e.global(0x0101_7b78);
+        let specular = local(0x4);
+        let color = e
+            .call(COLOR_CONSTRUCT, &args![specular, level, 0.0f32, 0.0f32])
+            .u32();
+        e.call(0x0050_dd50, &args![light, color]);
+        let white = local(0x28);
+        let color = e
+            .call(COLOR_CONSTRUCT, &args![white, 1.0f32, 1.0f32, 1.0f32])
+            .u32();
+        e.call(0x006b_0570, &args![me, color]);
+        e.call(0x0096_5580, &args![me, 1.0f32]);
+        e.call(0x007f_99b0, &args![me, 1.0f32]);
+        let point = zero_point(e, local(0x34));
+        e.call(SET_TRANSLATE_POINT, &args![light, point]);
+    });
 }
 
 // Translated from 007fe6c0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -912,55 +908,60 @@ pub fn fn_007fe6c0(
             }
             i += 1;
         }
-        if all_present {
-            let mut temps = Temps::new();
-            let origin = temps.alloc(e, 0xc);
-            e.call(MATRIX_CONSTRUCT, &args![origin]);
-            let direction = temps.alloc(e, 0xc);
-            e.call(MATRIX_CONSTRUCT, &args![direction]);
-            let ray = temps.alloc(e, 0x40);
-            e.call(0x00e9_8f20, &args![ray, 0u32, 8u32]);
-            e.call(0x0045_8b30, &args![ray, 1u32]);
-            e.call(0x006e_cd40, &args![ray, 0u32]);
-            e.call(0x0079_2780, &args![ray, 0u32]);
-            let mut found = -1i32;
-            let mut j = 0u32;
-            while found < 0 && j < 4 {
-                let button = pointer_value(e, me + 0xd8 + 4 * j);
-                e.call(0x0070_5fc0, &args![ray, button]);
-                let x = e.call(0x0079_2760, &args![interface]).f32();
-                let x = e.call(FTOL, &args![x as f64]).i32();
-                let y = e.call(0x009a_9350, &args![interface]).f32();
-                let y = e.call(FTOL, &args![y as f64]).i32();
-                let target = e.call(0x008b_6200, &args![me]).u32();
-                e.call(0x00a7_1080, &args![target, y, x, origin, direction, 0u32]);
-                if e.call(0x00e9_8e20, &args![ray, origin, direction, 0u32])
-                    .bool()
-                {
-                    let hit = e.call(0x0050_0940, &args![ray]).u32();
-                    if e.call(0x0096_8670, &args![hit, 0u32]).u32() != 0 {
-                        found = j as i32;
+        // The exe's frame (`SUB ESP,0x7c` under the exception record, then the record link): the
+        // origin at `EBP-0x5c` (+0x30), the direction at `EBP-0x68` (+0x24), the pick at
+        // `EBP-0x50` (+0x3c) and the sound handle at `EBP-0x78` (+0x14).
+        if all_present
+            && e.with_stack(0x8c, |e, frame| {
+                let origin = frame.addr() + 0x30;
+                e.call(MATRIX_CONSTRUCT, &args![origin]);
+                let direction = frame.addr() + 0x24;
+                e.call(MATRIX_CONSTRUCT, &args![direction]);
+                let ray = frame.addr() + 0x3c;
+                e.call(0x00e9_8f20, &args![ray, 0u32, 8u32]);
+                e.call(0x0045_8b30, &args![ray, 1u32]);
+                e.call(0x006e_cd40, &args![ray, 0u32]);
+                e.call(0x0079_2780, &args![ray, 0u32]);
+                let mut found = -1i32;
+                let mut j = 0u32;
+                while found < 0 && j < 4 {
+                    let button = pointer_value(e, me + 0xd8 + 4 * j);
+                    e.call(0x0070_5fc0, &args![ray, button]);
+                    let x = e.call(0x0079_2760, &args![interface]).f32();
+                    let x = e.call(FTOL, &args![x as f64]).i32();
+                    let y = e.call(0x009a_9350, &args![interface]).f32();
+                    let y = e.call(FTOL, &args![y as f64]).i32();
+                    let target = e.call(0x008b_6200, &args![me]).u32();
+                    e.call(0x00a7_1080, &args![target, y, x, origin, direction, 0u32]);
+                    if e.call(0x00e9_8e20, &args![ray, origin, direction, 0u32])
+                        .bool()
+                    {
+                        let hit = e.call(0x0050_0940, &args![ray]).u32();
+                        if e.call(0x0096_8670, &args![hit, 0u32]).u32() != 0 {
+                            found = j as i32;
+                        }
                     }
+                    j += 1;
                 }
-                j += 1;
-            }
-            if found >= 0 {
-                let scope = temps.alloc(e, 8);
-                let holder = e.call(0x0045_3a70, &args![]).u32();
-                let guard = e
-                    .call(0x00ad_7550, &args![holder, scope, 0x0106_f060u32, 0x121u32])
-                    .u32();
-                e.call(0x00ad_8830, &args![guard, 0u32]);
-                e.call(0x0048_3710, &args![scope]);
-                let owner = e.call(0x0096_11e0, &args![me]).u32();
-                let menu = e.call(0x00a0_3c90, &args![owner]).u32();
-                fn_007fe910(e, Ptr::new(menu), found as u32);
+                if found >= 0 {
+                    let scope = frame.addr() + 0x14;
+                    let holder = e.call(0x0045_3a70, &args![]).u32();
+                    let guard = e
+                        .call(0x00ad_7550, &args![holder, scope, 0x0106_f060u32, 0x121u32])
+                        .u32();
+                    e.call(0x00ad_8830, &args![guard, 0u32]);
+                    e.call(0x0048_3710, &args![scope]);
+                    let owner = e.call(0x0096_11e0, &args![me]).u32();
+                    let menu = e.call(0x00a0_3c90, &args![owner]).u32();
+                    fn_007fe910(e, Ptr::new(menu), found as u32);
+                    e.call(0x00e9_8fa0, &args![ray]);
+                    return true;
+                }
                 e.call(0x00e9_8fa0, &args![ray]);
-                temps.free(e);
-                return 1;
-            }
-            e.call(0x00e9_8fa0, &args![ray]);
-            temps.free(e);
+                false
+            })
+        {
+            return 1;
         }
     }
     e.call(0x007f_b790, &args![me, flag as u32, second, third])
@@ -1882,9 +1883,12 @@ mod tests {
         e.mem.set_u32(menu.addr() + 0x10c, graph);
         e.mem.set_u32(menu.addr() + 0xf8, 0xf8);
         e.mem.set_u8(menu.addr() + 0x14c, 1);
-        e.call_log = Some(vec![]);
+        // The frame of 0x44 bytes: the zero point at +0x2c, the bone name at +0x28.
+        let frame = next_frame(&mut e, 0x44);
         e.call(0x007f_df40, &args![menu]);
         let log = e.call_log.take().unwrap();
+        assert_eq!(firsts(&log, POINT_CONSTRUCT), at(frame, &[0x2c]));
+        assert_eq!(firsts(&log, FIXED_STRING_CONSTRUCT), at(frame, &[0x28]));
         assert_eq!(e.mem.u8(0x011a_d884), 1);
         // Every pointer the open built is released again.
         for offset in [0xfcu32, 0x100, 0x104, 0xf8, 0x108] {
@@ -1971,9 +1975,17 @@ mod tests {
         });
         let menu = new_menu(&mut e);
         e.mem.set_u32(menu.addr() + 0x104, 0x1040);
-        e.call_log = Some(vec![]);
+        // The frame of 0x120 bytes: the render target at +0x40, the colours at +0x18, +0x28 and
+        // +0x8, the accumulator at +0x44, the shader pointer at +0x38.
+        let frame = next_frame(&mut e, 0x120);
         e.call(0x007f_e1f0, &args![menu, 0x55u32, 0u32, 0u32]);
         let log = e.call_log.take().unwrap();
+        assert_eq!(
+            firsts(&log, COLOR_A_CONSTRUCT),
+            at(frame, &[0x18, 0x28, 0x8])
+        );
+        assert_eq!(firsts(&log, 0x0063_3c90), at(frame, &[0x40, 0x38]));
+        assert_eq!(firsts(&log, 0x004a_0eb0), at(frame, &[0x44]));
         // The first colour stays zero; the second ends as the fixed colour
         // (constants at 0105559c, 01078a60, 01078a64 and 1.0).
         assert_eq!(colors.borrow()[0], [0.0, 0.0, 0.0, 0.0]);
@@ -1986,5 +1998,127 @@ mod tests {
         assert_eq!(calls_to(&log, 0x004a_0f60).len(), 1);
         // The accumulator is bound to the cloned camera.
         assert_eq!(first_call(&log, 0x00b6_bee0)[0], 0x1040);
+    }
+
+    // ---- the exe's stack frames ----
+
+    /// The block the next `with_stack(size)` takes (the last freed block of that size), with
+    /// the call log switched on.
+    fn next_frame(e: &mut Engine, size: u32) -> u32 {
+        let frame = e.mem.alloc(size);
+        e.mem.free(frame);
+        e.call_log = Some(vec![]);
+        frame
+    }
+
+    fn firsts(log: &[(u32, Vec<u32>)], address: u32) -> Vec<u32> {
+        calls_to(log, address).iter().map(|w| w[0]).collect()
+    }
+
+    fn at(frame: u32, offsets: &[u32]) -> Vec<u32> {
+        offsets.iter().map(|o| frame + o).collect()
+    }
+
+    #[test]
+    fn initialize_keeps_its_temporaries_at_the_exe_offsets() {
+        let mut e = scene_engine();
+        initialize_stubs(&mut e);
+        let node = node_with_lookup(&mut e);
+        let body = node_with_lookup(&mut e);
+        e.set_global(0x011d_e130u32, body);
+        e.set_global(0x011d_e114u32, node);
+        e.register(0x0044_7080, |e, _| ret(e.global::<u32>(0x011d_e114)));
+        e.register(0x00b5_ca70, |_, _| ret(0));
+        let menu = new_menu(&mut e);
+        let frame = next_frame(&mut e, 0x21c);
+        e.call(0x007f_c970, &args![menu]);
+        let log = e.call_log.take().unwrap();
+        let names: Vec<u32> = (0..9).map(|i| 0x118 - 4 * i).collect();
+        assert_eq!(firsts(&log, FIXED_STRING_CONSTRUCT), at(frame, &names));
+        assert_eq!(firsts(&log, COLOR_A_CONSTRUCT), at(frame, &[0x1a4, 0x1e8]));
+        assert_eq!(
+            firsts(&log, MATRIX_CONSTRUCT),
+            at(frame, &[0x1c4, 0x130, 0x180])
+        );
+        assert_eq!(
+            calls_to(&log, 0x0043_f8d0),
+            vec![at(frame, &[0x130, 0xd4, 0x1c4])]
+        );
+        assert_eq!(
+            firsts(&log, POINT_CONSTRUCT),
+            at(frame, &[0x1f8, 0x204, 0x11c])
+        );
+        assert_eq!(firsts(&log, 0x00a7_1b70), at(frame, &[0x164]));
+        assert_eq!(
+            firsts(&log, COLOR_CONSTRUCT),
+            at(frame, &[0xb0, 0xa4, 0x98])
+        );
+    }
+
+    #[test]
+    fn on_menu_open_keeps_its_temporaries_at_the_exe_offsets() {
+        let (mut e, menu, _) = menu_open_engine();
+        let frame = next_frame(&mut e, 0xe4);
+        e.call(0x007f_d6c0, &args![menu]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            firsts(&log, POINT_CONSTRUCT),
+            at(frame, &[0xc0, 0x78, 0xcc])
+        );
+        assert_eq!(firsts(&log, FIXED_STRING_CONSTRUCT), at(frame, &[0x68]));
+        assert_eq!(firsts(&log, COLOR_A_CONSTRUCT), at(frame, &[0xb0]));
+        assert_eq!(firsts(&log, COLOR_CONSTRUCT), at(frame, &[0xa4, 0x4c]));
+        assert_eq!(firsts(&log, 0x00a7_1b70), at(frame, &[0x84]));
+    }
+
+    #[test]
+    fn init_light_keeps_its_colours_at_the_exe_offsets() {
+        let mut e = race_engine();
+        e.register(SCENE_NODE_GETTER, |_, _| ret(0x77));
+        e.register(0x007f_c400, |_, _| ret(1));
+        let light = e.mem.alloc(0x40);
+        e.set_global(0x011d_e104u32, light);
+        e.register(0x0068_38b0, |e, _| ret(e.global::<u32>(0x011d_e104)));
+        stubs(
+            &mut e,
+            &[
+                0x004b_c2e0,
+                0x004b_c280,
+                0x0050_c630,
+                0x0050_c660,
+                0x0050_c690,
+                0x0050_dd20,
+                0x0050_dd50,
+                0x006b_0570,
+                0x0096_5580,
+                0x007f_99b0,
+                SET_TRANSLATE_POINT,
+            ],
+        );
+        let menu = new_menu(&mut e);
+        let frame = next_frame(&mut e, 0x44);
+        e.call(0x007f_e560, &args![menu]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            firsts(&log, COLOR_CONSTRUCT),
+            at(frame, &[0x1c, 0x10, 0x4, 0x28])
+        );
+        assert_eq!(firsts(&log, POINT_CONSTRUCT), at(frame, &[0x34]));
+    }
+
+    #[test]
+    fn on_click_keeps_the_pick_and_the_sound_handle_in_the_frame() {
+        let (mut e, menu) = click_engine(2);
+        let frame = next_frame(&mut e, 0x8c);
+        e.call(0x007f_e6c0, &args![menu, 1u8, 7u32, 8u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(firsts(&log, MATRIX_CONSTRUCT), at(frame, &[0x30, 0x24]));
+        assert_eq!(firsts(&log, 0x00e9_8f20), at(frame, &[0x3c]));
+        assert_eq!(
+            calls_to(&log, 0x00e9_8e20)[0][..3],
+            at(frame, &[0x3c, 0x30, 0x24])
+        );
+        assert_eq!(calls_to(&log, 0x00ad_7550)[0][1], frame + 0x14);
+        assert_eq!(firsts(&log, 0x0048_3710), at(frame, &[0x14]));
     }
 }

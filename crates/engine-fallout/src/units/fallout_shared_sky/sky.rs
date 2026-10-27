@@ -613,7 +613,8 @@ pub fn fn_00639bf0(
 /// 00639ce0())`, calls `00639d00` with that value plus `extra` and returns
 /// true; otherwise returns false.
 pub fn fn_00639c90(e: &mut Engine, this: Ptr, extra: u32) -> bool {
-    let size = e.call(0x0045_7fe0, &args![this]).u32();
+    // 00457fe0 takes no `this` (00639c99 leaves ECX as is).
+    let size = e.call(0x0045_7fe0, &args![]).u32();
     let limit_source = e.call(0x0063_9ce0, &args![this]).u32();
     let limit = e
         .call(0x0042_f5a0, &args![0x8000_0000u32, limit_source])

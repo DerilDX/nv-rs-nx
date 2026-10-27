@@ -23,6 +23,7 @@
 use super::playercharacter::*;
 #[allow(unused_imports)]
 use crate::prelude::*;
+use crate::units::crt::glue::alloca16_esp;
 
 /// `PlayerCharacter::pSingleton`: the global holding the player's pointer.
 const PLAYER_CHARACTER: u32 = 0x011d_ea3c;
@@ -296,6 +297,13 @@ pub fn player_character_add_eat_drink_item(
     true
 }
 
+/// `0095d160`'s fixed frame under `EBP` (`SUB ESP,0x44`), the entries of each of
+/// its two `_alloca16` tables (the local at `EBP-8`), and the whole block: the
+/// fixed locals, both tables and up to 0xf bytes of alignment pad under each.
+const EAT_DRINK_FIXED_LOCALS: u32 = 0x44;
+const EAT_DRINK_TABLE_SIZE: u32 = 100;
+const EAT_DRINK_FRAME_SIZE: u32 = EAT_DRINK_FIXED_LOCALS + 2 * (EAT_DRINK_TABLE_SIZE * 4) + 0x20;
+
 // Translated from 0095d160 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Counts the eat/drink items already queued. A first pass counts every
 /// listed item whose virtual at +0x18 answers 7; a second pass walks the
@@ -303,81 +311,91 @@ pub fn player_character_add_eat_drink_item(
 /// items in a table with a per-item count (limited by the item's own stack
 /// limit), and the result is the total of the first pass plus the units the
 /// second pass added.
+///
+/// The frame is the exe's: `EBP` is the top of one `with_stack` block of
+/// [`EAT_DRINK_FRAME_SIZE`] bytes, the fixed locals sit under it (`SUB ESP,0x44`;
+/// the form whose address goes to the list's contains test at `EBP-0x20`) and the
+/// two tables come from `_alloca16` (`00ec5ec0`, twice, with the local count
+/// `[EBP-8]` = 100 times 4): each is placed where the probe puts it,
+/// [`alloca16_esp`] of the `ESP` before the call (first `EBP-0x44`, then the
+/// first table), so their addresses and 16-byte alignment are the exe's. The
+/// block has room for both tables and both alignment pads; the epilogue's
+/// `LEA ESP,[EBP-0x44]` dropping them is the block's end. The `/GS` cookie at
+/// `EBP-0x2c` is not written.
 pub fn fn_0095d160(e: &mut Engine, this: Ptr<PlayerCharacter>) -> i32 {
-    const TABLE_SIZE: u32 = 100;
-    let mut total: i32 = 0;
-    let mut node = e.get(this, PlayerCharacter::EatDrinkItems).addr();
-    while node != 0 {
-        if e.call(LIST_NODE_IS_EMPTY, &args![node]).bool() {
-            break;
-        }
-        let slot = e.call(LIST_NODE_SLOT, &args![node]).u32();
-        if e.mem.u32(slot) != 0 {
-            let slot = e.call(LIST_NODE_SLOT, &args![node]).u32();
-            let item = e.mem.u32(slot);
-            if e.vcall(item, 0x18, &args![]).u32() == 7 {
-                total += 1;
+    e.with_stack(EAT_DRINK_FRAME_SIZE, |e, block| {
+        let ebp = block.addr() + EAT_DRINK_FRAME_SIZE;
+        let mut total: i32 = 0;
+        let mut node = e.get(this, PlayerCharacter::EatDrinkItems).addr();
+        while node != 0 {
+            if e.call(LIST_NODE_IS_EMPTY, &args![node]).bool() {
+                break;
             }
-        }
-        node = e.call(LIST_NODE_NEXT, &args![node]).u32();
-    }
-
-    // Two stack tables of 100 dwords: the distinct items and their counts.
-    let items = e.mem.alloc(TABLE_SIZE * 4);
-    let counts = e.mem.alloc(TABLE_SIZE * 4);
-    for i in 0..TABLE_SIZE {
-        e.mem.set_u32(items + i * 4, 0);
-        e.mem.set_u32(counts + i * 4, 0);
-    }
-    let target = this.addr() + MAGIC_TARGET_OFFSET;
-    let mut node = e.vcall(target, 0x8, &args![]).u32();
-    while node != 0 {
-        if e.call(LIST_NODE_IS_EMPTY, &args![node]).bool() {
-            break;
-        }
-        let slot = e.call(LIST_NODE_SLOT, &args![node]).u32();
-        let form = if e.mem.u32(slot) == 0 {
-            0
-        } else {
             let slot = e.call(LIST_NODE_SLOT, &args![node]).u32();
-            let object = e.mem.u32(slot);
-            e.call(READ_FIELD_8, &args![object]).u32()
-        };
-        if form != 0 && e.vcall(form, 0x18, &args![]).u32() == 7 {
-            let queued = e.get(this, PlayerCharacter::EatDrinkItems).addr() != 0 && {
-                let list = e.get(this, PlayerCharacter::EatDrinkItems);
-                e.with_stack(4, |e, cell| {
-                    e.mem.set_u32(cell.addr(), form);
-                    e.call(LIST_CONTAINS, &args![list, cell]).bool()
-                })
-            };
-            if !queued {
-                let mut placed = false;
-                let mut index = 0;
-                while index < TABLE_SIZE && !placed {
-                    let entry = e.mem.u32(items + index * 4);
-                    if entry == 0 {
-                        e.mem.set_u32(items + index * 4, form);
-                        e.mem.set_u32(counts + index * 4, 1);
-                        total += 1;
-                        placed = true;
-                    } else if entry == form {
-                        let limit = e.call(ITEM_GET_STACK_LIMIT, &args![form + 0x10]).u32();
-                        let count = e.mem.u32(counts + index * 4);
-                        if count < limit {
-                            e.mem.set_u32(counts + index * 4, count + 1);
-                            placed = true;
-                        }
-                    }
-                    index += 1;
+            if e.mem.u32(slot) != 0 {
+                let slot = e.call(LIST_NODE_SLOT, &args![node]).u32();
+                let item = e.mem.u32(slot);
+                if e.vcall(item, 0x18, &args![]).u32() == 7 {
+                    total += 1;
                 }
             }
+            node = e.call(LIST_NODE_NEXT, &args![node]).u32();
         }
-        node = e.call(LIST_NODE_NEXT, &args![node]).u32();
-    }
-    e.mem.free(items);
-    e.mem.free(counts);
-    total
+
+        // Two `_alloca16` tables of 100 dwords: the distinct items and their counts.
+        let items = alloca16_esp(ebp - EAT_DRINK_FIXED_LOCALS, EAT_DRINK_TABLE_SIZE * 4);
+        let counts = alloca16_esp(items, EAT_DRINK_TABLE_SIZE * 4);
+        for i in 0..EAT_DRINK_TABLE_SIZE {
+            e.mem.set_u32(items + i * 4, 0);
+            e.mem.set_u32(counts + i * 4, 0);
+        }
+        let target = this.addr() + MAGIC_TARGET_OFFSET;
+        let mut node = e.vcall(target, 0x8, &args![]).u32();
+        while node != 0 {
+            if e.call(LIST_NODE_IS_EMPTY, &args![node]).bool() {
+                break;
+            }
+            let slot = e.call(LIST_NODE_SLOT, &args![node]).u32();
+            let form = if e.mem.u32(slot) == 0 {
+                0
+            } else {
+                let slot = e.call(LIST_NODE_SLOT, &args![node]).u32();
+                let object = e.mem.u32(slot);
+                e.call(READ_FIELD_8, &args![object]).u32()
+            };
+            if form != 0 && e.vcall(form, 0x18, &args![]).u32() == 7 {
+                let queued = e.get(this, PlayerCharacter::EatDrinkItems).addr() != 0 && {
+                    let list = e.get(this, PlayerCharacter::EatDrinkItems);
+                    let cell = ebp - 0x20;
+                    e.mem.set_u32(cell, form);
+                    e.call(LIST_CONTAINS, &args![list, cell]).bool()
+                };
+                if !queued {
+                    let mut placed = false;
+                    let mut index = 0;
+                    while index < EAT_DRINK_TABLE_SIZE && !placed {
+                        let entry = e.mem.u32(items + index * 4);
+                        if entry == 0 {
+                            e.mem.set_u32(items + index * 4, form);
+                            e.mem.set_u32(counts + index * 4, 1);
+                            total += 1;
+                            placed = true;
+                        } else if entry == form {
+                            let limit = e.call(ITEM_GET_STACK_LIMIT, &args![form + 0x10]).u32();
+                            let count = e.mem.u32(counts + index * 4);
+                            if count < limit {
+                                e.mem.set_u32(counts + index * 4, count + 1);
+                                placed = true;
+                            }
+                        }
+                        index += 1;
+                    }
+                }
+            }
+            node = e.call(LIST_NODE_NEXT, &args![node]).u32();
+        }
+        total
+    })
 }
 
 // Translated from 0095d3f0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -8003,6 +8021,66 @@ mod tests {
         // Without a list nothing is queued and the table is empty.
         e.set(player, PlayerCharacter::EatDrinkItems, Ptr::NULL);
         assert_eq!(e.call(0x0095_d160, &args![player]).i32(), 2);
+    }
+
+    #[test]
+    fn eat_drink_count_places_its_alloca16_tables_as_the_exe_does() {
+        let mut e = engine(CALLEES_0095D160);
+        list_accessors(&mut e);
+        answer(&mut e, SLOT_A, 7);
+        let item = object_with_slots(&mut e, &[(0x18, SLOT_A)]);
+        let queued = list_of(&mut e, &[item]);
+        let player = player_with(&mut e, &[], &[]);
+        e.set(player, PlayerCharacter::EatDrinkItems, Ptr::new(queued));
+        let record = e.mem.alloc(0x20);
+        e.mem.set_u32(record + 8, item);
+        let active = list_of(&mut e, &[record, record, record]);
+        let target = object_with_slots(&mut e, &[(8, SLOT_B)]);
+        answer(&mut e, SLOT_B, active);
+        let vtable = e.mem.u32(target);
+        e.mem.set_u32(player.addr() + MAGIC_TARGET_OFFSET, vtable);
+        e.register_double(READ_FIELD_8, |e, a| int(e.mem.u32(a[0] + 8)));
+        answer(&mut e, LIST_CONTAINS, 0);
+        answer(&mut e, ITEM_GET_STACK_LIMIT, 2);
+
+        // Frame blocks whose top (EBP) sits at both 8-byte residues mod 16, so the
+        // alignment pads differ.
+        let mut blocks = Vec::new();
+        while blocks.len() < 2 {
+            let block = e.mem.alloc(EAT_DRINK_FRAME_SIZE);
+            let ebp = block + EAT_DRINK_FRAME_SIZE;
+            if blocks
+                .iter()
+                .all(|&b: &u32| (b + EAT_DRINK_FRAME_SIZE) & 0xf != ebp & 0xf)
+            {
+                blocks.push(block);
+            }
+        }
+        for block in blocks {
+            // The block just freed is the frame.
+            e.mem.free(block);
+            let ebp = block + EAT_DRINK_FRAME_SIZE;
+            let log = logged(&mut e, |e| {
+                // One queued item, then a slot opened (+1) and filled to the limit; the
+                // third record opens a second slot (+1).
+                assert_eq!(e.call(0x0095_d160, &args![player]).i32(), 3);
+            });
+            // `_alloca16` from ESP = EBP-0x44, then from the first table: (esp - 0x190) & ~0xf.
+            let items = (ebp - 0x44 - 0x190) & !0xf;
+            let counts = (items - 0x190) & !0xf;
+            assert_eq!(items & 0xf, 0);
+            assert_eq!(counts & 0xf, 0);
+            assert_eq!(e.mem.u32(items), item);
+            assert_eq!(e.mem.u32(items + 4), item);
+            assert_eq!(e.mem.u32(counts), 2);
+            assert_eq!(e.mem.u32(counts + 4), 1);
+            assert!(counts >= block);
+            // The form asked about sits in the local at EBP-0x20.
+            assert!(calls_to(&log, LIST_CONTAINS)
+                .iter()
+                .all(|c| c[1] == ebp - 0x20));
+            assert!(!calls_to(&log, LIST_CONTAINS).is_empty());
+        }
     }
 
     #[test]

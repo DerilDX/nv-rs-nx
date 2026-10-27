@@ -134,8 +134,9 @@ pub fn hkp_entity_update_cached_aabb(e: &mut Engine, this: Ptr) {
 
 // Translated from 00c9bff0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkpEntity::isActive` (Xbox PDB): writes the island's activation state (bits 2 and 3 of the
-/// island byte at +0x26) to the byte at `result`, 0 for an entity without an island.
-pub fn hkp_entity_is_active(e: &mut Engine, this: Ptr, result: Ptr) {
+/// island byte at +0x26) to the byte at `result`, 0 for an entity without an island, and answers
+/// `result` (`MOV EAX,[ESP+4]` on both paths: the callers read the flag through `EAX`, 0062435f).
+pub fn hkp_entity_is_active(e: &mut Engine, this: Ptr, result: Ptr) -> Ptr {
     let island = e.mem.u32(this.addr() + ENTITY_ISLAND);
     let state = if island == 0 {
         0
@@ -143,6 +144,7 @@ pub fn hkp_entity_is_active(e: &mut Engine, this: Ptr, result: Ptr) {
         (e.mem.u8(island + 0x26) >> 2) & 3
     };
     e.mem.set_u8(result.addr(), state);
+    result
 }
 
 // Translated from 00c9c240 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1100,7 +1102,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00c9_d460, deleting_destructor_00c9d460(Ptr, u8) -> Ptr),
         entry!(0x00c9_d490, deleting_destructor_00c9d490(Ptr, u8) -> Ptr),
         entry!(0x00c9_bfa0, hkp_entity_update_cached_aabb(Ptr)),
-        entry!(0x00c9_bff0, hkp_entity_is_active(Ptr, Ptr)),
+        entry!(0x00c9_bff0, hkp_entity_is_active(Ptr, Ptr) -> Ptr),
         entry!(0x00c9_c240, hkp_entity_deactivate(Ptr)),
         entry!(
             0x00c9_d250,

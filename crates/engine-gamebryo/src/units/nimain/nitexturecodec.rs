@@ -240,64 +240,66 @@ pub fn ni_texture_codec_expand_compressed_data(
             .wrapping_add(e.mem.u32(offsets.wrapping_add(level.wrapping_mul(4))))
             .wrapping_add(e.mem.u32(pixels + PIXELS))
     };
-    // The 64-byte block local, kept for the whole call (as the stack frame keeps it).
-    let block = e.mem.alloc(0x40);
-    let mut face = 0u32;
-    while face < faces {
-        let mut level = 0u32;
-        while level < levels {
-            let from = level_start(e, src, face, level);
-            e.set(this, NiTextureCodec::m_pucSrcPtr, from);
-            let mut dest = level_start(e, data, face, level);
-            let width = e
-                .mem
-                .u32(e.mem.u32(src + WIDTHS).wrapping_add(level.wrapping_mul(4)));
-            let height = e
-                .mem
-                .u32(e.mem.u32(src + HEIGHTS).wrapping_add(level.wrapping_mul(4)));
-            let blocks_across = width >> 2;
-            let block_rows = height >> 2;
-            let rows_left = height & 3;
-            let columns_left = width & 3;
-            e.set(
-                this,
-                NiTextureCodec::m_uiDestRowStride,
-                width.wrapping_mul(4),
-            );
-            let row_step = width.wrapping_mul(12);
-            for _ in 0..block_rows {
-                for _ in 0..blocks_across {
-                    decode_block(e, this, block);
-                    let mut to = dest;
-                    for row in 0..4u32 {
-                        for word in 0..4u32 {
-                            let value = e.mem.u32(block + row * 0x10 + word * 4);
-                            e.mem.set_u32(to.wrapping_add(word * 4), value);
+    // The exe's frame (`SUB ESP,0x74`, four pushes): 0x84 bytes, the decoded 64-byte block at
+    // +0x40 (00a8bfd9), just under the cookie word.
+    e.with_stack(0x84, |e, frame| {
+        let block = frame.addr() + 0x40;
+        let mut face = 0u32;
+        while face < faces {
+            let mut level = 0u32;
+            while level < levels {
+                let from = level_start(e, src, face, level);
+                e.set(this, NiTextureCodec::m_pucSrcPtr, from);
+                let mut dest = level_start(e, data, face, level);
+                let width = e
+                    .mem
+                    .u32(e.mem.u32(src + WIDTHS).wrapping_add(level.wrapping_mul(4)));
+                let height = e
+                    .mem
+                    .u32(e.mem.u32(src + HEIGHTS).wrapping_add(level.wrapping_mul(4)));
+                let blocks_across = width >> 2;
+                let block_rows = height >> 2;
+                let rows_left = height & 3;
+                let columns_left = width & 3;
+                e.set(
+                    this,
+                    NiTextureCodec::m_uiDestRowStride,
+                    width.wrapping_mul(4),
+                );
+                let row_step = width.wrapping_mul(12);
+                for _ in 0..block_rows {
+                    for _ in 0..blocks_across {
+                        decode_block(e, this, block);
+                        let mut to = dest;
+                        for row in 0..4u32 {
+                            for word in 0..4u32 {
+                                let value = e.mem.u32(block + row * 0x10 + word * 4);
+                                e.mem.set_u32(to.wrapping_add(word * 4), value);
+                            }
+                            to = to.wrapping_add(e.get(this, NiTextureCodec::m_uiDestRowStride));
                         }
-                        to = to.wrapping_add(e.get(this, NiTextureCodec::m_uiDestRowStride));
+                        dest = dest.wrapping_add(0x10);
                     }
-                    dest = dest.wrapping_add(0x10);
+                    if columns_left != 0 {
+                        fn_00a8bdf0(e, this, dest, columns_left, 4);
+                        dest = dest.wrapping_add(columns_left * 4);
+                    }
+                    dest = dest.wrapping_add(row_step);
                 }
-                if columns_left != 0 {
-                    fn_00a8bdf0(e, this, dest, columns_left, 4);
-                    dest = dest.wrapping_add(columns_left * 4);
+                if rows_left != 0 {
+                    for _ in 0..blocks_across {
+                        fn_00a8bdf0(e, this, dest, 4, rows_left);
+                        dest = dest.wrapping_add(0x10);
+                    }
+                    if columns_left != 0 {
+                        fn_00a8bdf0(e, this, dest, columns_left, rows_left);
+                    }
                 }
-                dest = dest.wrapping_add(row_step);
+                level += 1;
             }
-            if rows_left != 0 {
-                for _ in 0..blocks_across {
-                    fn_00a8bdf0(e, this, dest, 4, rows_left);
-                    dest = dest.wrapping_add(0x10);
-                }
-                if columns_left != 0 {
-                    fn_00a8bdf0(e, this, dest, columns_left, rows_left);
-                }
-            }
-            level += 1;
+            face += 1;
         }
-        face += 1;
-    }
-    e.mem.free(block);
+    });
     data
 }
 
@@ -530,5 +532,57 @@ mod tests {
             e.get(this, NiTextureCodec::m_pfnColorBlockDecoder),
             DECODER_00A8BAB0
         );
+    }
+
+    #[test]
+    fn the_decoded_block_sits_at_0x40_of_the_exe_frame() {
+        let mut e = Engine::new();
+        decoder_doubles(&mut e);
+        // Source: one face, one level of 6 x 5 pixels (one whole block, a leftover column
+        // pair and a leftover row).
+        let source = e.mem.alloc(0x74);
+        e.mem.set_u32(source + PIXEL_FORMAT, 6);
+        let widths = e.mem.alloc(4);
+        e.mem.set_u32(widths, 6);
+        let heights = e.mem.alloc(4);
+        e.mem.set_u32(heights, 5);
+        let offsets = e.mem.alloc(8);
+        e.mem.set_u32(offsets + 4, 0x40);
+        let pixels = e.mem.alloc(0x40);
+        for (field, value) in [
+            (WIDTHS, widths),
+            (HEIGHTS, heights),
+            (OFFSETS, offsets),
+            (PIXELS, pixels),
+            (MIPMAP_LEVELS, 1),
+            (FACES, 1),
+        ] {
+            e.mem.set_u32(source + field, value);
+        }
+        // The new pixel data: 6 x 5 x 4 bytes.
+        let out = e.mem.alloc(0x200);
+        let new_offsets = e.mem.alloc(8);
+        e.mem.set_u32(new_offsets + 4, 6 * 5 * 4);
+        e.register(NI_NEW, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register_double(PIXEL_DATA_CONSTRUCT, move |e, a| {
+            assert_eq!(a[1..5], [6, 5, EXPANDED_FORMAT, 1]);
+            e.mem.set_u32(a[0] + PIXELS, out);
+            e.mem.set_u32(a[0] + OFFSETS, new_offsets);
+            e.mem.set_u32(a[0] + MIPMAP_LEVELS, 1);
+            a[0].into_ret()
+        });
+        let blocks = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let sink = std::rc::Rc::clone(&blocks);
+        e.register_double(DECODER_00A8B5E0, move |_, a| {
+            sink.borrow_mut().push(a[1]);
+            Ret::default()
+        });
+        e.register(DECODER_00A8B8C0, |_, _| Ret::default());
+        let this = codec(&mut e, &[]);
+        let frame = e.mem.alloc(0x84);
+        e.mem.free(frame);
+        e.call(0x00a8_be70, &args![this, source]);
+        // The alpha decoder writes the fourth byte of each pixel of the block (block + 3).
+        assert_eq!(blocks.borrow()[0], frame + 0x40 + 3);
     }
 }

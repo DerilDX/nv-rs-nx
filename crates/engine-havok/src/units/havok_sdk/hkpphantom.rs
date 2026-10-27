@@ -280,94 +280,97 @@ fn close_pair_array(e: &mut Engine, array: u32) {
 /// `00c91140` when the queue count is 1 and `world + 0x90`), and gives the arrays back. The
 /// operation record's unused bytes are zero (the code leaves stack garbage there).
 pub fn hkp_phantom_update_broad_phase(e: &mut Engine, this: Ptr, aabb: Ptr) {
-    let me = this.addr();
-    let world = e.mem.u32(me + 8);
-    if world == 0 {
-        return;
-    }
-    if e.mem
-        .u32(world + 0x98)
-        .wrapping_add(e.mem.u32(world + 0x94))
-        != 0
-    {
-        let record = e.mem.alloc(0x10);
-        e.mem.set_u8(record, OPERATION_UPDATE_PHANTOM);
-        e.mem.set_u32(record + 4, me);
-        e.mem.set_u32(record + 8, aabb.addr());
-        e.call(WORLD_QUEUE_OPERATION, &args![world, record]);
-        e.mem.free(record);
-        return;
-    }
-    let locks = e.mem.u32(world + 0x94);
-    e.mem.set_u32(world + 0x94, locks.wrapping_add(1));
-    // Locals: the two pair arrays (16 bytes each) and the slot holding the handle pointer.
-    let locals = e.mem.alloc(0x30);
-    let first = locals;
-    let second = locals + 0x10;
-    let handles = locals + 0x20;
-    let update_size = e.mem.u32(e.mem.u32(me + 8) + 0x33c);
-    open_pair_array(e, first, update_size);
-    let update_size = e.mem.u32(e.mem.u32(me + 8) + 0x33c);
-    open_pair_array(e, second, update_size);
-    e.mem.set_u32(handles, me + 0x24);
-    let broad_phase = e.mem.u32(e.mem.u32(me + 8) + 0x58);
-    if e.mem.u32(broad_phase + 0x10) != 0 {
-        e.call(BROAD_PHASE_LOCK, &args![broad_phase]);
-    }
-    let broad_phase = e.mem.u32(e.mem.u32(me + 8) + 0x58);
-    e.vcall(
-        broad_phase,
-        0x28,
-        &args![handles, aabb, 1u32, first, second],
-    );
-    if e.mem.u32(first + 4) != 0 || e.mem.u32(second + 4) != 0 {
-        e.call(REMOVE_DUPLICATES, &args![first, second]);
-        let world_now = e.mem.u32(me + 8);
-        let dispatcher = e.mem.u32(world_now + 0x64);
-        let removed_data = e.mem.u32(second);
-        let removed_count = e.mem.u32(second + 4);
-        e.call(
-            REMOVE_PAIRS,
-            &args![dispatcher, removed_data, removed_count],
-        );
-        let world_now = e.mem.u32(me + 8);
-        let filter = e.mem.u32(world_now + 0x7c);
-        let listener = if filter == 0 { 0 } else { filter + 8 };
-        let dispatcher = e.mem.u32(world_now + 0x64);
-        let added_data = e.mem.u32(first);
-        let added_count = e.mem.u32(first + 4);
-        e.call(
-            ADD_PAIRS,
-            &args![dispatcher, added_data, added_count, listener],
-        );
-        hkp_phantom_remove_null_overlap_listeners(e, this);
-    }
-    let broad_phase = e.mem.u32(e.mem.u32(me + 8) + 0x58);
-    if e.mem.u32(broad_phase + 0x10) != 0 {
-        e.call(BROAD_PHASE_UNLOCK, &args![broad_phase]);
-    }
-    hkp_phantom_set_bounding_volume_data(e, this, aabb);
-    let world = e.mem.u32(me + 8);
-    let tree = e.mem.u32(world + 0x5c);
-    if tree != 0 {
-        e.vcall(tree, 0x14, &args![0u32]);
-    }
-    let world = e.mem.u32(me + 8);
-    let locks = e.mem.u32(world + 0x94).wrapping_sub(1);
-    e.mem.set_u32(world + 0x94, locks);
-    if locks == 0 && e.mem.u8(world + 0x9c) == 0 {
-        if e.mem.u32(world + 0x8c) != 0 {
-            e.call(WORLD_EXECUTE_PENDING_OPERATIONS, &args![world]);
+    // The exe's frame (`SUB ESP,0x30`, three pushes): 0x3c bytes, the queued operation at +0x10
+    // (00d07ee6..00d07ef4; two pushes on that path), the handle slot at +0xc, the pair arrays at
+    // +0x1c and +0x2c (00d07f17..00d07fc5).
+    e.with_stack(0x3c, |e, frame| {
+        let frame = frame.addr();
+        let me = this.addr();
+        let world = e.mem.u32(me + 8);
+        if world == 0 {
+            return;
         }
-        if e.mem.u32(world + 0xa4) == 1 && e.mem.u32(world + 0x90) != 0 {
-            e.call(WORLD_EXECUTE_PENDING_BODY_OPERATIONS, &args![world]);
+        if e.mem
+            .u32(world + 0x98)
+            .wrapping_add(e.mem.u32(world + 0x94))
+            != 0
+        {
+            let record = frame + 0x10;
+            e.mem.set_u8(record, OPERATION_UPDATE_PHANTOM);
+            e.mem.set_u32(record + 4, me);
+            e.mem.set_u32(record + 8, aabb.addr());
+            e.call(WORLD_QUEUE_OPERATION, &args![world, record]);
+            return;
         }
-    }
-    close_pair_array(e, second);
-    e.mem.set_u32(second, 0);
-    e.mem.set_u32(second + 8, 0x8000_0000);
-    close_pair_array(e, first);
-    e.mem.free(locals);
+        let locks = e.mem.u32(world + 0x94);
+        e.mem.set_u32(world + 0x94, locks.wrapping_add(1));
+        // Locals: the two pair arrays (16 bytes each) and the slot holding the handle pointer.
+        let first = frame + 0x2c;
+        let second = frame + 0x1c;
+        let handles = frame + 0xc;
+        let update_size = e.mem.u32(e.mem.u32(me + 8) + 0x33c);
+        open_pair_array(e, first, update_size);
+        let update_size = e.mem.u32(e.mem.u32(me + 8) + 0x33c);
+        open_pair_array(e, second, update_size);
+        e.mem.set_u32(handles, me + 0x24);
+        let broad_phase = e.mem.u32(e.mem.u32(me + 8) + 0x58);
+        if e.mem.u32(broad_phase + 0x10) != 0 {
+            e.call(BROAD_PHASE_LOCK, &args![broad_phase]);
+        }
+        let broad_phase = e.mem.u32(e.mem.u32(me + 8) + 0x58);
+        e.vcall(
+            broad_phase,
+            0x28,
+            &args![handles, aabb, 1u32, first, second],
+        );
+        if e.mem.u32(first + 4) != 0 || e.mem.u32(second + 4) != 0 {
+            e.call(REMOVE_DUPLICATES, &args![first, second]);
+            let world_now = e.mem.u32(me + 8);
+            let dispatcher = e.mem.u32(world_now + 0x64);
+            let removed_data = e.mem.u32(second);
+            let removed_count = e.mem.u32(second + 4);
+            e.call(
+                REMOVE_PAIRS,
+                &args![dispatcher, removed_data, removed_count],
+            );
+            let world_now = e.mem.u32(me + 8);
+            let filter = e.mem.u32(world_now + 0x7c);
+            let listener = if filter == 0 { 0 } else { filter + 8 };
+            let dispatcher = e.mem.u32(world_now + 0x64);
+            let added_data = e.mem.u32(first);
+            let added_count = e.mem.u32(first + 4);
+            e.call(
+                ADD_PAIRS,
+                &args![dispatcher, added_data, added_count, listener],
+            );
+            hkp_phantom_remove_null_overlap_listeners(e, this);
+        }
+        let broad_phase = e.mem.u32(e.mem.u32(me + 8) + 0x58);
+        if e.mem.u32(broad_phase + 0x10) != 0 {
+            e.call(BROAD_PHASE_UNLOCK, &args![broad_phase]);
+        }
+        hkp_phantom_set_bounding_volume_data(e, this, aabb);
+        let world = e.mem.u32(me + 8);
+        let tree = e.mem.u32(world + 0x5c);
+        if tree != 0 {
+            e.vcall(tree, 0x14, &args![0u32]);
+        }
+        let world = e.mem.u32(me + 8);
+        let locks = e.mem.u32(world + 0x94).wrapping_sub(1);
+        e.mem.set_u32(world + 0x94, locks);
+        if locks == 0 && e.mem.u8(world + 0x9c) == 0 {
+            if e.mem.u32(world + 0x8c) != 0 {
+                e.call(WORLD_EXECUTE_PENDING_OPERATIONS, &args![world]);
+            }
+            if e.mem.u32(world + 0xa4) == 1 && e.mem.u32(world + 0x90) != 0 {
+                e.call(WORLD_EXECUTE_PENDING_BODY_OPERATIONS, &args![world]);
+            }
+        }
+        close_pair_array(e, second);
+        e.mem.set_u32(second, 0);
+        e.mem.set_u32(second + 8, 0x8000_0000);
+        close_pair_array(e, first);
+    })
 }
 
 /// `hkpWorldObject::~hkpWorldObject` (`00c9d3b0`, `this`) and
@@ -905,6 +908,37 @@ mod tests {
         assert!(calls_to(&log, BROAD_PHASE_LOCK).is_empty());
         assert_eq!(e.mem.u32(scene.world + 0x94), 0);
         assert_eq!(e.mem.u32(scene.phantom + 0x30), 0);
+    }
+
+    #[test]
+    fn update_broad_phase_keeps_its_record_and_arrays_in_the_exe_frame() {
+        let mut e = engine();
+        let log = new_log();
+        let scene = broad_phase_scene(&mut e, &log);
+        let queued = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&queued);
+        e.register_double(WORLD_QUEUE_OPERATION, move |_, a| {
+            sink.borrow_mut().push(a[1]);
+            Ret::default()
+        });
+        e.mem.set_u32(scene.world + 0x98, 1);
+        let frame = e.mem.alloc(0x3c);
+        e.mem.free(frame);
+        e.call(0x00d0_7ec0, &args![scene.phantom, scene.aabb]);
+        assert_eq!(*queued.borrow(), vec![frame + 0x10]);
+        e.mem.set_u32(scene.world + 0x98, 0);
+        let update_log = Rc::clone(&log);
+        e.register_double(BROAD_PHASE_UPDATE, move |_, a| {
+            update_log
+                .borrow_mut()
+                .push((BROAD_PHASE_UPDATE, a.to_vec()));
+            Ret::default()
+        });
+        e.call(0x00d0_7ec0, &args![scene.phantom, scene.aabb]);
+        let update = calls_to(&log, BROAD_PHASE_UPDATE);
+        // The handle slot at +0xc, the added pairs at +0x2c, the removed ones at +0x1c.
+        assert_eq!(update[0][1], frame + 0xc);
+        assert_eq!(update[0][4..6], [frame + 0x2c, frame + 0x1c]);
     }
 
     #[test]

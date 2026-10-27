@@ -706,12 +706,14 @@ pub fn fn_00ca8af0(e: &mut Engine, this: Ptr, first: Ptr, second: Ptr) {
 /// from slot 4 of the object slot 0x10 of the shape returns must not exceed 100. Shape kind
 /// 0x17 or 7 asks the same of the object embedded at shape + 0x10, kind 9 likewise (using the
 /// shape read first), and kind 0xF always fails.
-pub fn fn_00ca8bf0(e: &mut Engine, this: Ptr, out: Ptr) {
+/// Answers `out`: the exe leaves it in `EAX` at every `RET` (the hkBool/hkResult result
+/// returned through a pointer, which callers read through `EAX`).
+pub fn fn_00ca8bf0(e: &mut Engine, this: Ptr, out: Ptr) -> Ptr {
     let t = this.addr();
     let shape = e.mem.u32(t + 0x10);
     if shape == 0 {
         e.mem.set_u8(out.addr(), 0);
-        return;
+        return out;
     }
     let motion = e.mem.u8(t + 0xe8);
     let kind = e.mem.u32(shape + 0xc);
@@ -738,6 +740,7 @@ pub fn fn_00ca8bf0(e: &mut Engine, this: Ptr, out: Ptr) {
         }
     }
     e.mem.set_u8(out.addr(), u8::from(fits));
+    out
 }
 
 // Translated from 00ca8c90 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1069,7 +1072,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ca_8a80, fn_00ca8a80(Ptr, Ptr)),
         entry!(0x00ca_8af0, fn_00ca8af0(Ptr, Ptr, Ptr)),
         entry!(0x00ca_8b80, fn_00ca8b80(Ptr, Ptr)),
-        entry!(0x00ca_8bf0, fn_00ca8bf0(Ptr, Ptr)),
+        entry!(0x00ca_8bf0, fn_00ca8bf0(Ptr, Ptr) -> Ptr),
         entry!(0x00ca_8c90, hkp_rigid_body_ctor(Ptr, Ptr) -> Ptr),
         entry!(0x00ca_8f50, hkp_rigid_body_get_cinfo(Ptr, Ptr)),
         entry!(0x00ca_90c0, hkp_rigid_body_clone(Ptr) -> Ptr),
@@ -2177,6 +2180,35 @@ mod rigid_body_tests {
                 "motion {motion} kind {kind:#x} count {size}"
             );
         }
+    }
+
+    #[test]
+    fn fn_00ca8bf0_answers_its_result_pointer() {
+        const COUNT_DOUBLE: u32 = 0x0900_0400;
+        const INNER_DOUBLE: u32 = 0x0900_0404;
+        let mut e = test_engine();
+        let count = Rc::new(Cell::new(0i32));
+        let answer_count = Rc::clone(&count);
+        e.register_double(COUNT_DOUBLE, move |_, _| Ret {
+            eax: answer_count.get() as u32,
+            ..Ret::default()
+        });
+        let counted = e.mem.alloc(0x20);
+        e.mem.set_u32(counted + 4, COUNT_DOUBLE);
+        let inner = e.mem.alloc(0x10);
+        e.mem.set_u32(inner, counted);
+        e.register_double(INNER_DOUBLE, move |_, _| Ret {
+            eax: inner,
+            ..Ret::default()
+        });
+        let shape_vtable = e.mem.alloc(0x40);
+        e.mem.set_u32(shape_vtable + 0x10, INNER_DOUBLE);
+        let out = e.mem.alloc(8);
+        // No shape: the byte is 0.
+        let body = e.mem.alloc(0x240);
+        e.mem.set_u8(out, 0x55);
+        // The exe leaves the result pointer in EAX at every RET; callers read through it.
+        assert_eq!(e.call(0x00ca_8bf0, &args![body, out]).u32(), args![out][0]);
     }
 
     /// Doubles for everything the constructor calls; answers the log, the motion object

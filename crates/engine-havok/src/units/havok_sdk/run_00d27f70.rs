@@ -219,11 +219,14 @@ pub fn fn_00d281b0(e: &mut Engine, this: Ptr<HkUnionFind>, sizes: Ptr) -> i32 {
     let (table, capacity_flags) = if count == 0 {
         (0, NO_OWNED_MEMORY)
     } else {
-        let bytes = e.mem.alloc(4);
-        e.mem.set_i32(bytes, count.wrapping_mul(4));
-        let table = e.vcall(allocator, 0xc, &args![bytes]).u32();
-        let granted = e.mem.i32(bytes);
-        e.mem.free(bytes);
+        // The exe's frame (`SUB ESP,0x8`, four pushes): 0x18 bytes, the byte count at +0x10
+        // (00d2820e).
+        let (table, granted) = e.with_stack(0x18, |e, frame| {
+            let bytes = frame.addr() + 0x10;
+            e.mem.set_i32(bytes, count.wrapping_mul(4));
+            let table = e.vcall(allocator, 0xc, &args![bytes]).u32();
+            (table, e.mem.i32(bytes))
+        });
         // Signed division by 4 (`CDQ; AND EDX, 3; ADD; SAR 2`).
         let quarter = (granted.wrapping_add((granted >> 31) & 3) >> 2) as u32;
         (
@@ -441,8 +444,12 @@ mod tests {
         let (this, data) = forest(&mut e, &[0, 1, 2, 0, 2, 1]);
         let (sizes_owner, sizes_data) = forest(&mut e, &[1, 5, 3]);
         let sizes = e.mem.u32(sizes_owner);
+        // The byte count sits at +0x10 of the exe's 0x18-byte frame (the allocator doubles it).
+        let frame = e.mem.alloc(0x18);
+        e.mem.free(frame);
         let got = e.call(0x00d2_81b0, &args![this, sizes]).i32();
         assert_eq!(got, 1);
+        assert!(e.mem.u32(frame + 0x10) >= 12);
         assert_eq!(entries(&e, sizes_data, 3), vec![5, 1, 3]);
         assert_eq!(entries(&e, data, 6), vec![1, 0, 2, 1, 2, 0]);
         // The table (1, 0, 2) is freed with its three words.

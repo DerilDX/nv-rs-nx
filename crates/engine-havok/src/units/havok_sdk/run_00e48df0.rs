@@ -180,7 +180,8 @@ pub fn fn_00e49030(_e: &mut Engine, _this: Ptr) -> u32 {
 /// Thiscall (`this` is not read), `RET 0xc`: writes to `out` (a byte) whether bit `index` is set
 /// in a bit field of 31 bits per word: with `bits` pointing at `{ n, ... }`, the word is at
 /// `bits + 4 * (n + index / 31) + 4` and the bit is `index % 31`.
-pub fn fn_00e49040(e: &mut Engine, _this: Ptr, out: u32, bits: u32, index: u32) {
+/// Answers `out` (`EAX` at the `RET`; the caller tests the flag through it, 00e491ed).
+pub fn fn_00e49040(e: &mut Engine, _this: Ptr, out: u32, bits: u32, index: u32) -> u32 {
     let word_index = e.mem.u32(bits).wrapping_add(index / 31);
     let bit = index % 31;
     let word = e.mem.u32(
@@ -188,6 +189,7 @@ pub fn fn_00e49040(e: &mut Engine, _this: Ptr, out: u32, bits: u32, index: u32) 
             .wrapping_add(4),
     );
     e.mem.set_u8(out, u8::from(word & (1 << bit) != 0));
+    out
 }
 
 // Translated from 00e490d0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -378,7 +380,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e4_8df0, fn_00e48df0(Ptr, u32, i32)),
         entry!(0x00e4_8e80, fn_00e48e80(Ptr, u32) -> u32),
         entry!(0x00e4_9030, fn_00e49030(Ptr) -> u32),
-        entry!(0x00e4_9040, fn_00e49040(Ptr, u32, u32, u32)),
+        entry!(0x00e4_9040, fn_00e49040(Ptr, u32, u32, u32) -> u32),
         entry!(0x00e4_90d0, fn_00e490d0(Ptr)),
         entry!(0x00e4_9100, fn_00e49100(Ptr, i32) -> i32),
         entry!(0x00e4_9120, fn_00e49120(Ptr, u32, u32) -> u32),
@@ -610,6 +612,18 @@ mod tests {
         let out = e.mem.alloc(8);
         e.call(0x00e4_9040, &args![0u32, out, bits, 0u32]);
         assert_eq!(e.mem.u8(out), 1);
+    }
+
+    #[test]
+    fn bit_test_answers_its_out_pointer() {
+        let mut e = engine();
+        let bits = e.mem.alloc(16);
+        let out = e.mem.alloc(8);
+        // EAX is `out` at the RET; the caller tests the flag through it (00e491ed).
+        assert_eq!(
+            e.call(0x00e4_9040, &args![0u32, out, bits, 3u32]).u32(),
+            out
+        );
     }
 
     #[test]

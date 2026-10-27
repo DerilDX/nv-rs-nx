@@ -139,6 +139,8 @@ pub fn query_obb(
 /// clamped between 0 and `(xRes - 2, c, zRes - 2, c)` (`c` the float at `01011d78`), plus
 /// 65536.0; the mantissa bits shifted right by 7 and masked to 16 bits are the cell, lane 0
 /// for x and lane 2 for z. `found` is then 1.
+/// Answers `found`: the exe leaves it in `EAX` at every `RET` (the hkBool/hkResult result
+/// returned through a pointer, which callers read through `EAX`).
 pub fn get_extents_for_query_aabb(
     e: &mut Engine,
     found: Ptr,
@@ -148,7 +150,7 @@ pub fn get_extents_for_query_aabb(
     x_max: Ptr,
     z_min: Ptr,
     z_max: Ptr,
-) {
+) -> Ptr {
     let height_field = e.call(GET_HEIGHT_FIELD_SHAPE, &args![collection]).u32();
     let radius = x87_quiet(e.get(collection, HkpTriSampledHeightFieldCollection::m_radius));
     let mut max = load_vec(e, aabb.addr() + 0x10);
@@ -193,7 +195,7 @@ pub fn get_extents_for_query_aabb(
     store_vec(e, aabb.addr(), new_min);
     if (0..3).any(|lane| new_max[lane] <= new_min[lane]) {
         e.mem.set_u8(found.addr(), 0);
-        return;
+        return found;
     }
     let x_res = e.mem.u32(height_field + 0x10).wrapping_sub(2) as i32 as f32;
     let z_res = e.mem.u32(height_field + 0x14).wrapping_sub(2) as i32 as f32;
@@ -217,6 +219,7 @@ pub fn get_extents_for_query_aabb(
     e.mem.set_u32(x_max.addr(), cell(new_max, 0));
     e.mem.set_u32(z_max.addr(), cell(new_max, 2));
     e.mem.set_u8(found.addr(), 1);
+    found
 }
 
 // Translated from 00d26ae0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -646,7 +649,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
                 Ptr,
                 Ptr,
                 Ptr,
-            )
+            ) -> Ptr
         ),
         entry!(
             0x00d2_6ae0,
@@ -964,6 +967,43 @@ mod tests {
             }
             Ret::default()
         });
+    }
+
+    #[test]
+    fn get_extents_answers_its_found_pointer() {
+        let mut e = Engine::new();
+        e.map(0x0100_0000, 0x0030_0000);
+        let field = e.mem.alloc(0x40);
+        let vtable = e.mem.alloc(0x40);
+        e.mem.set_u32(field, vtable);
+        e.mem.set_u32(vtable + 0x1c, 0x0900_0d00);
+        e.register_double(0x0900_0d00, |_, _| Ret::default());
+        e.register_double(GET_HEIGHT_FIELD_SHAPE, move |_, _| Ret {
+            eax: field,
+            ..Ret::default()
+        });
+        let collection = e.mem.alloc(0x80);
+        let aabb = e.mem.alloc(0x20);
+        let found = e.mem.alloc(4);
+        let cells = e.mem.alloc(0x10);
+        // An empty box: nothing is found, and EAX is `found` at the RET (the hkBool result
+        // pointer the callers read through).
+        let answered = e
+            .call(
+                0x00d2_6940,
+                &args![
+                    found,
+                    aabb,
+                    collection,
+                    cells,
+                    cells + 4,
+                    cells + 8,
+                    cells + 12
+                ],
+            )
+            .u32();
+        assert_eq!(answered, found);
+        assert_eq!(e.mem.u8(found), 0);
     }
 
     /// A height double answering `height(x, z)` and recording the calls.

@@ -2421,21 +2421,17 @@ pub fn barter_menu_remove_transact_item(e: &mut Engine, this: Ptr<BarterMenu>, c
 }
 
 /// Plays a sound by name (`BSAudio::GetSoundHandleByName(QInstance(), handle, name,
-/// 0x101, 0)`) and destroys the handle (`00483710`). `BSSoundHandle::Play` takes one
-/// word (`RET 4`) but `CompleteTransaction` pushes none: the word it reads is the one at
-/// the caller's stack top, the frame's saved security cookie (`011c16bc ^ EBP`, at
-/// `EBP - 0x9c`), passed here as `stack_word`.
-fn play_transaction_sound(e: &mut Engine, name: u32, stack_word: u32) {
+/// 0x101)`) and destroys the handle (`00483710`). The 0 pushed first (00730061 /
+/// 00730109) is not popped by 00ad7550 (`RET 0xc`, past the no-argument getter
+/// 00453a70); it is the word `BSSoundHandle::Play` (00ad8830, `RET 4`) reads.
+fn play_transaction_sound(e: &mut Engine, name: u32) {
     // The handle at `EBP - 0x5c` (or `- 0x68`), 0xc bytes.
     e.with_stack(0xc, |e, handle| {
         let audio = e.call(AUDIO_INSTANCE, &args![]).u32();
         let sound = e
-            .call(
-                AUDIO_SOUND_BY_NAME,
-                &args![audio, handle, name, 0x101u32, 0u32],
-            )
+            .call(AUDIO_SOUND_BY_NAME, &args![audio, handle, name, 0x101u32])
             .u32();
-        e.call(SOUND_HANDLE_PLAY, &args![sound, stack_word]);
+        e.call(SOUND_HANDLE_PLAY, &args![sound, 0u32]);
         e.call(SOUND_HANDLE_DESTRUCT, &args![handle]);
     });
 }
@@ -2459,19 +2455,18 @@ fn play_transaction_sound(e: &mut Engine, name: u32, stack_word: u32) {
 /// (`InventoryChanges::GetObjectCount` 0) tells the process (slot +0x168 with 0).
 pub fn barter_menu_complete_transaction(e: &mut Engine, this: Ptr<BarterMenu>) {
     let base = this.addr();
-    // The frame's saved security cookie, the word `BSSoundHandle::Play` reads; the
-    // frame's `EBP` is modelled by the block below.
+    // The frame's saved security cookie (pushed at 0072fd2e, the frame's stack
+    // top); the frame's `EBP` is modelled by the block below.
     e.with_stack(0xa0, |e, frame| {
         let ebp = frame.addr() + 0xa0;
         let cookie = e.global::<u32>(SECURITY_COOKIE) ^ ebp;
         e.mem.set_u32(ebp - 0x9c, cookie);
-        complete_transaction_body(e, this, base, e.mem.u32(ebp - 0x9c));
+        complete_transaction_body(e, this, base);
     });
 }
 
-/// The body of [`barter_menu_complete_transaction`]; `stack_word` is the word at the
-/// frame's stack top.
-fn complete_transaction_body(e: &mut Engine, this: Ptr<BarterMenu>, base: u32, stack_word: u32) {
+/// The body of [`barter_menu_complete_transaction`].
+fn complete_transaction_body(e: &mut Engine, this: Ptr<BarterMenu>, base: u32) {
     let vendor = e.get(this, BarterMenu::pVendorRef);
     let extras = e.call(EXTRA_LIST_005D43C0, &args![vendor]).u32();
     let buyer = if e.call(GET_MERCHANT_CONTAINER, &args![extras]).u32() != 0 {
@@ -2557,7 +2552,7 @@ fn complete_transaction_body(e: &mut Engine, this: Ptr<BarterMenu>, base: u32, s
                     &args![handler, change, bounded, vendor],
                 );
             }
-            play_transaction_sound(e, CAPS_UP_SOUND, stack_word);
+            play_transaction_sound(e, CAPS_UP_SOUND);
             e.call(ITEM_CHANGE_DESTRUCT, &args![change]);
         });
     } else if amount < zero {
@@ -2570,7 +2565,7 @@ fn complete_transaction_body(e: &mut Engine, this: Ptr<BarterMenu>, base: u32, s
                 &args![inventory, player, whole.wrapping_neg(), buyer],
             );
         }
-        play_transaction_sound(e, CAPS_DOWN_SOUND, stack_word);
+        play_transaction_sound(e, CAPS_DOWN_SOUND);
     }
     e.mem.set_u32(base + 0x84, x87_store32(0.0));
     e.call(LIST_CLEAR, &args![base + ITEMS_TO_BUY]);
@@ -4447,7 +4442,8 @@ mod n051_tests {
         assert_eq!(calls_to(&e, AUDIO_SOUND_BY_NAME)[0][2], CAPS_UP_SOUND);
         let played = calls_to(&e, SOUND_HANDLE_PLAY);
         assert_eq!(played.len(), 1);
-        assert_eq!(played[0][0], 0x7700);
+        assert_eq!(played[0], vec![0x7700, 0]);
+        assert_eq!(calls_to(&e, AUDIO_SOUND_BY_NAME)[0].len(), 4);
         assert_eq!(e.get(this, BarterMenu::fTransactionAmount), 0.0);
         assert_eq!(e.get(this, BarterMenu::bItemsTraded), 1);
         assert_eq!(calls_to(&e, ITEM_DATA_DELETE).len(), 2);

@@ -776,12 +776,14 @@ pub fn hk_data_class_native_get_parent(e: &mut Engine, this: Ptr<HkDataClassNati
 /// `hkDataClassNative::isSuperClass` (Xbox PDB), thiscall, `RET 8`: walks `other` and its
 /// parents (virtual slot `0x10` of each) and stores a 1 byte at `out` as soon as one has the
 /// name of this class (slot `8` of each, `hkString::strCmp` equal), else a 0 byte.
+/// Answers `out`: the exe leaves it in `EAX` at every `RET` (the hkBool/hkResult result
+/// returned through a pointer, which callers read through `EAX`).
 pub fn hk_data_class_native_is_super_class(
     e: &mut Engine,
     this: Ptr<HkDataClassNative>,
     out: Ptr,
     other: u32,
-) {
+) -> Ptr {
     let mut candidate = other;
     while candidate != 0 {
         let own_name = e.vcall(this.addr(), 8, &args![]).u32();
@@ -791,11 +793,12 @@ pub fn hk_data_class_native_is_super_class(
             .u32();
         if difference == 0 {
             e.mem.set_u8(out.addr(), 1);
-            return;
+            return out;
         }
         candidate = e.vcall(candidate, 0x10, &args![]).u32();
     }
     e.mem.set_u8(out.addr(), 0);
+    out
 }
 
 // Translated from 00dbb9d0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1782,7 +1785,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x00db_b970,
-            hk_data_class_native_is_super_class(Ptr<HkDataClassNative>, Ptr, u32)
+            hk_data_class_native_is_super_class(Ptr<HkDataClassNative>, Ptr, u32) -> Ptr
         ),
         entry!(
             0x00db_b9d0,
@@ -2798,6 +2801,26 @@ mod tests {
         e.mem.set_u8(out, 0xff);
         e.call(0x00db_b970, &args![this, out, 0u32]);
         assert_eq!(e.mem.u8(out), 0);
+    }
+
+    #[test]
+    fn fn_00dbb970_answers_its_result_pointer() {
+        let mut e = logged();
+        e.register(SLOT_DOUBLE, |e, a| answer(e.mem.u32(a[0] + 0x20)));
+        e.register(OTHER_SLOT_DOUBLE, |e, a| answer(e.mem.u32(a[0] + 0x24)));
+        e.register(STRING_COMPARE, |_, a| answer(u32::from(a[0] != a[1])));
+        let this = named_object(&mut e, 2, 0);
+        let grandparent = named_object(&mut e, 2, 0);
+        let parent = named_object(&mut e, 3, grandparent);
+        let child = named_object(&mut e, 4, parent);
+        let out = e.mem.alloc(4);
+        e.mem.set_u8(out, 0xff);
+        // The grandparent has the name of this class.
+        // The exe leaves the result pointer in EAX at every RET; callers read through it.
+        assert_eq!(
+            e.call(0x00db_b970, &args![this, out, child]).u32(),
+            args![out][0]
+        );
     }
 
     #[test]

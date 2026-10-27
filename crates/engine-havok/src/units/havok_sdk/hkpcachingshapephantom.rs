@@ -363,18 +363,21 @@ pub fn hkp_caching_shape_phantom_get_penetrations(
 /// `hkpCachingShapePhantom::isOverlappingCollidableAdded` (Xbox PDB). `this` is ECX; `result`
 /// is the byte to write: 1 when a list entry (at `this + 0x160`, 8 bytes each, count at `+0x164`)
 /// holds `collidable` in its second word, 0 otherwise.
+/// Answers `result`: the exe leaves it in `EAX` at every `RET` (the hkBool/hkResult result
+/// returned through a pointer, which callers read through `EAX`).
 pub fn hkp_caching_shape_phantom_is_overlapping_collidable_added(
     e: &mut Engine,
     this: Ptr,
     result: Ptr,
     collidable: u32,
-) {
+) -> Ptr {
     let this = this.addr();
     let count = e.mem.u32(this + LIST + 4) as i32;
     let data = e.mem.u32(this + LIST);
     let found =
         (0..count).any(|index| e.mem.u32(data.wrapping_add(4 + 8 * index as u32)) == collidable);
     e.mem.set_u8(result.addr(), u8::from(found));
+    result
 }
 
 // Translated from 00d4ca30 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -741,7 +744,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x00d4_c9e0,
-            hkp_caching_shape_phantom_is_overlapping_collidable_added(Ptr, Ptr, u32)
+            hkp_caching_shape_phantom_is_overlapping_collidable_added(Ptr, Ptr, u32) -> Ptr
         ),
         entry!(
             0x00d4_ca30,
@@ -1264,6 +1267,18 @@ mod havok_agent_tests {
         e.mem.set_u32(this + 0x164, 0);
         e.call(0x00d4_c9e0, &args![this, result, 0x11u32]);
         assert_eq!(e.mem.u8(result), 0);
+    }
+
+    #[test]
+    fn fn_00d4c9e0_answers_its_result_pointer() {
+        let (mut e, _log) = engine();
+        let this = phantom(&mut e, &[(1, 0x11), (2, 0x22), (3, 0x33)], 4);
+        let result = e.mem.alloc(0x10);
+        // The exe leaves the result pointer in EAX at every RET; callers read through it.
+        assert_eq!(
+            e.call(0x00d4_c9e0, &args![this, result, 0x33u32]).u32(),
+            args![result][0]
+        );
     }
 
     #[test]

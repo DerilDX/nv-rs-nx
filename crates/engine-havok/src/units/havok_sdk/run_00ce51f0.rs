@@ -84,7 +84,9 @@ pub fn fn_00ce51f0(e: &mut Engine, this: Ptr, out: Ptr) {
 /// result block on the stack, copies its first three vectors (`0x30` bytes) to `this` and
 /// writes to the byte at `out` whether the byte at `+0x31` of the result is zero. The class is
 /// unconfirmed.
-pub fn fn_00ce5290(e: &mut Engine, this: Ptr, out: Ptr, input: Ptr) {
+/// Answers `out`: the exe leaves it in `EAX` at every `RET` (the hkBool/hkResult result
+/// returned through a pointer, which callers read through `EAX`).
+pub fn fn_00ce5290(e: &mut Engine, this: Ptr, out: Ptr, input: Ptr) -> Ptr {
     let base = this.addr();
     e.with_stack(0x40, |e, result| {
         e.call(DECOMPOSE_TRANSFORM, &args![input, result]);
@@ -94,6 +96,7 @@ pub fn fn_00ce5290(e: &mut Engine, this: Ptr, out: Ptr, input: Ptr) {
         let flag = e.mem.u8(result.addr() + 0x31);
         e.mem.set_u8(out.addr(), u8::from(flag == 0));
     });
+    out
 }
 
 // Translated from 00ce52e0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -194,7 +197,7 @@ pub fn fn_00ce5370(e: &mut Engine, this: Ptr) {
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00ce_51f0, fn_00ce51f0(Ptr, Ptr)),
-        entry!(0x00ce_5290, fn_00ce5290(Ptr, Ptr, Ptr)),
+        entry!(0x00ce_5290, fn_00ce5290(Ptr, Ptr, Ptr) -> Ptr),
         entry!(0x00ce_52e0, fn_00ce52e0(Ptr, Ptr)),
         entry!(0x00ce_5300, fn_00ce5300(Ptr, Ptr)),
         entry!(0x00ce_5310, fn_00ce5310(Ptr) -> Ptr),
@@ -332,6 +335,29 @@ mod tests {
         e.call(0x00ce_52e0, &args![this, input]);
         assert_eq!(*seen.borrow(), vec![input]);
         assert_eq!(e.mem.u32(this), 0xe000);
+    }
+
+    #[test]
+    fn decomposition_copies_three_vectors_and_reports_a_zero_flag_byte_answers_its_result_pointer()
+    {
+        let mut e = engine();
+        e.register_double(DECOMPOSE_TRANSFORM, |e, a| {
+            for i in 0..12 {
+                e.mem.set_u32(a[1] + 4 * i, 0xd000 + i);
+            }
+            e.mem.set_u8(a[1] + 0x31, 0);
+            e.mem.set_u8(a[1] + 0x30, 9);
+            Ret::default()
+        });
+        let this = e.mem.alloc(0x40);
+        let out = e.mem.alloc(8);
+        let input = e.mem.alloc(0x40);
+        e.mem.set_u8(out, 0xee);
+        // The exe leaves the result pointer in EAX at every RET; callers read through it.
+        assert_eq!(
+            e.call(0x00ce_5290, &args![this, out, input]).u32(),
+            args![out][0]
+        );
     }
 
     /// Every word the initialiser writes, and `this` returned; the no-op returns `this`.

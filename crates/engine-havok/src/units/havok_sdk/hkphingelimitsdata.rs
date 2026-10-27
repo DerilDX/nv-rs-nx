@@ -45,7 +45,9 @@ pub fn hkp_hinge_limits_data_get_runtime_info(
 /// `hkpHingeLimitsData::isValid` (Xbox PDB): the byte at `out` is 1 when both rotations (`this
 /// + 0x20` and `this + 0x50`) are orthonormal within the tolerance (`hkRotation::isOrthonormal`,
 /// the second one only when the first is), else 0.
-pub fn hkp_hinge_limits_data_is_valid(e: &mut Engine, this: Ptr, out: Ptr) {
+/// Answers `out`: the exe leaves it in `EAX` at every `RET` (the hkBool/hkResult result
+/// returned through a pointer, which callers read through `EAX`).
+pub fn hkp_hinge_limits_data_is_valid(e: &mut Engine, this: Ptr, out: Ptr) -> Ptr {
     let tolerance = x87_quiet_bits(e.mem.u32(ORTHONORMAL_TOLERANCE));
     let valid = e.with_stack(8, |e, results| {
         let first = e
@@ -67,6 +69,7 @@ pub fn hkp_hinge_limits_data_is_valid(e: &mut Engine, this: Ptr, out: Ptr) {
         e.mem.u8(second) != 0
     });
     e.mem.set_u8(out.addr(), u8::from(valid));
+    out
 }
 
 // Translated from 00d52fb0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -117,7 +120,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00d5_2f30,
             hkp_hinge_limits_data_get_runtime_info(Ptr, u32, Ptr)
         ),
-        entry!(0x00d5_2f50, hkp_hinge_limits_data_is_valid(Ptr, Ptr)),
+        entry!(0x00d5_2f50, hkp_hinge_limits_data_is_valid(Ptr, Ptr) -> Ptr),
         entry!(0x00d5_2fb0, hkp_hinge_limits_data_get_type(Ptr) -> u32),
         entry!(0x00d5_2fc0, hkp_hinge_limits_data_construct(Ptr) -> Ptr),
     ]
@@ -192,6 +195,21 @@ mod tests {
                 assert_ne!(seen[0][1], seen[1][1]);
             }
         }
+    }
+
+    #[test]
+    fn fn_00d52f50_answers_its_result_pointer() {
+        let mut e = engine();
+        e.register_double(IS_ORTHONORMAL, |e, a| {
+            e.mem.set_u8(a[1], 1);
+            Ret {
+                eax: a[1],
+                ..Ret::default()
+            }
+        });
+        let out = e.mem.alloc(4);
+        // EAX is `out` at both RETs (the hkBool result pointer the callers read through).
+        assert_eq!(e.call(0x00d5_2f50, &args![0x4000u32, out]).u32(), out);
     }
 
     #[test]

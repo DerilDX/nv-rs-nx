@@ -321,72 +321,76 @@ pub fn hkp_simple_contact_constraint_data_allocate_contact_point(
     point_out: Ptr,
     properties_out: Ptr,
 ) -> i32 {
-    let data = this.addr();
-    let atom = e.mem.u32(data + 0x28);
-    let flags = e.mem.u16(atom + 0x10);
-    e.mem.set_u16(atom + 0x10, flags | 4);
-    let count = u32::from(e.mem.u16(atom + 4));
-    let old_atom = e.mem.u32(data + 0x28);
-    let moved = e.mem.alloc(4);
-    let new_atom = e.call(EXPAND_ONE, &args![old_atom, moved]).u32();
-    e.mem.set_u32(data + 0x28, new_atom);
-    let stride = u32::from(e.mem.u8(new_atom + 0xa));
-    let points = (u32::from(e.mem.u16(new_atom + 6)) << 5).wrapping_add(new_atom);
-    let properties = stride
-        .wrapping_mul(count)
-        .wrapping_add(points)
-        .wrapping_add(0x30);
-    let point = (count << 5).wrapping_add(new_atom).wrapping_add(0x30);
-    let previous = properties.wrapping_sub(stride);
-    e.mem.set_u32(properties, 0);
-    e.mem.set_u32(properties + 4, 0);
-    e.mem.set_u8(properties + 0xf, 1);
-    if (count as i32) > 0 && e.mem.u8(previous + 0xf) & 2 == 0 && e.mem.u8(previous + 0xe) == 0 {
-        e.mem.set_u8(properties + 0xf, 3);
-    }
-    e.mem.set_u32(point_out.addr(), point);
-    e.mem.set_u32(properties_out.addr(), properties);
-    let next = count.wrapping_add(1);
-    let odd = next & 1;
-    let mut info = [
-        (((next as i32) >> 1) as u32)
-            .wrapping_mul(0x70)
-            .wrapping_add(odd * 0x30)
-            .wrapping_add(0xa0),
-        0,
-        0,
-        0,
-    ];
-    if count == 1 {
-        info[1] = 0x20;
-        info[2] = 1;
-        info[3] = 1;
-    }
-    info[2] += 1;
-    info[1] += if odd != 0 { 0x30 } else { 0x40 };
-    info[3] += 1;
-    let info_at = e.mem.alloc(0x10);
-    for (i, word) in info.into_iter().enumerate() {
-        e.mem.set_u32(info_at + 4 * i as u32, word);
-    }
-    let constraint = e.mem.u32(data + 0x24);
-    e.call(
-        OWNER_ADD_CONSTRAINT_INFO,
-        &args![owner, constraint, info_at],
-    );
-    e.mem.free(info_at);
-    if e.mem.u8(moved) != 0 {
-        let size = u32::from(e.mem.u16(new_atom + 2));
-        let current = e.mem.u32(data + 0x28);
+    // The exe's frame (`SUB ESP,0x18`, four pushes): 0x28 bytes, the moved flag at +0x13
+    // (00d92e08), the constraint info at +0x18 (00d92e8d..00d92ec1).
+    e.with_stack(0x28, |e, frame| {
+        let frame = frame.addr();
+        let data = this.addr();
+        let atom = e.mem.u32(data + 0x28);
+        let flags = e.mem.u16(atom + 0x10);
+        e.mem.set_u16(atom + 0x10, flags | 4);
+        let count = u32::from(e.mem.u16(atom + 4));
+        let old_atom = e.mem.u32(data + 0x28);
+        let moved = frame + 0x13;
+        let new_atom = e.call(EXPAND_ONE, &args![old_atom, moved]).u32();
+        e.mem.set_u32(data + 0x28, new_atom);
+        let stride = u32::from(e.mem.u8(new_atom + 0xa));
+        let points = (u32::from(e.mem.u16(new_atom + 6)) << 5).wrapping_add(new_atom);
+        let properties = stride
+            .wrapping_mul(count)
+            .wrapping_add(points)
+            .wrapping_add(0x30);
+        let point = (count << 5).wrapping_add(new_atom).wrapping_add(0x30);
+        let previous = properties.wrapping_sub(stride);
+        e.mem.set_u32(properties, 0);
+        e.mem.set_u32(properties + 4, 0);
+        e.mem.set_u8(properties + 0xf, 1);
+        if (count as i32) > 0 && e.mem.u8(previous + 0xf) & 2 == 0 && e.mem.u8(previous + 0xe) == 0
+        {
+            e.mem.set_u8(properties + 0xf, 3);
+        }
+        e.mem.set_u32(point_out.addr(), point);
+        e.mem.set_u32(properties_out.addr(), properties);
+        let next = count.wrapping_add(1);
+        let odd = next & 1;
+        let mut info = [
+            (((next as i32) >> 1) as u32)
+                .wrapping_mul(0x70)
+                .wrapping_add(odd * 0x30)
+                .wrapping_add(0xa0),
+            0,
+            0,
+            0,
+        ];
+        if count == 1 {
+            info[1] = 0x20;
+            info[2] = 1;
+            info[3] = 1;
+        }
+        info[2] += 1;
+        info[1] += if odd != 0 { 0x30 } else { 0x40 };
+        info[3] += 1;
+        let info_at = frame + 0x18;
+        for (i, word) in info.into_iter().enumerate() {
+            e.mem.set_u32(info_at + 4 * i as u32, word);
+        }
+        let constraint = e.mem.u32(data + 0x24);
         e.call(
-            UPDATE_FATHER_OF_MOVED_ATOM,
-            &args![constraint, old_atom, current, size],
+            OWNER_ADD_CONSTRAINT_INFO,
+            &args![owner, constraint, info_at],
         );
-        e.mem
-            .set_u32(data + 0x2c, u32::from(e.mem.u16(new_atom + 2)));
-    }
-    e.mem.free(moved);
-    hkp_dynamics_cp_id_mgr_new_id(e, Ptr::new(data + 0xc), count as u8)
+        if e.mem.u8(moved) != 0 {
+            let size = u32::from(e.mem.u16(new_atom + 2));
+            let current = e.mem.u32(data + 0x28);
+            e.call(
+                UPDATE_FATHER_OF_MOVED_ATOM,
+                &args![constraint, old_atom, current, size],
+            );
+            e.mem
+                .set_u32(data + 0x2c, u32::from(e.mem.u16(new_atom + 2)));
+        }
+        hkp_dynamics_cp_id_mgr_new_id(e, Ptr::new(data + 0xc), count as u8)
+    })
 }
 
 /// Callees of `fireCallbacks`: the impulse estimate `00df2510` (cdecl `(entity a, entity b,
@@ -1089,6 +1093,17 @@ mod allocate_tests {
         assert_eq!(call[..2], [0x5000, 0x7777]);
         assert_eq!(call[3..], [0xd0, 0x30, 1, 1]);
         assert!(calls(&seen, UPDATE_FATHER_OF_MOVED_ATOM).is_empty());
+    }
+
+    #[test]
+    fn the_moved_flag_and_info_sit_in_the_exe_frame() {
+        let (mut e, seen, data, _atom) = scene(0);
+        let outputs = e.mem.alloc(8);
+        let frame = e.mem.alloc(0x28);
+        e.mem.free(frame);
+        e.call(0x00d9_2df0, &args![data, 0x5000u32, outputs, outputs + 4]);
+        assert_eq!(calls(&seen, EXPAND_ONE)[0][1], frame + 0x13);
+        assert_eq!(calls(&seen, OWNER_ADD_CONSTRAINT_INFO)[0][2], frame + 0x18);
     }
 
     #[test]

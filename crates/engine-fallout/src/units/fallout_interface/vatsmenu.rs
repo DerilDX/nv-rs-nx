@@ -7001,10 +7001,12 @@ pub fn vats_menu_build_meters_for_target(e: &mut Engine, _this: Ptr<VatsMenu>, t
 
 // Translated from 007f6fb0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `ListBox<unsigned_int>::GetLastItem` (Xbox PDB): the list box's slot
-/// `0x14` for `NumUnfiltered(0) - 1`; returns what the slot answers.
+/// `0x14` for `(NumUnfiltered() - 1, 0)`; returns what the slot answers.
+/// The 0 pushed at 007f6fb7 is not read by 00726b40 (plain `RET`); it is the
+/// slot's second word (007a30a0, `RET 8`).
 pub fn list_box_unsigned_int_get_last_item(e: &mut Engine, this: Ptr<ListBox>) -> u32 {
-    let count = e.call(LIST_BOX_NUM_UNFILTERED, &args![this, 0u32]).u32();
-    e.vcall(this.addr(), 0x14, &args![count.wrapping_sub(1)])
+    let count = e.call(LIST_BOX_NUM_UNFILTERED, &args![this]).u32();
+    e.vcall(this.addr(), 0x14, &args![count.wrapping_sub(1), 0u32])
         .u32()
 }
 
@@ -9555,11 +9557,14 @@ mod tests {
     fn last_item_of_a_list_box() {
         let mut e = engine();
         let list_box = object(&mut e, &[(0x14, 0x0150_0300)]);
-        e.register(0x0150_0300, |_, a| word(a[1] * 10));
+        e.register(0x0150_0300, |_, a| {
+            assert_eq!(a[2], 0);
+            word(a[1] * 10)
+        });
         e.register(LIST_BOX_NUM_UNFILTERED, |_, _| word(3));
         let item = list_box_unsigned_int_get_last_item(&mut e, Ptr::new(list_box));
         assert_eq!(item, 20);
-        assert_eq!(calls(&e, LIST_BOX_NUM_UNFILTERED), vec![vec![list_box, 0]]);
+        assert_eq!(calls(&e, LIST_BOX_NUM_UNFILTERED), vec![vec![list_box]]);
     }
 
     /// The word the last `00905820` double was handed (by address).

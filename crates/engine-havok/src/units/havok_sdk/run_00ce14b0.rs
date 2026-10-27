@@ -22,7 +22,15 @@ const ACTIVATE: u32 = 0x00c9_c1d0;
 /// Constructor-like initialiser (the class is unconfirmed): the 16-bit words at `+0x20`, `+0x22`
 /// and `+0x24` take `first`, `second` and `third`; an empty array is written at `+0` (data 0,
 /// size 0, capacity word `0x80000000`); the 16-byte vector at `vector` is copied to `+0x10`.
-pub fn fn_00ce14b0(e: &mut Engine, this: Ptr, first: u16, second: u16, third: u16, vector: Ptr) {
+/// Answers `this` (`MOV EAX,ECX`; the caller stores it, 00c7b387).
+pub fn fn_00ce14b0(
+    e: &mut Engine,
+    this: Ptr,
+    first: u16,
+    second: u16,
+    third: u16,
+    vector: Ptr,
+) -> Ptr {
     let base = this.addr();
     e.mem.set_u16(base + 0x20, first);
     e.mem.set_u16(base + 0x22, second);
@@ -34,6 +42,7 @@ pub fn fn_00ce14b0(e: &mut Engine, this: Ptr, first: u16, second: u16, third: u1
         let word = e.mem.u32(vector.addr() + 4 * lane);
         e.mem.set_u32(base + 0x10 + 4 * lane, word);
     }
+    this
 }
 
 // Translated from 00ce1500 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -118,7 +127,7 @@ pub fn fn_00ce1560(e: &mut Engine, this: Ptr, transforms: Ptr) {
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
-        entry!(0x00ce_14b0, fn_00ce14b0(Ptr, u16, u16, u16, Ptr)),
+        entry!(0x00ce_14b0, fn_00ce14b0(Ptr, u16, u16, u16, Ptr) -> Ptr),
         entry!(0x00ce_1500, fn_00ce1500(Ptr, Ptr) -> Ptr),
         entry!(0x00ce_1560, fn_00ce1560(Ptr, Ptr)),
     ]
@@ -160,6 +169,18 @@ mod tests {
             image[0x10 + 4 * i..0x14 + 4 * i].copy_from_slice(&word.to_le_bytes());
         }
         assert_eq!(e.mem.bytes(this, 0x30), image.to_vec());
+    }
+
+    #[test]
+    fn initialiser_answers_this() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x30);
+        let vector = e.mem.alloc(0x10);
+        // `MOV EAX,ECX`: the caller stores the answer (00c7b387).
+        let answered = e
+            .call(0x00ce_14b0, &args![this, 1u32, 2u32, 3u32, vector])
+            .u32();
+        assert_eq!(answered, this);
     }
 
     /// The flag is 1 only when the length exceeds the epsilon; equal, shorter and NaN lengths

@@ -367,9 +367,11 @@ pub fn fn_00d89f80(
 }
 // Translated from 00d921c0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed (`hkpsolver.cpp`), cdecl `(destination, source)`: copies one byte.
-pub fn fn_00d921c0(e: &mut Engine, destination: u32, source: u32) {
+/// Answers `destination` (`MOV EAX,[ESP+4]`; callers read the byte through it, 00d8c29e).
+pub fn fn_00d921c0(e: &mut Engine, destination: u32, source: u32) -> u32 {
     let value = e.mem.u8(source);
     e.mem.set_u8(destination, value);
+    destination
 }
 
 // Translated from 00d921d0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -14232,7 +14234,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x00d8_9ed0, fn_00d89ed0(u32, u32, u32)),
         entry!(0x00d8_9f80, fn_00d89f80(u32, i32, u32, u32, u32) -> u32),
-        entry!(0x00d9_21c0, fn_00d921c0(u32, u32)),
+        entry!(0x00d9_21c0, fn_00d921c0(u32, u32) -> u32),
         entry!(0x00d9_21d0, fn_00d921d0(u32) -> u8),
         entry!(0x00d8_aac0, hk_solve_step_jacobians(u32, u32, u32, u32)),
         entry!(0x00d8_d030, hk_solve_constraints(u32, u32, u32, u32) -> u32),
@@ -14251,6 +14253,20 @@ mod tests {
         let mut e = Engine::new();
         e.map(0x0100_0000, 0x0030_0000);
         e
+    }
+
+    #[test]
+    fn copy_byte_answers_its_destination() {
+        let mut e = Engine::new();
+        let destination = e.mem.alloc(4);
+        let source = e.mem.alloc(4);
+        e.mem.set_u8(source, 0x5a);
+        // `MOV EAX,[ESP+4]`: the callers read the byte through EAX (00d8c29e).
+        assert_eq!(
+            e.call(0x00d9_21c0, &args![destination, source]).u32(),
+            destination
+        );
+        assert_eq!(e.mem.u8(destination), 0x5a);
     }
 
     fn put(e: &mut Engine, at: u32, v: Vec4) {

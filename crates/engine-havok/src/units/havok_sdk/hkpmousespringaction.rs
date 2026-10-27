@@ -4,6 +4,22 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+/// Runs `f` on an exe-shaped frame: a function that aligns `ESP` (`AND ESP,0xfffffff0`) and
+/// then reserves `below` bytes (its `SUB ESP` and pushes) has its frame `below` bytes under a
+/// 16-byte boundary; `f` gets the frame's lowest address.
+fn with_aligned_frame<R>(e: &mut Engine, below: u32, f: impl FnOnce(&mut Engine, u32) -> R) -> R {
+    e.with_stack(below + 0x10, |e, raw| {
+        let boundary = (raw.addr() + below + 0xf) & !0xf;
+        f(e, boundary - below)
+    })
+}
+
+/// The frame base [`with_aligned_frame`] picks for a block at `raw` (tests).
+#[cfg(test)]
+fn aligned_frame_at(raw: u32, below: u32) -> u32 {
+    ((raw + below + 0xf) & !0xf) - below
+}
+
 // Translated from 00cbb8a0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkpUnaryAction::getClassType` (Xbox PDB): takes no arguments and returns the constant 0x0126_8a14.
 pub fn hkp_unary_action_get_class_type(_e: &mut Engine) -> u32 {
@@ -425,109 +441,110 @@ const NEGATION_MASK: u32 = 0x010c_44d0;
 pub fn hkp_mouse_spring_action_apply_action(e: &mut Engine, this: Ptr, step: Ptr) {
     let (this, step) = (this.addr(), step.addr());
     // Locals of the exe frame, at their offsets from its base.
-    let frame = e.mem.alloc(0x180);
-    let at = |offset: u32| frame + offset;
-    let (impulse, point, relative, matrix_inverse, direction) =
-        (at(0x14), at(0x24), at(0x34), at(0x54), at(0x44));
-    let (difference, skew, product_a, inertia, product_b) =
-        (at(0xa4), at(0xb4), at(0xe4), at(0x114), at(0x144));
-    let entity = e.mem.u32(this + 0x18);
-    e.call(
-        VECTOR_SET_TRANSFORMED_POS,
-        &args![point, entity + 0xf0, this + 0x20],
-    );
-    let mouse = load_vec(e, this + 0x30);
-    let transformed = load_vec(e, point);
-    store_vec(e, difference, sub_ps(transformed, mouse));
-    let mut motion = e.call(ENTITY_GET_MOTION_00CA86C0, &args![entity]).u32();
-    if motion != 0 {
-        motion = e.call(ENTITY_GET_MOTION_00CA86C0, &args![entity]).u32();
-    } else {
-        motion = entity + 0xe0;
-    }
-    let fourth_lane = e.mem.u32(motion + 0xc0 + 0xc);
-    let centre = load_vec(e, entity + 0x140);
-    store_vec(e, relative, sub_ps(load_vec(e, point), centre));
-    e.call(MATRIX_SET_CROSS_SKEW_SYMMETRIC, &args![skew, relative]);
-    e.vcall(motion, 0x28, &args![inertia]);
-    // The diagonal matrix with the loaded float on its diagonal.
-    let diagonal = x87_quiet_bits(fourth_lane);
-    for (column, lanes) in [
-        (0u32, [diagonal, 0, 0, 0]),
-        (0x10, [0, diagonal, 0, 0]),
-        (0x20, [0, 0, diagonal, 0]),
-    ] {
-        for (lane, bits) in lanes.into_iter().enumerate() {
-            e.mem
-                .set_u32(matrix_inverse + column + 4 * lane as u32, bits);
-        }
-    }
-    e.call(MATRIX_SET_MUL, &args![product_a, skew, inertia]);
-    e.call(MATRIX_SET_MUL, &args![product_b, product_a, skew]);
-    e.call(MATRIX_SUB, &args![matrix_inverse, product_b]);
-    let epsilon = x87_quiet_bits(e.mem.u32(INVERT_EPSILON));
-    let failed = e.call(MATRIX_INVERT, &args![matrix_inverse, epsilon]).u32() != 0;
-    if failed {
-        e.mem.free(frame);
-        return;
-    }
-    let object_damping = e.mem.f32(this + 0x4c);
-    let linear = mul_ps([object_damping; 4], load_vec(e, entity + 0x1b0));
-    let linear_at = at(0x84);
-    store_vec(e, linear_at, linear);
-    e.call(RIGID_BODY_SET_LINEAR_VELOCITY, &args![entity, linear_at]);
-    let object_damping = e.mem.f32(this + 0x4c);
-    let angular = mul_ps([object_damping; 4], load_vec(e, entity + 0x1c0));
-    let angular_at = at(0x94);
-    store_vec(e, angular_at, angular);
-    e.call(RIGID_BODY_SET_ANGULAR_VELOCITY, &args![entity, angular_at]);
-    e.call(ENTITY_POINT_QUERY_00CA0C40, &args![entity, point, relative]);
-    let elasticity_step = f32::from_bits(x87_store32(x87_mul(
-        x87_load32(e.mem.u32(this + 0x44)),
-        x87_m32(e.mem.u32(step + 0xc)),
-    )));
-    let scaled_difference = mul_ps([elasticity_step; 4], load_vec(e, difference));
-    store_vec(e, direction, scaled_difference);
-    let spring_damping = e.mem.f32(this + 0x40);
-    let from_relative = mul_ps([spring_damping; 4], load_vec(e, relative));
-    store_vec(e, direction, add_ps(from_relative, scaled_difference));
-    e.call(VECTOR_SET_MUL3, &args![impulse, matrix_inverse, direction]);
-    let mask = load_vec(e, NEGATION_MASK).map(|lane| lane.to_bits());
-    let negated: Vec4 = {
-        let lanes = load_vec(e, impulse);
-        std::array::from_fn(|lane| f32::from_bits(lanes[lane].to_bits() ^ mask[lane]))
-    };
-    store_vec(e, impulse, negated);
-    let squares = mul_ps(negated, negated);
-    let length_squared = squares[2] + (squares[1] + squares[0]);
-    let mass = x87_store32(e.call(MOTION_GET_MASS, &args![motion]).f64());
-    let limit = x87_store32(x87_mul(
-        x87_mul(x87_load32(e.mem.u32(step + 8)), x87_m32(mass)),
-        x87_m32(e.mem.u32(this + 0x48)),
-    ));
-    let limit_loaded = x87_load32(limit);
-    let limit_squared = x87_mul(limit_loaded, limit_loaded);
-    // `FCOM`: only an ordered "longer than the limit" scales the impulse.
-    if x87_load32(length_squared.to_bits()) > limit_squared {
-        let root = x87_store32(
-            e.call(CI_SQRT, &args![x87_load32(length_squared.to_bits())])
-                .f64(),
+    // The exe aligns ESP, then `SUB ESP,0x174`: the frame base is 0x174 bytes under the 16-byte
+    // boundary (00cbb1e3..00cbb1e6), its three pushes below it.
+    with_aligned_frame(e, 0x174, |e, frame| {
+        let at = |offset: u32| frame + offset;
+        let (impulse, point, relative, matrix_inverse, direction) =
+            (at(0x14), at(0x24), at(0x34), at(0x54), at(0x44));
+        let (difference, skew, product_a, inertia, product_b) =
+            (at(0xa4), at(0xb4), at(0xe4), at(0x114), at(0x144));
+        let entity = e.mem.u32(this + 0x18);
+        e.call(
+            VECTOR_SET_TRANSFORMED_POS,
+            &args![point, entity + 0xf0, this + 0x20],
         );
-        let inverse = x87_store32(x87_div(1.0, x87_load32(root)));
-        let factor = f32::from_bits(x87_store32(x87_mul(x87_load32(inverse), x87_m32(limit))));
-        let lanes = load_vec(e, impulse);
-        store_vec(e, impulse, mul_ps([factor; 4], lanes));
-    }
-    e.call(ENTITY_ACTIVATE, &args![entity]);
-    e.vcall(entity + 0xe0, 0x50, &args![impulse, point]);
-    let mut index = 0u32;
-    while (index as i32) < (e.mem.u32(this + 0x58) as i32) {
-        let callbacks = e.mem.u32(this + 0x54);
-        let callback = e.mem.u32(callbacks.wrapping_add(index * 4));
-        e.call(callback, &args![this, step, impulse]);
-        index += 1;
-    }
-    e.mem.free(frame);
+        let mouse = load_vec(e, this + 0x30);
+        let transformed = load_vec(e, point);
+        store_vec(e, difference, sub_ps(transformed, mouse));
+        let mut motion = e.call(ENTITY_GET_MOTION_00CA86C0, &args![entity]).u32();
+        if motion != 0 {
+            motion = e.call(ENTITY_GET_MOTION_00CA86C0, &args![entity]).u32();
+        } else {
+            motion = entity + 0xe0;
+        }
+        let fourth_lane = e.mem.u32(motion + 0xc0 + 0xc);
+        let centre = load_vec(e, entity + 0x140);
+        store_vec(e, relative, sub_ps(load_vec(e, point), centre));
+        e.call(MATRIX_SET_CROSS_SKEW_SYMMETRIC, &args![skew, relative]);
+        e.vcall(motion, 0x28, &args![inertia]);
+        // The diagonal matrix with the loaded float on its diagonal.
+        let diagonal = x87_quiet_bits(fourth_lane);
+        for (column, lanes) in [
+            (0u32, [diagonal, 0, 0, 0]),
+            (0x10, [0, diagonal, 0, 0]),
+            (0x20, [0, 0, diagonal, 0]),
+        ] {
+            for (lane, bits) in lanes.into_iter().enumerate() {
+                e.mem
+                    .set_u32(matrix_inverse + column + 4 * lane as u32, bits);
+            }
+        }
+        e.call(MATRIX_SET_MUL, &args![product_a, skew, inertia]);
+        e.call(MATRIX_SET_MUL, &args![product_b, product_a, skew]);
+        e.call(MATRIX_SUB, &args![matrix_inverse, product_b]);
+        let epsilon = x87_quiet_bits(e.mem.u32(INVERT_EPSILON));
+        let failed = e.call(MATRIX_INVERT, &args![matrix_inverse, epsilon]).u32() != 0;
+        if failed {
+            return;
+        }
+        let object_damping = e.mem.f32(this + 0x4c);
+        let linear = mul_ps([object_damping; 4], load_vec(e, entity + 0x1b0));
+        let linear_at = at(0x84);
+        store_vec(e, linear_at, linear);
+        e.call(RIGID_BODY_SET_LINEAR_VELOCITY, &args![entity, linear_at]);
+        let object_damping = e.mem.f32(this + 0x4c);
+        let angular = mul_ps([object_damping; 4], load_vec(e, entity + 0x1c0));
+        let angular_at = at(0x94);
+        store_vec(e, angular_at, angular);
+        e.call(RIGID_BODY_SET_ANGULAR_VELOCITY, &args![entity, angular_at]);
+        e.call(ENTITY_POINT_QUERY_00CA0C40, &args![entity, point, relative]);
+        let elasticity_step = f32::from_bits(x87_store32(x87_mul(
+            x87_load32(e.mem.u32(this + 0x44)),
+            x87_m32(e.mem.u32(step + 0xc)),
+        )));
+        let scaled_difference = mul_ps([elasticity_step; 4], load_vec(e, difference));
+        store_vec(e, direction, scaled_difference);
+        let spring_damping = e.mem.f32(this + 0x40);
+        let from_relative = mul_ps([spring_damping; 4], load_vec(e, relative));
+        store_vec(e, direction, add_ps(from_relative, scaled_difference));
+        e.call(VECTOR_SET_MUL3, &args![impulse, matrix_inverse, direction]);
+        let mask = load_vec(e, NEGATION_MASK).map(|lane| lane.to_bits());
+        let negated: Vec4 = {
+            let lanes = load_vec(e, impulse);
+            std::array::from_fn(|lane| f32::from_bits(lanes[lane].to_bits() ^ mask[lane]))
+        };
+        store_vec(e, impulse, negated);
+        let squares = mul_ps(negated, negated);
+        let length_squared = squares[2] + (squares[1] + squares[0]);
+        let mass = x87_store32(e.call(MOTION_GET_MASS, &args![motion]).f64());
+        let limit = x87_store32(x87_mul(
+            x87_mul(x87_load32(e.mem.u32(step + 8)), x87_m32(mass)),
+            x87_m32(e.mem.u32(this + 0x48)),
+        ));
+        let limit_loaded = x87_load32(limit);
+        let limit_squared = x87_mul(limit_loaded, limit_loaded);
+        // `FCOM`: only an ordered "longer than the limit" scales the impulse.
+        if x87_load32(length_squared.to_bits()) > limit_squared {
+            let root = x87_store32(
+                e.call(CI_SQRT, &args![x87_load32(length_squared.to_bits())])
+                    .f64(),
+            );
+            let inverse = x87_store32(x87_div(1.0, x87_load32(root)));
+            let factor = f32::from_bits(x87_store32(x87_mul(x87_load32(inverse), x87_m32(limit))));
+            let lanes = load_vec(e, impulse);
+            store_vec(e, impulse, mul_ps([factor; 4], lanes));
+        }
+        e.call(ENTITY_ACTIVATE, &args![entity]);
+        e.vcall(entity + 0xe0, 0x50, &args![impulse, point]);
+        let mut index = 0u32;
+        while (index as i32) < (e.mem.u32(this + 0x58) as i32) {
+            let callbacks = e.mem.u32(this + 0x54);
+            let callback = e.mem.u32(callbacks.wrapping_add(index * 4));
+            e.call(callback, &args![this, step, impulse]);
+            index += 1;
+        }
+    });
 }
 
 /// This unit's translated functions, by exe address.
@@ -1348,6 +1365,29 @@ mod apply_action_tests {
         assert_eq!(found(seen, MATRIX_INVERT)[0].0[1], 0x33d6_bf95);
         // Squared length 25 against the squared limit 1: the root is taken once.
         assert_eq!(found(seen, CI_SQRT).len(), 1);
+    }
+
+    #[test]
+    fn the_spring_locals_sit_in_the_aligned_exe_frame() {
+        let mut s = scene(0);
+        let callbacks = s.e.mem.alloc(8);
+        s.e.mem.set_u32(callbacks, CALLBACK);
+        s.e.mem.set_u32(s.action + 0x54, callbacks);
+        s.e.mem.set_u32(s.action + 0x58, 1);
+        let impulses = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&impulses);
+        s.e.register_double(CALLBACK, move |_, a| {
+            sink.borrow_mut().push(a[2]);
+            Ret::default()
+        });
+        let raw = s.e.mem.alloc(0x184);
+        s.e.mem.free(raw);
+        s.e.call(0x00cb_b1e0, &args![s.action, s.step]);
+        // The impulse is at +0x14 of the base 0x174 bytes under the boundary.
+        assert_eq!(
+            *impulses.borrow(),
+            vec![aligned_frame_at(raw, 0x174) + 0x14]
+        );
     }
 
     #[test]

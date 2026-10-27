@@ -6,6 +6,22 @@ use crate::prelude::*;
 
 use crate::units::havok_sdk::hkpsphereshape::{load_vec, Vec4};
 
+/// Runs `f` on an exe-shaped frame: a function that aligns `ESP` (`AND ESP,0xfffffff0`) and
+/// then reserves `below` bytes (its `SUB ESP` and pushes) has its frame `below` bytes under a
+/// 16-byte boundary; `f` gets the frame's lowest address.
+fn with_aligned_frame<R>(e: &mut Engine, below: u32, f: impl FnOnce(&mut Engine, u32) -> R) -> R {
+    e.with_stack(below + 0x10, |e, raw| {
+        let boundary = (raw.addr() + below + 0xf) & !0xf;
+        f(e, boundary - below)
+    })
+}
+
+/// The frame base [`with_aligned_frame`] picks for a block at `raw` (tests).
+#[cfg(test)]
+fn aligned_frame_at(raw: u32, below: u32) -> u32 {
+    ((raw + below + 0xf) & !0xf) - below
+}
+
 /// `0.5` as a `double` (`01011588`): the tolerance factor.
 const HALF_DOUBLE: u32 = 0x0101_1588;
 /// `0.5` as a `float` (`01016248`) and the four-lane `1.0` vector (`010ec7f0`): the centre blend.
@@ -224,22 +240,23 @@ pub fn hkp_entity_aabb_util_entity_batch_recalc_aabb(
     if count <= 0 {
         return;
     }
-    let block = e.mem.alloc(FRAME_SIZE + 0x10);
-    let frame = (block + 0xf) & !0xf;
-    let mut index = 0i32;
-    while index < count {
-        let entity = e
-            .mem
-            .u32(entities.addr().wrapping_add((index as u32).wrapping_mul(4)));
-        let shape = e.mem.u32(entity + ENTITY_SHAPE);
-        if e.mem.u16(entity + ENTITY_CAPACITY_CHILD_AABBS) == 0 {
-            recalc_single(e, input, entity, shape, half_tolerance, frame);
-        } else {
-            recalc_children(e, input, entity, shape, half_tolerance, frame);
+    // The exe aligns ESP, then `SUB ESP,0x5e4` and three pushes: the frame is the 0x5f0 bytes
+    // under the 16-byte boundary (00d1a333..00d1a348), so its base is aligned too.
+    with_aligned_frame(e, FRAME_SIZE, |e, frame| {
+        let mut index = 0i32;
+        while index < count {
+            let entity = e
+                .mem
+                .u32(entities.addr().wrapping_add((index as u32).wrapping_mul(4)));
+            let shape = e.mem.u32(entity + ENTITY_SHAPE);
+            if e.mem.u16(entity + ENTITY_CAPACITY_CHILD_AABBS) == 0 {
+                recalc_single(e, input, entity, shape, half_tolerance, frame);
+            } else {
+                recalc_children(e, input, entity, shape, half_tolerance, frame);
+            }
+            index += 1;
         }
-        index += 1;
-    }
-    e.mem.free(block);
+    });
 }
 
 /// The branch at 00d1ae20: an entity without child AABB capacity.
@@ -634,6 +651,29 @@ mod tests {
         // Below: 1000, 0, 0; above: 0, 0, 4000; their OR 0xfe8 gives the shift 4.
         assert_eq!(e.mem.bytes(entity + 0x3c, 4), vec![62, 0, 0, 4]);
         assert_eq!(e.mem.bytes(entity + 0x4c, 4), vec![0, 0, 250, 0]);
+    }
+
+    #[test]
+    fn the_batch_frame_is_0x5f0_bytes_under_a_16_byte_boundary() {
+        let mut e = Engine::new();
+        map_constants(&mut e);
+        e.register(GET_AABB_SINGLE, get_aabb_from_shape);
+        let input = make_input(&mut e, 0.0, 1000.0);
+        let shape = object(&mut e, 0x30, &[(SHAPE_GET_AABB, GET_AABB_SINGLE)]);
+        let entity = e.mem.alloc(0x200);
+        e.mem.set_u32(entity + ENTITY_SHAPE, shape);
+        let entities = e.mem.alloc(4);
+        e.mem.set_u32(entities, entity);
+        let raw = e.mem.alloc(FRAME_SIZE + 0x10);
+        e.mem.free(raw);
+        e.call_log = Some(vec![]);
+        e.call(0x00d1a330, &args![input, entities, 1u32]);
+        let log = e.call_log.take().unwrap();
+        let call = log
+            .iter()
+            .find(|(addr, _)| *addr == GET_AABB_SINGLE)
+            .unwrap();
+        assert_eq!(call.1[3], aligned_frame_at(raw, FRAME_SIZE) + FRAME_AABB);
     }
 
     #[test]

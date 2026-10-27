@@ -19,6 +19,22 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+/// Runs `f` on an exe-shaped frame: a function that aligns `ESP` (`AND ESP,0xfffffff0`) and
+/// then reserves `below` bytes (its `SUB ESP` and pushes) has its frame `below` bytes under a
+/// 16-byte boundary; `f` gets the frame's lowest address.
+fn with_aligned_frame<R>(e: &mut Engine, below: u32, f: impl FnOnce(&mut Engine, u32) -> R) -> R {
+    e.with_stack(below + 0x10, |e, raw| {
+        let boundary = (raw.addr() + below + 0xf) & !0xf;
+        f(e, boundary - below)
+    })
+}
+
+/// The frame base [`with_aligned_frame`] picks for a block at `raw` (tests).
+#[cfg(test)]
+fn aligned_frame_at(raw: u32, below: u32) -> u32 {
+    ((raw + below + 0xf) & !0xf) - below
+}
+
 /// Memory router (`00c85750`, no arguments): its `+0x10` is the allocator; the allocator's
 /// vtable slots are `+4` allocate `(size)`, `+8` free `(block, size)` and `+0x10` free an
 /// array `(block, bytes)`.
@@ -194,58 +210,61 @@ pub fn fn_00cf7690(e: &mut Engine, this: Ptr, op: Ptr) {
 /// object and a zero byte), drops the two references of every pair under the lock
 /// (`removeReferenceLockUnchecked`) and frees the local array's memory when it owns it.
 pub fn fn_00cf7ae0(e: &mut Engine, this: Ptr) {
-    let queue = this.addr();
-    while e.mem.u32(queue + 0x20) != 0 {
-        let local = e.mem.alloc(12);
-        e.mem.set_u32(local, 0);
-        e.mem.set_u32(local + 4, 0);
-        e.mem.set_u32(local + 8, NO_OWNED_MEMORY);
-        e.call(ARRAY_SWAP, &args![local, queue + 0x1c]);
-        let world = e.mem.u32(queue + 0xc);
-        e.mem.set_u32(world + 0x90, 0);
-        let alloc = allocator(e);
-        let capacity = e.mem.u32(queue + 0x24) & CAPACITY_MASK;
-        if (capacity as i32) < 0x10 {
-            let doubled = (capacity as i32).wrapping_add(capacity as i32);
-            let wanted = if doubled > 0x10 { doubled } else { 0x10 };
-            e.call(
-                ARRAY_RESERVE,
-                &args![alloc, queue + 0x1c, wanted as u32, 0x10u32],
-            );
+    // The exe's frame (`SUB ESP,0x14`, four pushes): 0x24 bytes, the swapped-out array at +0x18
+    // (00cf7afc..00cf7b04), the listener's answer byte at +0x13 (00cf7b82).
+    e.with_stack(0x24, |e, frame| {
+        let frame = frame.addr();
+        let queue = this.addr();
+        while e.mem.u32(queue + 0x20) != 0 {
+            let local = frame + 0x18;
+            e.mem.set_u32(local, 0);
+            e.mem.set_u32(local + 4, 0);
+            e.mem.set_u32(local + 8, NO_OWNED_MEMORY);
+            e.call(ARRAY_SWAP, &args![local, queue + 0x1c]);
+            let world = e.mem.u32(queue + 0xc);
+            e.mem.set_u32(world + 0x90, 0);
+            let alloc = allocator(e);
+            let capacity = e.mem.u32(queue + 0x24) & CAPACITY_MASK;
+            if (capacity as i32) < 0x10 {
+                let doubled = (capacity as i32).wrapping_add(capacity as i32);
+                let wanted = if doubled > 0x10 { doubled } else { 0x10 };
+                e.call(
+                    ARRAY_RESERVE,
+                    &args![alloc, queue + 0x1c, wanted as u32, 0x10u32],
+                );
+            }
+            let count = e.mem.u32(local + 4) as i32;
+            if count > 1 {
+                let data = e.mem.u32(local);
+                fn_00cf83c0(e, data, 0, count - 1, COMPARE_PAIRS);
+            }
+            let flag = frame + 0x13;
+            for index in 0..count.max(0) as u32 {
+                let item = e.mem.u32(local) + index * 16;
+                e.mem.set_u8(flag, 0);
+                let first = e.mem.u32(item);
+                let listener = e.mem.u32(item + 4);
+                e.vcall(listener, 0xc, &args![first, flag]);
+            }
+            e.call(LOCK_ENTER, &args![]);
+            for index in 0..count.max(0) as u32 {
+                let item = e.mem.u32(local) + index * 16;
+                let first = e.mem.u32(item);
+                let listener = e.mem.u32(item + 4);
+                e.call(REMOVE_REFERENCE_UNCHECKED, &args![first]);
+                e.call(REMOVE_REFERENCE_UNCHECKED, &args![listener]);
+            }
+            e.call(LOCK_LEAVE, &args![]);
+            let alloc = allocator(e);
+            e.mem.set_u32(local + 4, 0);
+            let capacity_flags = e.mem.u32(local + 8);
+            if (capacity_flags as i32) >= 0 {
+                let bytes = (capacity_flags & CAPACITY_MASK) << 4;
+                let data = e.mem.u32(local);
+                e.vcall(alloc, 0x10, &args![data, bytes]);
+            }
         }
-        let count = e.mem.u32(local + 4) as i32;
-        if count > 1 {
-            let data = e.mem.u32(local);
-            fn_00cf83c0(e, data, 0, count - 1, COMPARE_PAIRS);
-        }
-        let flag = e.mem.alloc(4);
-        for index in 0..count.max(0) as u32 {
-            let item = e.mem.u32(local) + index * 16;
-            e.mem.set_u8(flag, 0);
-            let first = e.mem.u32(item);
-            let listener = e.mem.u32(item + 4);
-            e.vcall(listener, 0xc, &args![first, flag]);
-        }
-        e.mem.free(flag);
-        e.call(LOCK_ENTER, &args![]);
-        for index in 0..count.max(0) as u32 {
-            let item = e.mem.u32(local) + index * 16;
-            let first = e.mem.u32(item);
-            let listener = e.mem.u32(item + 4);
-            e.call(REMOVE_REFERENCE_UNCHECKED, &args![first]);
-            e.call(REMOVE_REFERENCE_UNCHECKED, &args![listener]);
-        }
-        e.call(LOCK_LEAVE, &args![]);
-        let alloc = allocator(e);
-        e.mem.set_u32(local + 4, 0);
-        let capacity_flags = e.mem.u32(local + 8);
-        if (capacity_flags as i32) >= 0 {
-            let bytes = (capacity_flags & CAPACITY_MASK) << 4;
-            let data = e.mem.u32(local);
-            e.vcall(alloc, 0x10, &args![data, bytes]);
-        }
-        e.mem.free(local);
-    }
+    })
 }
 
 // Translated from 00cf83c0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -254,48 +273,51 @@ pub fn fn_00cf7ae0(e: &mut Engine, this: Ptr) {
 /// middle element's copy; the scans and swaps follow Hoare's scheme, recursing into the left
 /// part and iterating on the right.
 pub fn fn_00cf83c0(e: &mut Engine, base: u32, lo: i32, hi: i32, compare: u32) {
-    let mut lo = lo;
-    let pivot = e.mem.alloc(16);
-    loop {
-        let middle = (lo.wrapping_add(hi)) >> 1;
-        let source = base.wrapping_add((middle as u32) << 4);
-        let bytes = e.mem.bytes(source, 16);
-        e.mem.write(pivot, &bytes);
-        let mut i = lo;
-        let mut j = hi;
+    // The exe aligns ESP, then `SUB ESP,0x24` and three pushes: a 0x30-byte frame, the pivot
+    // element copied to +0x10 (00cf83eb..00cf8406).
+    with_aligned_frame(e, 0x30, |e, frame| {
+        let mut lo = lo;
+        let pivot = frame + 0x10;
         loop {
-            let mut left = base.wrapping_add((i as u32) << 4);
-            while e.call(compare, &args![left, pivot]).u8() != 0 {
-                left = left.wrapping_add(0x10);
-                i = i.wrapping_add(1);
-            }
-            let mut right = base.wrapping_add((j as u32) << 4);
-            while e.call(compare, &args![pivot, right]).u8() != 0 {
-                right = right.wrapping_sub(0x10);
+            let middle = (lo.wrapping_add(hi)) >> 1;
+            let source = base.wrapping_add((middle as u32) << 4);
+            let bytes = e.mem.bytes(source, 16);
+            e.mem.write(pivot, &bytes);
+            let mut i = lo;
+            let mut j = hi;
+            loop {
+                let mut left = base.wrapping_add((i as u32) << 4);
+                while e.call(compare, &args![left, pivot]).u8() != 0 {
+                    left = left.wrapping_add(0x10);
+                    i = i.wrapping_add(1);
+                }
+                let mut right = base.wrapping_add((j as u32) << 4);
+                while e.call(compare, &args![pivot, right]).u8() != 0 {
+                    right = right.wrapping_sub(0x10);
+                    j = j.wrapping_sub(1);
+                }
+                if j < i {
+                    break;
+                }
+                if j != i {
+                    swap_elements(e, base, i, j, 16);
+                }
                 j = j.wrapping_sub(1);
+                i = i.wrapping_add(1);
+                if i > j {
+                    break;
+                }
             }
-            if j < i {
+            if lo < j {
+                fn_00cf83c0(e, base, lo, j, compare);
+            }
+            if i < hi {
+                lo = i;
+            } else {
                 break;
             }
-            if j != i {
-                swap_elements(e, base, i, j, 16);
-            }
-            j = j.wrapping_sub(1);
-            i = i.wrapping_add(1);
-            if i > j {
-                break;
-            }
         }
-        if lo < j {
-            fn_00cf83c0(e, base, lo, j, compare);
-        }
-        if i < hi {
-            lo = i;
-        } else {
-            break;
-        }
-    }
-    e.mem.free(pivot);
+    })
 }
 
 /// Exchanges elements `i` and `j` of `size` bytes each.
@@ -313,50 +335,53 @@ fn swap_elements(e: &mut Engine, base: u32, i: i32, j: i32, size: u32) {
 /// `(result, a, b)`: it stores an `hkBool` in `result` and returns its address, and the sort
 /// reads the byte at the returned address.
 pub fn fn_00cf8510(e: &mut Engine, base: u32, lo: i32, hi: i32, compare: u32) {
-    let mut lo = lo;
-    let pivot = e.mem.alloc(0x14);
-    let result = e.mem.alloc(4);
-    loop {
-        let middle = (lo.wrapping_add(hi)) >> 1;
-        let source = base.wrapping_add((middle as u32).wrapping_mul(0x14));
-        let bytes = e.mem.bytes(source, 0x14);
-        e.mem.write(pivot, &bytes);
-        let mut i = lo;
-        let mut j = hi;
+    // The exe aligns ESP, then `SUB ESP,0x54` and three pushes: a 0x60-byte frame, the pivot
+    // element copied to +0x40 (00cf853b..00cf8566), the comparison's answer byte at +0x1a
+    // (00cf8570).
+    with_aligned_frame(e, 0x60, |e, frame| {
+        let mut lo = lo;
+        let pivot = frame + 0x40;
+        let result = frame + 0x1a;
         loop {
-            let mut left = base.wrapping_add((i as u32).wrapping_mul(0x14));
-            while compare_flag(e, compare, result, left, pivot) {
-                left = left.wrapping_add(0x14);
-                i = i.wrapping_add(1);
-            }
-            let mut right = base.wrapping_add((j as u32).wrapping_mul(0x14));
-            while compare_flag(e, compare, result, pivot, right) {
-                right = right.wrapping_sub(0x14);
+            let middle = (lo.wrapping_add(hi)) >> 1;
+            let source = base.wrapping_add((middle as u32).wrapping_mul(0x14));
+            let bytes = e.mem.bytes(source, 0x14);
+            e.mem.write(pivot, &bytes);
+            let mut i = lo;
+            let mut j = hi;
+            loop {
+                let mut left = base.wrapping_add((i as u32).wrapping_mul(0x14));
+                while compare_flag(e, compare, result, left, pivot) {
+                    left = left.wrapping_add(0x14);
+                    i = i.wrapping_add(1);
+                }
+                let mut right = base.wrapping_add((j as u32).wrapping_mul(0x14));
+                while compare_flag(e, compare, result, pivot, right) {
+                    right = right.wrapping_sub(0x14);
+                    j = j.wrapping_sub(1);
+                }
+                if j < i {
+                    break;
+                }
+                if j != i {
+                    swap_elements(e, base, i, j, 0x14);
+                }
                 j = j.wrapping_sub(1);
+                i = i.wrapping_add(1);
+                if i > j {
+                    break;
+                }
             }
-            if j < i {
+            if lo < j {
+                fn_00cf8510(e, base, lo, j, compare);
+            }
+            if i < hi {
+                lo = i;
+            } else {
                 break;
             }
-            if j != i {
-                swap_elements(e, base, i, j, 0x14);
-            }
-            j = j.wrapping_sub(1);
-            i = i.wrapping_add(1);
-            if i > j {
-                break;
-            }
         }
-        if lo < j {
-            fn_00cf8510(e, base, lo, j, compare);
-        }
-        if i < hi {
-            lo = i;
-        } else {
-            break;
-        }
-    }
-    e.mem.free(result);
-    e.mem.free(pivot);
+    })
 }
 
 /// Calls the hidden-result comparison and reads the byte it points to.
@@ -375,9 +400,8 @@ enum Release {
 }
 
 /// A vector `(x, y, z, w)` of raw float bits built from the three floats at `words` and the
-/// constant fourth lane, stored in a fresh 16-byte block.
-fn operation_vector(e: &mut Engine, words: u32) -> u32 {
-    let block = e.mem.alloc(16);
+/// constant fourth lane, stored at `block` (its slot in `00cf7c10`'s frame).
+fn operation_vector(e: &mut Engine, words: u32, block: u32) -> u32 {
     for lane in 0..3 {
         let value = e.mem.u32(words + 4 * lane);
         e.mem.set_u32(block + 4 * lane, value);
@@ -414,42 +438,46 @@ fn release_batch(e: &mut Engine, array: u32, count: u32) {
 /// on the object, 36 a call of the object's slot `+0xC`; 12, 30, 31 and the unknown kinds do
 /// nothing. The names are those of the Xbox PDB for the called functions.
 pub fn fn_00cf7c10(e: &mut Engine, this: Ptr) {
-    let queue = this.addr();
-    e.call(LOCK_ENTER, &args![]);
-    let local = e.mem.alloc(12);
-    e.mem.set_u32(local, 0);
-    e.mem.set_u32(local + 4, 0);
-    e.mem.set_u32(local + 8, NO_OWNED_MEMORY);
-    e.call(ARRAY_SWAP, &args![local, queue]);
-    let world = e.mem.u32(queue + 0xc);
-    let nesting = e.mem.u32(world + 0xa4);
-    e.mem.set_u32(world + 0xa4, nesting.wrapping_add(1));
-    run_merges(e, queue);
-    let count = e.mem.u32(local + 4) as i32;
-    if count > 0 {
-        let mut record = e.mem.u32(local);
-        for _ in 0..count {
-            run_record(e, queue, record);
-            if e.mem.u32(queue + 4) != 0 {
-                fn_00cf7c10(e, this);
+    // The exe aligns ESP, then `SUB ESP,0x84` and three pushes: a 0x90-byte frame with the
+    // swapped-out array at +0x34 (00cf7c29), the answer bytes at +0x1a and +0x1b, the action's
+    // entity array at +0x28 and the operation vectors at +0x40..+0x70 (see `run_record`).
+    with_aligned_frame(e, 0x90, |e, frame| {
+        let queue = this.addr();
+        e.call(LOCK_ENTER, &args![]);
+        let local = frame + 0x34;
+        e.mem.set_u32(local, 0);
+        e.mem.set_u32(local + 4, 0);
+        e.mem.set_u32(local + 8, NO_OWNED_MEMORY);
+        e.call(ARRAY_SWAP, &args![local, queue]);
+        let world = e.mem.u32(queue + 0xc);
+        let nesting = e.mem.u32(world + 0xa4);
+        e.mem.set_u32(world + 0xa4, nesting.wrapping_add(1));
+        run_merges(e, queue);
+        let count = e.mem.u32(local + 4) as i32;
+        if count > 0 {
+            let mut record = e.mem.u32(local);
+            for _ in 0..count {
+                run_record(e, queue, record, frame);
+                if e.mem.u32(queue + 4) != 0 {
+                    fn_00cf7c10(e, this);
+                }
+                record = record.wrapping_add(0x14);
             }
-            record = record.wrapping_add(0x14);
         }
-    }
-    e.call(ARRAY_SWAP, &args![local, queue]);
-    e.mem.set_u32(queue + 4, 0);
-    let world = e.mem.u32(queue + 0xc);
-    let nesting = e.mem.u32(world + 0xa4);
-    e.mem.set_u32(world + 0xa4, nesting.wrapping_sub(1));
-    e.call(LOCK_LEAVE, &args![]);
-    let alloc = allocator(e);
-    let capacity_flags = e.mem.u32(local + 8);
-    if (capacity_flags as i32) >= 0 {
-        let bytes = (capacity_flags & CAPACITY_MASK).wrapping_mul(0x14);
-        let data = e.mem.u32(local);
-        e.vcall(alloc, 0x10, &args![data, bytes]);
-    }
-    e.mem.free(local);
+        e.call(ARRAY_SWAP, &args![local, queue]);
+        e.mem.set_u32(queue + 4, 0);
+        let world = e.mem.u32(queue + 0xc);
+        let nesting = e.mem.u32(world + 0xa4);
+        e.mem.set_u32(world + 0xa4, nesting.wrapping_sub(1));
+        e.call(LOCK_LEAVE, &args![]);
+        let alloc = allocator(e);
+        let capacity_flags = e.mem.u32(local + 8);
+        if (capacity_flags as i32) >= 0 {
+            let bytes = (capacity_flags & CAPACITY_MASK).wrapping_mul(0x14);
+            let data = e.mem.u32(local);
+            e.vcall(alloc, 0x10, &args![data, bytes]);
+        }
+    })
 }
 
 /// The first part of `00cf7c10`: applies the queued island-merge requests.
@@ -494,7 +522,7 @@ fn run_merges(e: &mut Engine, queue: u32) {
 }
 
 /// Runs one operation record and releases what it holds.
-fn run_record(e: &mut Engine, queue: u32, record: u32) {
+fn run_record(e: &mut Engine, queue: u32, record: u32, frame: u32) {
     let world = e.mem.u32(queue + 0xc);
     let a = e.mem.u32(record + 4);
     let b = e.mem.u32(record + 8);
@@ -508,9 +536,8 @@ fn run_record(e: &mut Engine, queue: u32, record: u32) {
         }
         2 => {
             if in_world(e, a) {
-                let result = e.mem.alloc(4);
-                e.call(0x00c9_1620, &args![world, result, a]);
-                e.mem.free(result);
+                // The answer byte at +0x1a of `00cf7c10`'s frame (00cf7d5a).
+                e.call(0x00c9_1620, &args![world, frame + 0x1a, a]);
             }
             Release::First
         }
@@ -559,15 +586,14 @@ fn run_record(e: &mut Engine, queue: u32, record: u32) {
         }
         9 => {
             if e.mem.u32(a + 8) != 0 {
-                let result = e.mem.alloc(4);
-                e.call(0x00c9_7e80, &args![world, result, a]);
-                e.mem.free(result);
+                // The answer byte at +0x1b of `00cf7c10`'s frame (00cf7e5b).
+                e.call(0x00c9_7e80, &args![world, frame + 0x1b, a]);
             }
             Release::First
         }
         10 => {
             if e.mem.u32(a + 8) == 0 {
-                add_action_if_all_in_world(e, world, a);
+                add_action_if_all_in_world(e, world, a, frame + 0x28);
             }
             Release::First
         }
@@ -655,23 +681,25 @@ fn run_record(e: &mut Engine, queue: u32, record: u32) {
             Release::First
         }
         25 => {
-            let vector = operation_vector(e, record + 8);
+            let vector = operation_vector(e, record + 8, frame + 0x40);
             e.call(0x0056_16d0, &args![a, vector]);
-            e.mem.free(vector);
             Release::First
         }
         26 => {
-            let vector = operation_vector(e, record + 8);
+            let vector = operation_vector(e, record + 8, frame + 0x50);
             e.call(0x0056_1800, &args![a, vector]);
-            e.mem.free(vector);
             Release::First
         }
         27 | 29 => {
-            let vector = operation_vector(e, record + 8);
+            // Kind 27 builds its vector at +0x60, kind 29 at +0x70 (00cf80fe, 00cf8186).
+            let (slot, at) = if e.mem.u8(record) == 27 {
+                (0x4c, frame + 0x60)
+            } else {
+                (0x54, frame + 0x70)
+            };
+            let vector = operation_vector(e, record + 8, at);
             e.call(0x00c9_c1d0, &args![a]);
-            let slot = if e.mem.u8(record) == 27 { 0x4c } else { 0x54 };
             e.vcall(a + 0xe0, slot, &args![vector]);
-            e.mem.free(vector);
             Release::First
         }
         28 => {
@@ -721,9 +749,9 @@ fn run_record(e: &mut Engine, queue: u32, record: u32) {
 }
 
 /// Kind 10: when none of the action's entities (its slot `+0x10` fills an array with them)
-/// lies in another world, adds the action to the world.
-fn add_action_if_all_in_world(e: &mut Engine, world: u32, action: u32) {
-    let entities = e.mem.alloc(12);
+/// lies in another world, adds the action to the world. `entities` is the array's slot in
+/// `00cf7c10`'s frame (+0x28, 00cf7e77..00cf7e8c).
+fn add_action_if_all_in_world(e: &mut Engine, world: u32, action: u32, entities: u32) {
     e.mem.set_u32(entities, 0);
     e.mem.set_u32(entities + 4, 0);
     e.mem.set_u32(entities + 8, NO_OWNED_MEMORY);
@@ -750,7 +778,6 @@ fn add_action_if_all_in_world(e: &mut Engine, world: u32, action: u32) {
         let data = e.mem.u32(entities);
         e.vcall(alloc, 0x10, &args![data, bytes]);
     }
-    e.mem.free(entities);
 }
 
 /// Kind 23: moves the entries of the pointer array (`a`, `b & 0xFFFF` entries) that are not
@@ -1791,6 +1818,101 @@ mod tests {
         assert!(calls_to(&calls, REMOVE_REFERENCE).is_empty());
         assert_eq!(e.mem.u32(queue + 4), 0);
         assert_eq!(e.mem.u32(world + 0xa4), 0);
+    }
+
+    #[test]
+    fn the_sorts_keep_their_pivot_and_answer_in_aligned_frames() {
+        let (mut e, _) = engine();
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&seen);
+        e.register_double(0x0900_0200, move |e, a| {
+            sink.borrow_mut().push(a[1]);
+            u32::from(e.mem.u32(a[0]) < e.mem.u32(a[1])).into_ret()
+        });
+        let base = keyed(&mut e, &[3, 1, 2], 16);
+        let raw = e.mem.alloc(0x40);
+        e.mem.free(raw);
+        e.call(0x00cf_83c0, &args![base, 0u32, 2u32, 0x0900_0200u32]);
+        assert_eq!(seen.borrow()[0], aligned_frame_at(raw, 0x30) + 0x10);
+        let hidden = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&hidden);
+        e.register_double(0x0900_0210, move |e, a| {
+            sink.borrow_mut().push((a[0], a[2]));
+            let less = e.mem.u32(a[1]) < e.mem.u32(a[2]);
+            e.mem.set_u8(a[0], u8::from(less));
+            a[0].into_ret()
+        });
+        let base = keyed(&mut e, &[3, 1, 2], 20);
+        let raw = e.mem.alloc(0x70);
+        e.mem.free(raw);
+        e.call(0x00cf_8510, &args![base, 0u32, 2u32, 0x0900_0210u32]);
+        let frame = aligned_frame_at(raw, 0x60);
+        assert_eq!(hidden.borrow()[0], (frame + 0x1a, frame + 0x40));
+    }
+
+    #[test]
+    fn flushing_pairs_keeps_the_array_and_answer_byte_in_the_exe_frame() {
+        let (mut e, calls) = engine();
+        let (queue, _world) = queue(&mut e, 1);
+        let vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(vtable + 0xc, LISTENER_DOUBLE);
+        let listener = e.mem.alloc(0x10);
+        e.mem.set_u32(listener, vtable);
+        let log = Rc::clone(&calls);
+        e.register_double(LISTENER_DOUBLE, move |_, a| {
+            log.borrow_mut().push((LISTENER_DOUBLE, a.to_vec()));
+            Ret::default()
+        });
+        let pairs = e.mem.alloc(16);
+        e.mem.set_u32(pairs, 10);
+        e.mem.set_u32(pairs + 4, listener);
+        e.mem.set_u32(queue + 0x1c, pairs);
+        e.mem.set_u32(queue + 0x20, 1);
+        e.mem.set_u32(queue + 0x24, 1);
+        let frame = e.mem.alloc(0x24);
+        e.mem.free(frame);
+        e.call(0x00cf_7ae0, &args![queue]);
+        assert_eq!(calls_to(&calls, LISTENER_DOUBLE)[0][2], frame + 0x13);
+        // The pairs were swapped into the array at +0x18.
+        assert_eq!(e.mem.u32(frame + 0x18), pairs);
+    }
+
+    #[test]
+    fn executing_keeps_the_answer_bytes_and_vectors_in_the_aligned_frame() {
+        let (mut e, calls) = engine();
+        let (queue, world) = queue(&mut e, 8);
+        let member = object(&mut e, world, 1, 1);
+        let body = object(&mut e, world, 1, 1);
+        let motion_vtable = e.mem.alloc(0x60);
+        for slot in [0x4cu32, 0x50, 0x54] {
+            e.mem.set_u32(motion_vtable + slot, MOTION_DOUBLE);
+        }
+        e.mem.set_u32(body + 0xe0, motion_vtable);
+        for address in [MOTION_DOUBLE, 0x0056_16d0, 0x0056_1800] {
+            let log = Rc::clone(&calls);
+            e.register_double(address, move |_, a| {
+                log.borrow_mut().push((address, a.to_vec()));
+                Ret::default()
+            });
+        }
+        enqueue(&mut e, queue, 2, [member, 0, 0, 0]);
+        enqueue(&mut e, queue, 25, [body, 1, 2, 3]);
+        enqueue(&mut e, queue, 26, [body, 1, 2, 3]);
+        enqueue(&mut e, queue, 27, [body, 1, 2, 3]);
+        enqueue(&mut e, queue, 29, [body, 1, 2, 3]);
+        calls.borrow_mut().clear();
+        let raw = e.mem.alloc(0xa0);
+        e.mem.free(raw);
+        e.call(0x00cf_7c10, &args![queue]);
+        let frame = aligned_frame_at(raw, 0x90);
+        assert_eq!(calls_to(&calls, 0x00c9_1620)[0][1], frame + 0x1a);
+        assert_eq!(calls_to(&calls, 0x0056_16d0)[0][1], frame + 0x40);
+        assert_eq!(calls_to(&calls, 0x0056_1800)[0][1], frame + 0x50);
+        let motions: Vec<u32> = calls_to(&calls, MOTION_DOUBLE)
+            .iter()
+            .map(|c| c[1])
+            .collect();
+        assert_eq!(motions, vec![frame + 0x60, frame + 0x70]);
     }
 }
 

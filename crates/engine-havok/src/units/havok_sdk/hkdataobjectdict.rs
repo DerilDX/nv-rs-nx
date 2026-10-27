@@ -3977,12 +3977,14 @@ pub fn hk_data_class_dict_get_declared_member_info(
 /// is `other` or one of its ancestors: for `other` and each parent (slot `0x10`) the name (slot
 /// `8`) is interned through the world's tracker (null stays null) and compared with this
 /// class's own name (the field `+8` of the name handle at `+0x10`). A null `other` gives 0.
+/// Answers `out`: the exe leaves it in `EAX` at every `RET` (the hkBool/hkResult result
+/// returned through a pointer, which callers read through `EAX`).
 pub fn hk_data_class_dict_is_super_class(
     e: &mut Engine,
     this: Ptr<HkDataClassDict>,
     out: u32,
     other: u32,
-) {
+) -> u32 {
     let mut candidate = other;
     while candidate != 0 {
         let name = e.vcall(candidate, 8, &args![]).u32();
@@ -3992,11 +3994,12 @@ pub fn hk_data_class_dict_is_super_class(
         let own_handle = e.mem.u32(this.addr() + 0x10);
         if interned == e.mem.u32(own_handle + 8) {
             e.mem.set_u8(out, 1);
-            return;
+            return out;
         }
         candidate = e.vcall(candidate, 0x10, &args![]).u32();
     }
     e.mem.set_u8(out, 0);
+    out
 }
 
 // Translated from 00dcad10 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -5710,7 +5713,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x00dc_ac80,
-            hk_data_class_dict_is_super_class(Ptr<HkDataClassDict>, u32, u32)
+            hk_data_class_dict_is_super_class(Ptr<HkDataClassDict>, u32, u32) -> u32
         ),
         entry!(
             0x00dc_ad10,
@@ -9166,6 +9169,18 @@ mod dict_tests {
             e.call(0x00dc_ac80, &args![class, out, other]);
             assert_eq!(e.mem.u8(out), expected);
         }
+    }
+
+    #[test]
+    fn fn_00dcac80_answers_its_result_pointer() {
+        let mut e = fresh();
+        basics(&mut e);
+        let class = e.mem.alloc(0x40);
+        let out = e.mem.alloc(4);
+        // No other class: nothing is compared; EAX is `out` at both RETs (the hkBool result
+        // pointer the callers read through).
+        assert_eq!(e.call(0x00dc_ac80, &args![class, out, 0u32]).u32(), out);
+        assert_eq!(e.mem.u8(out), 0);
     }
 
     #[test]

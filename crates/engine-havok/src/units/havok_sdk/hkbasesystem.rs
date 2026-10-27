@@ -144,80 +144,84 @@ pub fn hk_base_system_quit_thread(e: &mut Engine) -> u32 {
 /// end of the list. Finally the array's buffer is freed through the router's `+0xc` allocator
 /// when it grew (the array starts not owning a buffer).
 pub fn fn_00cbb9f0(e: &mut Engine) {
-    // The local array: data pointer, size, capacity word.
-    let array = e.mem.alloc(12);
-    e.mem.set_u32(array + 8, NOT_OWNED);
-    let mut link = SINGLETON_LIST;
-    let mut node = e.mem.u32(SINGLETON_LIST);
-    if node != 0 {
-        loop {
-            let slot = e.mem.u32(node + 0xc);
-            let creator = e.mem.u32(node + 4);
-            if e.mem.u32(slot) == 0 && creator != 0 {
-                let created = e.call(creator, &args![]).u32();
-                if created == 0 {
-                    // Creation failed: move the node onto the array.
-                    let router = e.call(MEMORY_ROUTER, &args![]).u32();
-                    let size = e.mem.u32(array + 4);
-                    if size == (e.mem.u32(array + 8) & CAPACITY_MASK) {
-                        let allocator = e.mem.u32(router + 0xc);
-                        e.call(ARRAY_GROW, &args![allocator, array, 4u32]);
-                    }
-                    let size = e.mem.u32(array + 4);
-                    let data = e.mem.u32(array);
-                    e.mem.set_u32(data.wrapping_add(size.wrapping_mul(4)), node);
-                    e.mem.set_u32(array + 4, size.wrapping_add(1));
-                    let following = e.mem.u32(node + 8);
-                    let linked = e.mem.u32(link);
-                    e.mem.set_u32(linked + 8, 0);
-                    e.mem.set_u32(link, following);
-                    node = following;
-                    if node == 0 {
-                        break;
-                    }
-                    continue;
-                }
-                e.mem.set_u32(slot, created);
-            }
-            link = node + 8;
-            node = e.mem.u32(link);
-            if node == 0 {
-                break;
-            }
-        }
-        let mut size = e.mem.u32(array + 4);
-        while size != 0 {
-            let mut index = size.wrapping_sub(1) as i32;
-            while index >= 0 {
-                let data = e.mem.u32(array);
-                let retry = e.mem.u32(data.wrapping_add((index as u32).wrapping_mul(4)));
-                let creator = e.mem.u32(retry + 4);
-                let created = e.call(creator, &args![]).u32();
-                if created != 0 {
-                    let slot = e.mem.u32(retry + 0xc);
-                    e.mem.set_u32(slot, created);
-                    e.mem.set_u32(link, retry);
-                    let remaining = e.mem.u32(array + 4).wrapping_sub(1);
-                    link = retry + 8;
-                    e.mem.set_u32(array + 4, remaining);
-                    if remaining != index as u32 {
+    // The local array: data pointer, size, capacity word. The exe's frame (`SUB ESP,0xc`,
+    // three pushes): 0x18 bytes, the array at +0xc (00cbba03).
+    e.with_stack(0x18, |e, frame| {
+        let array = frame.addr() + 0xc;
+        e.mem.set_u32(array, 0);
+        e.mem.set_u32(array + 4, 0);
+        e.mem.set_u32(array + 8, NOT_OWNED);
+        let mut link = SINGLETON_LIST;
+        let mut node = e.mem.u32(SINGLETON_LIST);
+        if node != 0 {
+            loop {
+                let slot = e.mem.u32(node + 0xc);
+                let creator = e.mem.u32(node + 4);
+                if e.mem.u32(slot) == 0 && creator != 0 {
+                    let created = e.call(creator, &args![]).u32();
+                    if created == 0 {
+                        // Creation failed: move the node onto the array.
+                        let router = e.call(MEMORY_ROUTER, &args![]).u32();
+                        let size = e.mem.u32(array + 4);
+                        if size == (e.mem.u32(array + 8) & CAPACITY_MASK) {
+                            let allocator = e.mem.u32(router + 0xc);
+                            e.call(ARRAY_GROW, &args![allocator, array, 4u32]);
+                        }
+                        let size = e.mem.u32(array + 4);
                         let data = e.mem.u32(array);
-                        let moved = e.mem.u32(data.wrapping_add(remaining.wrapping_mul(4)));
-                        e.mem
-                            .set_u32(data.wrapping_add((index as u32).wrapping_mul(4)), moved);
+                        e.mem.set_u32(data.wrapping_add(size.wrapping_mul(4)), node);
+                        e.mem.set_u32(array + 4, size.wrapping_add(1));
+                        let following = e.mem.u32(node + 8);
+                        let linked = e.mem.u32(link);
+                        e.mem.set_u32(linked + 8, 0);
+                        e.mem.set_u32(link, following);
+                        node = following;
+                        if node == 0 {
+                            break;
+                        }
+                        continue;
                     }
+                    e.mem.set_u32(slot, created);
                 }
-                index = index.wrapping_sub(1);
+                link = node + 8;
+                node = e.mem.u32(link);
+                if node == 0 {
+                    break;
+                }
             }
-            size = e.mem.u32(array + 4);
+            let mut size = e.mem.u32(array + 4);
+            while size != 0 {
+                let mut index = size.wrapping_sub(1) as i32;
+                while index >= 0 {
+                    let data = e.mem.u32(array);
+                    let retry = e.mem.u32(data.wrapping_add((index as u32).wrapping_mul(4)));
+                    let creator = e.mem.u32(retry + 4);
+                    let created = e.call(creator, &args![]).u32();
+                    if created != 0 {
+                        let slot = e.mem.u32(retry + 0xc);
+                        e.mem.set_u32(slot, created);
+                        e.mem.set_u32(link, retry);
+                        let remaining = e.mem.u32(array + 4).wrapping_sub(1);
+                        link = retry + 8;
+                        e.mem.set_u32(array + 4, remaining);
+                        if remaining != index as u32 {
+                            let data = e.mem.u32(array);
+                            let moved = e.mem.u32(data.wrapping_add(remaining.wrapping_mul(4)));
+                            e.mem
+                                .set_u32(data.wrapping_add((index as u32).wrapping_mul(4)), moved);
+                        }
+                    }
+                    index = index.wrapping_sub(1);
+                }
+                size = e.mem.u32(array + 4);
+            }
         }
-    }
-    let allocator = router_allocator(e, 0xc);
-    let capacity = e.mem.u32(array + 8);
-    let data = e.mem.u32(array);
-    e.mem.set_u32(array + 4, 0);
-    free_array_buffer(e, allocator, data, capacity, 4);
-    e.mem.free(array);
+        let allocator = router_allocator(e, 0xc);
+        let capacity = e.mem.u32(array + 8);
+        let data = e.mem.u32(array);
+        e.mem.set_u32(array + 4, 0);
+        free_array_buffer(e, allocator, data, capacity, 4);
+    });
 }
 
 // Translated from 00cbbb10 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -272,45 +276,49 @@ pub fn fn_00cbbb10(
 /// `removeReferenceLockUnchecked` on the singleton and clears the slot. The array's buffer is
 /// freed through the router's `+0x10` allocator when it grew.
 pub fn fn_00cbbbd0(e: &mut Engine) {
-    // The local array (12 header bytes, then 512 bytes of storage).
-    let array = e.mem.alloc(12 + 512);
-    e.mem.set_u32(array, array + 12);
-    e.mem.set_u32(array + 8, 0x8000_0080);
-    let mut node = e.mem.u32(SINGLETON_LIST);
-    while node != 0 {
-        let router = e.call(MEMORY_ROUTER, &args![]).u32();
-        let size = e.mem.u32(array + 4);
-        if size == (e.mem.u32(array + 8) & CAPACITY_MASK) {
-            let allocator = e.mem.u32(router + 0x10);
-            e.call(ARRAY_GROW, &args![allocator, array, 4u32]);
+    // The local array (12 header bytes, then 512 bytes of storage). The exe's frame
+    // (`SUB ESP,0x20c`, one push): 0x210 bytes, the header at +0x4 and the storage at +0x10
+    // (00cbbbdd).
+    e.with_stack(0x210, |e, frame| {
+        let array = frame.addr() + 4;
+        e.mem.set_u32(array, array + 12);
+        e.mem.set_u32(array + 4, 0);
+        e.mem.set_u32(array + 8, 0x8000_0080);
+        let mut node = e.mem.u32(SINGLETON_LIST);
+        while node != 0 {
+            let router = e.call(MEMORY_ROUTER, &args![]).u32();
+            let size = e.mem.u32(array + 4);
+            if size == (e.mem.u32(array + 8) & CAPACITY_MASK) {
+                let allocator = e.mem.u32(router + 0x10);
+                e.call(ARRAY_GROW, &args![allocator, array, 4u32]);
+            }
+            let size = e.mem.u32(array + 4);
+            let data = e.mem.u32(array);
+            e.mem.set_u32(data.wrapping_add(size.wrapping_mul(4)), node);
+            e.mem.set_u32(array + 4, size.wrapping_add(1));
+            node = e.mem.u32(node + 8);
         }
-        let size = e.mem.u32(array + 4);
-        let data = e.mem.u32(array);
-        e.mem.set_u32(data.wrapping_add(size.wrapping_mul(4)), node);
-        e.mem.set_u32(array + 4, size.wrapping_add(1));
-        node = e.mem.u32(node + 8);
-    }
-    let mut index = e.mem.u32(array + 4).wrapping_sub(1) as i32;
-    while index >= 0 {
-        let data = e.mem.u32(array);
-        let entry = e.mem.u32(data.wrapping_add((index as u32).wrapping_mul(4)));
-        let slot = e.mem.u32(entry + 0xc);
-        let singleton = e.mem.u32(slot);
-        if singleton != 0 {
-            e.call(REMOVE_REFERENCE_UNCHECKED, &args![singleton]);
+        let mut index = e.mem.u32(array + 4).wrapping_sub(1) as i32;
+        while index >= 0 {
             let data = e.mem.u32(array);
             let entry = e.mem.u32(data.wrapping_add((index as u32).wrapping_mul(4)));
             let slot = e.mem.u32(entry + 0xc);
-            e.mem.set_u32(slot, 0);
+            let singleton = e.mem.u32(slot);
+            if singleton != 0 {
+                e.call(REMOVE_REFERENCE_UNCHECKED, &args![singleton]);
+                let data = e.mem.u32(array);
+                let entry = e.mem.u32(data.wrapping_add((index as u32).wrapping_mul(4)));
+                let slot = e.mem.u32(entry + 0xc);
+                e.mem.set_u32(slot, 0);
+            }
+            index = index.wrapping_sub(1);
         }
-        index = index.wrapping_sub(1);
-    }
-    let allocator = router_allocator(e, 0x10);
-    let capacity = e.mem.u32(array + 8);
-    let data = e.mem.u32(array);
-    e.mem.set_u32(array + 4, 0);
-    free_array_buffer(e, allocator, data, capacity, 4);
-    e.mem.free(array);
+        let allocator = router_allocator(e, 0x10);
+        let capacity = e.mem.u32(array + 8);
+        let data = e.mem.u32(array);
+        e.mem.set_u32(array + 4, 0);
+        free_array_buffer(e, allocator, data, capacity, 4);
+    });
 }
 
 // Translated from 00cbbcb0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -421,28 +429,30 @@ fn free_string_buffer(e: &mut Engine, buffer: u32) {
 /// string buffer is freed either way.
 /// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
 pub fn hk_native_file_system_open_reader(e: &mut Engine, _this: u32, path: u32) -> u32 {
-    let buffer = e.mem.alloc(0x8c);
-    let temporary = e.mem.alloc(4);
-    fn_00cbbd80(e, buffer);
-    let block = allocate_sized(e, 0x14);
-    let function = e.mem.u32(OPEN_FILE_POINTER);
-    let stream = e.call(function, &args![path, buffer]).u32();
-    let reader = e.call(STDIO_READER_CONSTRUCT, &args![block, stream]).u32();
-    let answered = e.vcall(reader, 0x18, &args![temporary]).u32();
-    let result = if e.mem.u8(answered) == 0 {
-        let block = allocate_sized(e, 0x24);
-        let buffered = e
-            .call(BUFFERED_READER_CONSTRUCT, &args![block, reader, 0x1000u32])
-            .u32();
-        e.call(REMOVE_REFERENCE, &args![reader]);
-        buffered
-    } else {
-        reader
-    };
-    free_string_buffer(e, buffer);
-    e.mem.free(temporary);
-    e.mem.free(buffer);
-    result
+    // The exe's frame (`SUB ESP,0x90`, one push): 0x94 bytes, the answer byte at +0x7
+    // (00cbbe31) and the string buffer at +0x8 (00cbbde7).
+    e.with_stack(0x94, |e, frame| {
+        let buffer = frame.addr() + 8;
+        let temporary = frame.addr() + 7;
+        fn_00cbbd80(e, buffer);
+        let block = allocate_sized(e, 0x14);
+        let function = e.mem.u32(OPEN_FILE_POINTER);
+        let stream = e.call(function, &args![path, buffer]).u32();
+        let reader = e.call(STDIO_READER_CONSTRUCT, &args![block, stream]).u32();
+        let answered = e.vcall(reader, 0x18, &args![temporary]).u32();
+        let result = if e.mem.u8(answered) == 0 {
+            let block = allocate_sized(e, 0x24);
+            let buffered = e
+                .call(BUFFERED_READER_CONSTRUCT, &args![block, reader, 0x1000u32])
+                .u32();
+            e.call(REMOVE_REFERENCE, &args![reader]);
+            buffered
+        } else {
+            reader
+        };
+        free_string_buffer(e, buffer);
+        result
+    })
 }
 
 // Translated from 00cbbee0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -453,20 +463,23 @@ pub fn hk_native_file_system_open_reader(e: &mut Engine, _this: u32, path: u32) 
 /// the buffered writer.
 /// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
 pub fn hk_native_file_system_open_writer(e: &mut Engine, _this: u32, path: u32) -> u32 {
-    let buffer = e.mem.alloc(0x8c);
-    fn_00cbbd80(e, buffer);
-    let block = allocate_sized(e, 0x10);
-    let function = e.mem.u32(OPEN_FILE_POINTER);
-    let stream = e.call(function, &args![path, buffer]).u32();
-    let writer = e.call(STDIO_WRITER_CONSTRUCT, &args![block, stream]).u32();
-    let block = allocate_sized(e, 0x1c);
-    let buffered = e
-        .call(BUFFERED_WRITER_CONSTRUCT, &args![block, writer, 0x1000u32])
-        .u32();
-    e.call(REMOVE_REFERENCE, &args![writer]);
-    free_string_buffer(e, buffer);
-    e.mem.free(buffer);
-    buffered
+    // The exe's frame (`SUB ESP,0x8c`, two pushes): 0x94 bytes, the string buffer at +0x8
+    // (00cbbee8).
+    e.with_stack(0x94, |e, frame| {
+        let buffer = frame.addr() + 8;
+        fn_00cbbd80(e, buffer);
+        let block = allocate_sized(e, 0x10);
+        let function = e.mem.u32(OPEN_FILE_POINTER);
+        let stream = e.call(function, &args![path, buffer]).u32();
+        let writer = e.call(STDIO_WRITER_CONSTRUCT, &args![block, stream]).u32();
+        let block = allocate_sized(e, 0x1c);
+        let buffered = e
+            .call(BUFFERED_WRITER_CONSTRUCT, &args![block, writer, 0x1000u32])
+            .u32();
+        e.call(REMOVE_REFERENCE, &args![writer]);
+        free_string_buffer(e, buffer);
+        buffered
+    })
 }
 
 // Translated from 00cbb9c0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -755,7 +768,11 @@ mod tests {
         });
         let buffer = e.mem.alloc(16);
         install_grow(&mut e, &log, buffer, 4);
+        // The array sits at +0xc of the exe's 0x18-byte frame.
+        let frame = e.mem.alloc(0x18);
+        e.mem.free(frame);
         e.call(0x00cb_b9f0, &args![]);
+        assert_eq!(calls(&log, ARRAY_GROW)[0][1], frame + 0xc);
         assert_eq!(e.mem.u32(slots), 0xaa);
         assert_eq!(e.mem.u32(slots + 4), 0xbb);
         // Retries go from the last element to the first: y fails (try 2), x succeeds (its try 2)
@@ -864,7 +881,12 @@ mod tests {
         let b = node(&mut e, 0, slots + 4);
         let c = node(&mut e, 0, slots + 8);
         link(&mut e, &[a, b, c]);
+        // The array header at +0x4 and its storage at +0x10 of the exe's 0x210-byte frame.
+        let frame = e.mem.alloc(0x210);
+        e.mem.free(frame);
         e.call(0x00cb_bbd0, &args![]);
+        assert_eq!(e.mem.u32(frame + 4), frame + 0x10);
+        assert_eq!(e.mem.u32(frame + 0x10), a);
         assert_eq!(
             calls(&log, REMOVE_REFERENCE_UNCHECKED),
             vec![vec![0x1003], vec![0x1001]]
@@ -1042,8 +1064,13 @@ mod tests {
             install_router(&mut e, &log, vec![small_block, wrapper_block]);
         let reader = install_stream(&mut e, &log, STDIO_READER_CONSTRUCT, 0);
         double(&mut e, &log, BUFFERED_READER_CONSTRUCT, 0x9999);
+        // The string buffer at +0x8, the answer byte at +0x7 of the exe's 0x94-byte frame.
+        let frame = e.mem.alloc(0x94);
+        e.mem.free(frame);
         let got = e.call(0x00cb_bde0, &args![VCALL_THIS, 0xabcdu32]).u32();
         assert_eq!(got, 0x9999);
+        assert_eq!(calls(&log, 0x0900_0c01)[0], vec![0xabcd, frame + 8]);
+        assert_eq!(calls(&log, 0x0900_0c18)[0][1], frame + 7);
         assert_eq!(
             calls(&log, SMALL_ALLOCATE),
             vec![vec![small, 0x14], vec![small, 0x24]]
@@ -1087,8 +1114,12 @@ mod tests {
         let (_router, _heap, small) = install_router(&mut e, &log, vec![first, second]);
         let writer = install_stream(&mut e, &log, STDIO_WRITER_CONSTRUCT, 0);
         double(&mut e, &log, BUFFERED_WRITER_CONSTRUCT, 0x8888);
+        // The string buffer at +0x8 of the exe's 0x94-byte frame.
+        let frame = e.mem.alloc(0x94);
+        e.mem.free(frame);
         let got = e.call(0x00cb_bee0, &args![VCALL_THIS, 0xabcdu32]).u32();
         assert_eq!(got, 0x8888);
+        assert_eq!(calls(&log, 0x0900_0c01)[0], vec![0xabcd, frame + 8]);
         assert_eq!(
             calls(&log, SMALL_ALLOCATE),
             vec![vec![small, 0x10], vec![small, 0x1c]]

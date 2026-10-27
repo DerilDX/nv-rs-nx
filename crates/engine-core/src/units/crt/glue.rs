@@ -112,6 +112,20 @@ pub fn alloca_probe_16(e: &mut Engine, size: u32, esp: u32) -> u32 {
     e.call(ALLOCA_PROBE_ADDR, &args![size, esp]).u32()
 }
 
+/// How the translations model a caller's `_alloca16`: the `ESP` the caller continues with
+/// after `CALL 00ec5ec0` with `EAX = size` when its own `ESP` was `esp` before the call, i.e.
+/// [`alloca_probe_16`] and `__alloca_probe` (`00ec8660`) composed as plain arithmetic:
+/// `(esp - size) & !0xf`, with the probes' carry (all ones) and borrow (address 0) cases. The
+/// block lies from the answer up to `esp`, inside the caller's exe-shaped `with_stack` frame;
+/// the probes' page reads and the return address they leave under the new top are not modelled
+/// (nothing reads them).
+pub fn alloca16_esp(esp: u32, size: u32) -> u32 {
+    let low = esp.wrapping_sub(size) & 0xf;
+    let (sum, carry) = size.overflowing_add(low);
+    let size = if carry { 0xffff_ffff } else { sum };
+    esp.wrapping_sub(4).saturating_sub(size).wrapping_add(4)
+}
+
 // Translated from 00ec6522 (disassembled, FalloutNV.exe 1.4.0.525)
 /// The first C initializer (unnamed; the CRT's `__onexitinit`): the exit table is made from
 /// `__calloc_crt(32, 4)`, its `__encode_pointer`'d address stored as both its start and its
@@ -846,6 +860,34 @@ mod tests {
 
     fn answer(e: &mut Engine, addr: u32, value: u32) {
         e.register_double(addr, move |_, _| value.into_ret());
+    }
+
+    #[test]
+    fn alloca16_esp_is_the_two_probes_composed() {
+        let mut e = engine(&[]);
+        e.map(0x0010_0000, 0x4000);
+        e.register_double(ALLOCA_PROBE_ADDR, |e, a| {
+            alloca_probe(e, a[0], a[1]).into_ret()
+        });
+        for esp in [
+            0x0010_3000u32,
+            0x0010_3004,
+            0x0010_3008,
+            0x0010_300c,
+            0x0010_3ffc,
+        ] {
+            for size in [0x190u32, 0x24, 0xc, 0x100, 1] {
+                // The call pushes the return address: the probe sees `esp - 4`.
+                e.mem.set_u32(esp - 4, 0x00aa_bbcc);
+                let probed = alloca_probe_16(&mut e, size, esp - 4);
+                let modelled = alloca16_esp(esp, size);
+                assert_eq!(modelled, probed, "esp {esp:x} size {size:x}");
+                assert_eq!(modelled & 0xf, 0);
+                assert!(esp - modelled >= size && esp - modelled < size + 0x10);
+            }
+        }
+        // A size past the stack top: the probe's top is address 0, the answer 4.
+        assert_eq!(alloca16_esp(0x1000, 0x2000), 4);
     }
 
     #[test]

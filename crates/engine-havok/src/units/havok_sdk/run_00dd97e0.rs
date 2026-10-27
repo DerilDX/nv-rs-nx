@@ -4,6 +4,22 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+/// Runs `f` on an exe-shaped frame: a function that aligns `ESP` (`AND ESP,0xfffffff0`) and
+/// then reserves `below` bytes (its `SUB ESP` and pushes) has its frame `below` bytes under a
+/// 16-byte boundary; `f` gets the frame's lowest address.
+fn with_aligned_frame<R>(e: &mut Engine, below: u32, f: impl FnOnce(&mut Engine, u32) -> R) -> R {
+    e.with_stack(below + 0x10, |e, raw| {
+        let boundary = (raw.addr() + below + 0xf) & !0xf;
+        f(e, boundary - below)
+    })
+}
+
+/// The frame base [`with_aligned_frame`] picks for a block at `raw` (tests).
+#[cfg(test)]
+fn aligned_frame_at(raw: u32, below: u32) -> u32 {
+    ((raw + below + 0xf) & !0xf) - below
+}
+
 /// The memory router (`0x00c8_5750`): its field `+0x10` is the allocator the block is freed through.
 const MEMORY_ROUTER: u32 = 0x00c8_5750;
 
@@ -518,6 +534,9 @@ pub fn hk_server_debug_display_handler_display_geometry(
     end_commands(e, this)
 }
 
+/// `displayTriangle`'s frame under the 16-byte boundary (`SUB ESP,0x54` and three pushes).
+const TRIANGLE_FRAME_BELOW: u32 = 0x60;
+
 // Translated from 00dd9fe0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Slot `+0x28` of the vtable `010d7d54`, `displayTriangle` in the Xbox PDB (`thiscall`, `RET 0x18`:
 /// three vector pointers `a`, `b`, `c`, `color`, `id`, `tag`). With an archive it copies the three
@@ -536,28 +555,31 @@ pub fn hk_server_debug_display_handler_display_triangle(
 ) -> u32 {
     begin_commands(e, this);
     if e.mem.u32(this + 4) != 0 {
-        let copies = e.mem.alloc(0x40);
-        let copy_vector = |e: &mut Engine, from: u32, to: u32| {
-            for lane in 0..4 {
-                let word = e.mem.u32(from + 4 * lane);
-                e.mem.set_u32(to + 4 * lane, word);
+        // The copies sit at +0x20 of the exe's frame (aligned: `SUB ESP,0x54` and three pushes
+        // under the boundary, 00dda011..00dda027).
+        with_aligned_frame(e, TRIANGLE_FRAME_BELOW, |e, frame| {
+            let copies = frame + 0x20;
+            let copy_vector = |e: &mut Engine, from: u32, to: u32| {
+                for lane in 0..4 {
+                    let word = e.mem.u32(from + 4 * lane);
+                    e.mem.set_u32(to + 4 * lane, word);
+                }
+            };
+            copy_vector(e, b, copies + 0x10);
+            copy_vector(e, a, copies);
+            copy_vector(e, c, copies + 0x20);
+            copy_vector(e, a, copies + 0x30);
+            for edge in 0..3u32 {
+                let first = copies + 0x10 * edge;
+                emit(e, this, ARCHIVE_WRITE_32U, &[0x29]);
+                emit(e, this, ARCHIVE_WRITE_COMMAND, &[8]);
+                emit(e, this, WRITE_VECTOR, &[first]);
+                emit(e, this, WRITE_VECTOR, &[first + 0x10]);
+                emit(e, this, ARCHIVE_WRITE_32U, &[color]);
+                emit(e, this, ARCHIVE_WRITE_64U, &[id, sign_word(id)]);
+                emit(e, this, ARCHIVE_WRITE_32, &[tag]);
             }
-        };
-        copy_vector(e, b, copies + 0x10);
-        copy_vector(e, a, copies);
-        copy_vector(e, c, copies + 0x20);
-        copy_vector(e, a, copies + 0x30);
-        for edge in 0..3u32 {
-            let first = copies + 0x10 * edge;
-            emit(e, this, ARCHIVE_WRITE_32U, &[0x29]);
-            emit(e, this, ARCHIVE_WRITE_COMMAND, &[8]);
-            emit(e, this, WRITE_VECTOR, &[first]);
-            emit(e, this, WRITE_VECTOR, &[first + 0x10]);
-            emit(e, this, ARCHIVE_WRITE_32U, &[color]);
-            emit(e, this, ARCHIVE_WRITE_64U, &[id, sign_word(id)]);
-            emit(e, this, ARCHIVE_WRITE_32, &[tag]);
-        }
-        e.mem.free(copies);
+        });
     }
     end_commands(e, this)
 }
@@ -648,6 +670,9 @@ pub fn hk_server_debug_display_handler_display_annotation(
     end_commands(e, this)
 }
 
+/// `updateBehavior`'s frame under the 16-byte boundary (`SUB ESP,0x64` and three pushes).
+const UPDATE_BEHAVIOR_FRAME_BELOW: u32 = 0x70;
+
 // Translated from 00dda340 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Slot `+0x1c` of the vtable `010d7d54`, `updateBehavior` in the Xbox PDB (`thiscall`, `RET 0x20`:
 /// eight `hkArray` pointers `a` to `h` (`a`, `b`, `c`, `f`, `g`: arrays of words; `d`: 16-byte
@@ -684,136 +709,139 @@ pub fn hk_server_debug_display_handler_update_behavior(
             .wrapping_add(e.mem.u32(f + 4))
             .wrapping_add(e.mem.u32(g + 4));
         record = record.wrapping_mul(4).wrapping_add(0x19);
-        // The lengths of the texts, in an array that starts empty without storage.
-        let lengths = e.mem.alloc(0x10);
-        e.mem.set_u32(lengths, 0);
-        e.mem.set_u32(lengths + 4, 0);
-        e.mem.set_u32(lengths + 8, 0x8000_0000);
-        let mut index = 0i32;
-        if e.mem.i32(texts + 4) > 0 {
-            loop {
-                let data = e.mem.u32(texts);
-                let text = e.mem.u32(data.wrapping_add((index as u32).wrapping_mul(4)));
-                let length = if text != 0 {
-                    record = record.wrapping_add(2);
-                    let length = e.call(STRING_LENGTH, &args![text]).u32();
-                    record = record.wrapping_add(length);
-                    length
-                } else {
-                    0
-                };
-                let router = e.call(MEMORY_ROUTER, &args![]).u32();
-                let capacity = e.mem.u32(lengths + 8) & 0x3fff_ffff;
-                if e.mem.u32(lengths + 4) == capacity {
-                    let allocator = e.mem.u32(router + 0x10);
-                    e.call(ARRAY_RESERVE_MORE, &args![allocator, lengths, 4u32]);
-                }
-                let at = e
-                    .mem
-                    .u32(lengths)
-                    .wrapping_add(e.mem.u32(lengths + 4).wrapping_mul(4));
-                e.mem.set_u32(at, length);
-                let size = e.mem.u32(lengths + 4);
-                e.mem.set_u32(lengths + 4, size.wrapping_add(1));
-                index += 1;
-                if index >= e.mem.i32(texts + 4) {
-                    break;
-                }
-            }
-        }
-        emit(e, this, ARCHIVE_WRITE_32U, &[record]);
-        emit(e, this, ARCHIVE_WRITE_COMMAND, &[0x12]);
-        emit(e, this, ARCHIVE_WRITE_32U, &[b_size]);
-        let mut index = 0i32;
-        if e.mem.i32(b + 4) > 0 {
-            loop {
-                let first = e
-                    .mem
-                    .u32(e.mem.u32(a).wrapping_add((index as u32).wrapping_mul(4)));
-                emit(e, this, ARCHIVE_WRITE_32U, &[first]);
-                let second = e
-                    .mem
-                    .u32(e.mem.u32(b).wrapping_add((index as u32).wrapping_mul(4)));
-                emit(e, this, ARCHIVE_WRITE_32U, &[second]);
-                index += 1;
-                if index >= e.mem.i32(b + 4) {
-                    break;
-                }
-            }
-        }
-        emit(e, this, ARCHIVE_WRITE_32U, &[d_size]);
-        let mut index = 0i32;
-        if e.mem.i32(d + 4) > 0 {
-            loop {
-                let key = e
-                    .mem
-                    .u32(e.mem.u32(c).wrapping_add((index as u32).wrapping_mul(4)));
-                emit(e, this, ARCHIVE_WRITE_32U, &[key]);
-                let vector = e.mem.u32(d).wrapping_add((index as u32).wrapping_mul(0x10));
-                emit(e, this, WRITE_VECTOR, &[vector]);
-                index += 1;
-                if index >= e.mem.i32(d + 4) {
-                    break;
-                }
-            }
-        }
-        let text_count = u32::from(e.mem.u16(texts + 4));
-        emit(e, this, ARCHIVE_WRITE_32U, &[text_count]);
-        let mut index = 0i32;
-        if e.mem.i32(texts + 4) > 0 {
-            loop {
-                let data = e.mem.u32(texts);
-                let text = e.mem.u32(data.wrapping_add((index as u32).wrapping_mul(4)));
-                if text != 0 {
-                    let length = e.mem.u32(
-                        e.mem
-                            .u32(lengths)
-                            .wrapping_add((index as u32).wrapping_mul(4)),
-                    );
-                    emit(e, this, ARCHIVE_WRITE_16U, &[length]);
+        // The exe's frame (aligned: `SUB ESP,0x64` and three pushes under the boundary) holds
+        // the lengths of the texts at +0x24, an array that starts empty without storage, and the
+        // converted transform at +0x30 (00dda563).
+        with_aligned_frame(e, UPDATE_BEHAVIOR_FRAME_BELOW, |e, frame| {
+            let lengths = frame + 0x24;
+            e.mem.set_u32(lengths, 0);
+            e.mem.set_u32(lengths + 4, 0);
+            e.mem.set_u32(lengths + 8, 0x8000_0000);
+            let mut index = 0i32;
+            if e.mem.i32(texts + 4) > 0 {
+                loop {
                     let data = e.mem.u32(texts);
                     let text = e.mem.u32(data.wrapping_add((index as u32).wrapping_mul(4)));
-                    emit(e, this, ARCHIVE_WRITE_RAW, &[text, length]);
-                }
-                index += 1;
-                if index >= e.mem.i32(texts + 4) {
-                    break;
-                }
-            }
-        }
-        emit(e, this, ARCHIVE_WRITE_32U, &[h_size]);
-        let mut index = 0i32;
-        if e.mem.i32(h + 4) > 0 {
-            let converted = e.mem.alloc(0x40);
-            loop {
-                let record_at = e.mem.u32(h).wrapping_add((index as u32).wrapping_mul(0x30));
-                e.call(CONVERT_TRANSFORM, &args![record_at, converted]);
-                emit(e, this, WRITE_TRANSFORM, &[converted]);
-                index += 1;
-                if index >= e.mem.i32(h + 4) {
-                    break;
-                }
-            }
-            e.mem.free(converted);
-        }
-        for list in [f, g] {
-            let count = e.mem.u32(list + 4);
-            emit(e, this, ARCHIVE_WRITE_32U, &[count]);
-            let mut index = 0i32;
-            if e.mem.i32(list + 4) > 0 {
-                loop {
-                    let word = e
+                    let length = if text != 0 {
+                        record = record.wrapping_add(2);
+                        let length = e.call(STRING_LENGTH, &args![text]).u32();
+                        record = record.wrapping_add(length);
+                        length
+                    } else {
+                        0
+                    };
+                    let router = e.call(MEMORY_ROUTER, &args![]).u32();
+                    let capacity = e.mem.u32(lengths + 8) & 0x3fff_ffff;
+                    if e.mem.u32(lengths + 4) == capacity {
+                        let allocator = e.mem.u32(router + 0x10);
+                        e.call(ARRAY_RESERVE_MORE, &args![allocator, lengths, 4u32]);
+                    }
+                    let at = e
                         .mem
-                        .u32(e.mem.u32(list).wrapping_add((index as u32).wrapping_mul(4)));
-                    emit(e, this, ARCHIVE_WRITE_32U, &[word]);
+                        .u32(lengths)
+                        .wrapping_add(e.mem.u32(lengths + 4).wrapping_mul(4));
+                    e.mem.set_u32(at, length);
+                    let size = e.mem.u32(lengths + 4);
+                    e.mem.set_u32(lengths + 4, size.wrapping_add(1));
                     index += 1;
-                    if index >= e.mem.i32(list + 4) {
+                    if index >= e.mem.i32(texts + 4) {
                         break;
                     }
                 }
             }
-        }
-        release_lengths(e, lengths);
+            emit(e, this, ARCHIVE_WRITE_32U, &[record]);
+            emit(e, this, ARCHIVE_WRITE_COMMAND, &[0x12]);
+            emit(e, this, ARCHIVE_WRITE_32U, &[b_size]);
+            let mut index = 0i32;
+            if e.mem.i32(b + 4) > 0 {
+                loop {
+                    let first = e
+                        .mem
+                        .u32(e.mem.u32(a).wrapping_add((index as u32).wrapping_mul(4)));
+                    emit(e, this, ARCHIVE_WRITE_32U, &[first]);
+                    let second = e
+                        .mem
+                        .u32(e.mem.u32(b).wrapping_add((index as u32).wrapping_mul(4)));
+                    emit(e, this, ARCHIVE_WRITE_32U, &[second]);
+                    index += 1;
+                    if index >= e.mem.i32(b + 4) {
+                        break;
+                    }
+                }
+            }
+            emit(e, this, ARCHIVE_WRITE_32U, &[d_size]);
+            let mut index = 0i32;
+            if e.mem.i32(d + 4) > 0 {
+                loop {
+                    let key = e
+                        .mem
+                        .u32(e.mem.u32(c).wrapping_add((index as u32).wrapping_mul(4)));
+                    emit(e, this, ARCHIVE_WRITE_32U, &[key]);
+                    let vector = e.mem.u32(d).wrapping_add((index as u32).wrapping_mul(0x10));
+                    emit(e, this, WRITE_VECTOR, &[vector]);
+                    index += 1;
+                    if index >= e.mem.i32(d + 4) {
+                        break;
+                    }
+                }
+            }
+            let text_count = u32::from(e.mem.u16(texts + 4));
+            emit(e, this, ARCHIVE_WRITE_32U, &[text_count]);
+            let mut index = 0i32;
+            if e.mem.i32(texts + 4) > 0 {
+                loop {
+                    let data = e.mem.u32(texts);
+                    let text = e.mem.u32(data.wrapping_add((index as u32).wrapping_mul(4)));
+                    if text != 0 {
+                        let length = e.mem.u32(
+                            e.mem
+                                .u32(lengths)
+                                .wrapping_add((index as u32).wrapping_mul(4)),
+                        );
+                        emit(e, this, ARCHIVE_WRITE_16U, &[length]);
+                        let data = e.mem.u32(texts);
+                        let text = e.mem.u32(data.wrapping_add((index as u32).wrapping_mul(4)));
+                        emit(e, this, ARCHIVE_WRITE_RAW, &[text, length]);
+                    }
+                    index += 1;
+                    if index >= e.mem.i32(texts + 4) {
+                        break;
+                    }
+                }
+            }
+            emit(e, this, ARCHIVE_WRITE_32U, &[h_size]);
+            let mut index = 0i32;
+            if e.mem.i32(h + 4) > 0 {
+                let converted = frame + 0x30;
+                loop {
+                    let record_at = e.mem.u32(h).wrapping_add((index as u32).wrapping_mul(0x30));
+                    e.call(CONVERT_TRANSFORM, &args![record_at, converted]);
+                    emit(e, this, WRITE_TRANSFORM, &[converted]);
+                    index += 1;
+                    if index >= e.mem.i32(h + 4) {
+                        break;
+                    }
+                }
+            }
+            for list in [f, g] {
+                let count = e.mem.u32(list + 4);
+                emit(e, this, ARCHIVE_WRITE_32U, &[count]);
+                let mut index = 0i32;
+                if e.mem.i32(list + 4) > 0 {
+                    loop {
+                        let word = e
+                            .mem
+                            .u32(e.mem.u32(list).wrapping_add((index as u32).wrapping_mul(4)));
+                        emit(e, this, ARCHIVE_WRITE_32U, &[word]);
+                        index += 1;
+                        if index >= e.mem.i32(list + 4) {
+                            break;
+                        }
+                    }
+                }
+            }
+            release_lengths(e, lengths);
+        });
     }
     end_commands(e, this)
 }
@@ -830,7 +858,6 @@ fn release_lengths(e: &mut Engine, lengths: u32) {
         let data = e.mem.u32(lengths);
         e.vcall(allocator, 0x10, &args![data, (capacity & 0x3fff_ffff) << 2]);
     }
-    e.mem.free(lengths);
 }
 
 // Translated from 00dda690 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1442,6 +1469,25 @@ mod a07_handler_tests {
     }
 
     #[test]
+    fn the_triangle_copies_sit_at_0x20_of_the_exe_frame() {
+        let mut env = env();
+        let a = vector(&mut env.e, [1, 1, 1, 1]);
+        let b = vector(&mut env.e, [2, 2, 2, 2]);
+        let cc = vector(&mut env.e, [3, 3, 3, 3]);
+        // The frame block is the one just freed: a, b, c and a again from +0x20.
+        let raw = env.e.mem.alloc(TRIANGLE_FRAME_BELOW + 0x10);
+        env.e.mem.free(raw);
+        let frame = aligned_frame_at(raw, TRIANGLE_FRAME_BELOW);
+        hk_server_debug_display_handler_display_triangle(
+            &mut env.e, env.this, a, b, cc, 0x30, 6, 7,
+        );
+        let firsts: Vec<u32> = (0..4)
+            .map(|i| env.e.mem.u32(frame + 0x20 + 0x10 * i))
+            .collect();
+        assert_eq!(firsts, vec![1, 2, 3, 1]);
+    }
+
+    #[test]
     fn text_commands_clamp_the_length_and_write_the_text() {
         let mut env = env();
         let section = env.section;
@@ -1703,6 +1749,33 @@ mod a07_handler_tests {
                 ]
             )
         );
+    }
+
+    #[test]
+    fn behaviour_updates_keep_their_locals_at_the_exe_frame_offsets() {
+        let mut env = env();
+        let a = element_array(&mut env.e, &[]);
+        let d = element_array(&mut env.e, &[]);
+        let hi = text(&mut env.e, b"hi");
+        let texts = element_array(&mut env.e, &[hi]);
+        let record = env.e.mem.alloc(0x30);
+        env.e.mem.set_u32(record, 0x5151);
+        let h = env.e.mem.alloc(16);
+        env.e.mem.set_u32(h, record);
+        env.e.mem.set_u32(h + 4, 1);
+        // The frame block is the one just freed: the lengths array at +0x24 (its storage
+        // holding the length 2), the converted transform at +0x30.
+        let raw = env.e.mem.alloc(UPDATE_BEHAVIOR_FRAME_BELOW + 0x10);
+        env.e.mem.free(raw);
+        let frame = aligned_frame_at(raw, UPDATE_BEHAVIOR_FRAME_BELOW);
+        hk_server_debug_display_handler_update_behavior(
+            &mut env.e, env.this, a, a, a, d, texts, a, a, h,
+        );
+        let data = env.e.mem.u32(frame + 0x24);
+        assert_ne!(data, 0);
+        assert_eq!(env.e.mem.u32(data), 2);
+        assert_eq!(env.e.mem.u32(frame + 0x2c), 4);
+        assert_eq!(env.e.mem.u32(frame + 0x30), 0x5151);
     }
 
     #[test]

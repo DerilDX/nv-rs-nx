@@ -71,7 +71,9 @@ pub fn fn_00e484a0(e: &mut Engine, this: Ptr, other: u32) {
 // Translated from 00e48510 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Thiscall, `RET 0xc`: writes to `out` (a byte) whether `item` is one of the pointers of the
 /// `hkArray` at `*(this + 0x10)` (`data`, `size`). The third stack word is not read.
-pub fn fn_00e48510(e: &mut Engine, this: Ptr, out: u32, item: u32, _unused_3: u32) {
+/// Answers `out`: the exe leaves it in `EAX` at every `RET` (the hkBool result returned
+/// through a pointer), and virtual call sites test the flag through `EAX` (e.g. 00c90f6a).
+pub fn fn_00e48510(e: &mut Engine, this: Ptr, out: u32, item: u32, _unused_3: u32) -> u32 {
     let array = e.mem.u32(this.addr().wrapping_add(0x10));
     let size = e.mem.i32(array.wrapping_add(4));
     let mut found = false;
@@ -85,19 +87,23 @@ pub fn fn_00e48510(e: &mut Engine, this: Ptr, out: u32, item: u32, _unused_3: u3
         }
     }
     e.mem.set_u8(out, u8::from(found));
+    out
 }
 
 // Translated from 00e48550 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Thiscall, `RET 0xc`: writes to `out` (a byte) 1 minus bit `index` (counted from the start,
 /// 32 per word, `index` signed) of the bit array whose data pointer is at `**(this + 0x14)`.
 /// The third stack word is not read.
-pub fn fn_00e48550(e: &mut Engine, this: Ptr, out: u32, index: i32, _unused_3: u32) {
+/// Answers `out`: the exe leaves it in `EAX` at every `RET` (the hkBool result returned
+/// through a pointer), and virtual call sites test the flag through `EAX` (e.g. 00c90f6a).
+pub fn fn_00e48550(e: &mut Engine, this: Ptr, out: u32, index: i32, _unused_3: u32) -> u32 {
     let holder = e.mem.u32(this.addr().wrapping_add(0x14));
     let data = e.mem.u32(holder);
     let word_address = data.wrapping_add((index >> 5).wrapping_mul(4) as u32);
     let word = e.mem.u32(word_address);
     let bit = word.wrapping_shr(index as u32);
     e.mem.set_u8(out, !(bit as u8) & 1);
+    out
 }
 
 /// Makes room for one more element of `element_size` bytes in the `hkArray` at `array` when it is
@@ -251,16 +257,19 @@ pub fn fn_00e487a0(e: &mut Engine, this: Ptr, source: u32, value: u32) -> u32 {
 /// set in the table word `*(this + 0x34 + 4 * (first & 0x1f))`. Otherwise (same nonzero high
 /// half) 1 when both `((second >> 5) ^ first) & 0x3e0` and `((first >> 5) ^ second) & 0x3e0`
 /// are nonzero, else 0.
-pub fn fn_00e48830(e: &mut Engine, this: Ptr, out: u32, first: u32, second: u32) {
+/// Answers `out`: the exe leaves it in `EAX` at every `RET` (the hkBool result returned
+/// through a pointer), and virtual call sites test the flag through `EAX` (e.g. 00c90f6a).
+pub fn fn_00e48830(e: &mut Engine, this: Ptr, out: u32, first: u32, second: u32) -> u32 {
     let this = this.addr();
     if (first ^ second) & 0xffff_0000 != 0 || first & 0xffff_0000 == 0 {
         let word = e.mem.u32(this.wrapping_add(0x34 + 4 * (first & 0x1f)));
         e.mem
             .set_u8(out, u8::from(word & (1 << (second & 0x1f)) != 0));
-        return;
+        return out;
     }
     let hit = (((second >> 5) ^ first) & 0x3e0 != 0) && (((first >> 5) ^ second) & 0x3e0 != 0);
     e.mem.set_u8(out, u8::from(hit));
+    out
 }
 
 // Translated from 00e488a0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -567,13 +576,13 @@ pub fn fn_00e48cb0(e: &mut Engine, this: Ptr, index: u32, out: u32) {
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00e4_84a0, fn_00e484a0(Ptr, u32)),
-        entry!(0x00e4_8510, fn_00e48510(Ptr, u32, u32, u32)),
-        entry!(0x00e4_8550, fn_00e48550(Ptr, u32, i32, u32)),
+        entry!(0x00e4_8510, fn_00e48510(Ptr, u32, u32, u32) -> u32),
+        entry!(0x00e4_8550, fn_00e48550(Ptr, u32, i32, u32) -> u32),
         entry!(0x00e4_8580, fn_00e48580(Ptr, u32)),
         entry!(0x00e4_85d0, fn_00e485d0(Ptr, u32, u32, u32) -> u32),
         entry!(0x00e4_8740, fn_00e48740(Ptr)),
         entry!(0x00e4_87a0, fn_00e487a0(Ptr, u32, u32) -> u32),
-        entry!(0x00e4_8830, fn_00e48830(Ptr, u32, u32, u32)),
+        entry!(0x00e4_8830, fn_00e48830(Ptr, u32, u32, u32) -> u32),
         entry!(0x00e4_88a0, fn_00e488a0(Ptr, u32, u32, u32, u32, u32) -> u32),
         entry!(0x00e4_89b0, fn_00e489b0(Ptr) -> u32),
         entry!(0x00e4_8a80, fn_00e48a80(Ptr)),
@@ -655,6 +664,18 @@ mod tests {
     }
 
     #[test]
+    fn the_group_filter_answers_its_out_pointer() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0xc0);
+        let out = e.mem.alloc(4);
+        // EAX is `out` at every RET (the hkBool result pointer the callers read through).
+        assert_eq!(
+            e.call(0x00e4_8830, &args![this, out, 1u32, 2u32]).u32(),
+            out
+        );
+    }
+
+    #[test]
     fn membership_and_bit_tests_write_bytes() {
         let mut e = engine();
         let this = e.mem.alloc(0x40);
@@ -684,6 +705,28 @@ mod tests {
             e.call(0x00e4_8550, &args![this, out, index, 0u32]);
             assert_eq!(e.mem.u8(out), expected, "bit {index}");
         }
+    }
+
+    #[test]
+    fn membership_and_bit_tests_answer_their_out_pointer() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x40);
+        let array = e.mem.alloc(8);
+        e.mem.set_u32(this + 0x10, array);
+        let holder = e.mem.alloc(8);
+        let bits = e.mem.alloc(16);
+        e.mem.set_u32(holder, bits);
+        e.mem.set_u32(this + 0x14, holder);
+        let out = e.mem.alloc(8);
+        // Both leave `out` in EAX at every RET (the hkBool result pointer callers read through).
+        assert_eq!(
+            e.call(0x00e4_8510, &args![this, out, 6u32, 0u32]).u32(),
+            out
+        );
+        assert_eq!(
+            e.call(0x00e4_8550, &args![this, out, 1i32, 0u32]).u32(),
+            out
+        );
     }
 
     #[test]

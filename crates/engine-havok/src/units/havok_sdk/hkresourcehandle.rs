@@ -256,12 +256,17 @@ pub fn hk_memory_resource_container_get_num_containers(e: &mut Engine, this: Ptr
 /// when it is not null; looks `name` up in the map at `this + 4` (`getWithDefault`, default 0)
 /// and, when found, stores the object's class (its virtual slot `0x1C`) in `*out_class` when
 /// that is not null, then calls the object's virtual slot `0x18` (no arguments).
+///
+/// Answers the object pointer: the lookup's 0 when nothing was found (the exe returns with it
+/// still in `EAX`), else slot `0x18`'s `EAX`, which the exe ends on.
+/// `hkResourceHandle::tryToResolveLinks` (`00e2e4c0`, 00e2e52a) reads it from this slot and skips
+/// a link whose answer is null.
 pub fn hk_container_resource_map_find_object_by_name(
     e: &mut Engine,
     this: Ptr,
     name: u32,
     out_class: Ptr,
-) {
+) -> u32 {
     if out_class.addr() != 0 {
         e.mem.set_u32(out_class.addr(), 0);
     }
@@ -269,13 +274,13 @@ pub fn hk_container_resource_map_find_object_by_name(
         .call(MAP_GET_WITH_DEFAULT, &args![this.addr() + 4, name, 0u32])
         .u32();
     if object == 0 {
-        return;
+        return object;
     }
     if out_class.addr() != 0 {
         let class = e.vcall(object, 0x1c, &args![]).u32();
         e.mem.set_u32(out_class.addr(), class);
     }
-    e.vcall(object, 0x18, &args![]);
+    e.vcall(object, 0x18, &args![]).u32()
 }
 
 // Translated from 00e2dfd0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1190,7 +1195,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e2_df70, hk_memory_resource_container_get_num_containers(Ptr) -> u32),
         entry!(
             0x00e2_df80,
-            hk_container_resource_map_find_object_by_name(Ptr, u32, Ptr)
+            hk_container_resource_map_find_object_by_name(Ptr, u32, Ptr) -> u32
         ),
         entry!(0x00e2_dfd0, hk_memory_resource_container_find_container_by_name(Ptr, u32, u32) -> u32),
         entry!(
@@ -1677,6 +1682,22 @@ mod handle_tests {
         w.e.mem.set_u32(key, found);
         w.e.call(0x00e2_df80, &args![this, key, 0u32]);
         assert_eq!(strings(&w.log), vec![format!("hold:{found:x}")]);
+    }
+
+    #[test]
+    fn find_object_by_name_answers_the_object_pointer() {
+        let mut w = world();
+        w.e.register(MAP_GET_WITH_DEFAULT, |e, a| e.mem.u32(a[1]).into_ret());
+        w.e.register(0x0900_0010, |_, _| 0xc1a5u32.into_ret());
+        w.e.register(0x0900_0011, |_, _| 0x0bad_0b1eu32.into_ret());
+        let found = object(&mut w.e, &[(0x1c, 0x0900_0010), (0x18, 0x0900_0011)]);
+        let this = w.e.mem.alloc(0x20);
+        let key = w.e.mem.alloc(4);
+        w.e.mem.set_u32(key, found);
+        let answer = w.e.call(0x00e2_df80, &args![this, key, 0u32]).u32();
+        assert_eq!(answer, 0x0bad_0b1e);
+        w.e.mem.set_u32(key, 0);
+        assert_eq!(w.e.call(0x00e2_df80, &args![this, key, 0u32]).u32(), 0);
     }
 
     #[test]

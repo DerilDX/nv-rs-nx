@@ -1386,7 +1386,8 @@ pub fn fn_004411d0(
 pub fn queued_actor_queue_me(e: &mut Engine, this: Ptr<QueuedReference>) {
     let reference = e.get(this, QueuedReference::pRef);
     e.vcall(reference.addr(), 0x260, &args![]);
-    let old_flag = fn_0043c130(e);
+    // 00441228: ECX is the model loader.
+    let old_flag = fn_0043c130(e, Ptr::new(e.global::<u32>(MODEL_LOADER)));
     let loader = e.global::<u32>(MODEL_LOADER);
     if reference.addr() != e.global::<u32>(SPECIAL_REFERENCE)
         && e.call(REFERENCE_TEST_00936EF0, &args![reference]).u32() == 0

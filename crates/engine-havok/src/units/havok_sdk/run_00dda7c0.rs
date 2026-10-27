@@ -4,6 +4,22 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+/// Runs `f` on an exe-shaped frame: a function that aligns `ESP` (`AND ESP,0xfffffff0`) and
+/// then reserves `below` bytes (its `SUB ESP` and pushes) has its frame `below` bytes under a
+/// 16-byte boundary; `f` gets the frame's lowest address.
+fn with_aligned_frame<R>(e: &mut Engine, below: u32, f: impl FnOnce(&mut Engine, u32) -> R) -> R {
+    e.with_stack(below + 0x10, |e, raw| {
+        let boundary = (raw.addr() + below + 0xf) & !0xf;
+        f(e, boundary - below)
+    })
+}
+
+/// The frame base [`with_aligned_frame`] picks for a block at `raw` (tests).
+#[cfg(test)]
+fn aligned_frame_at(raw: u32, below: u32) -> u32 {
+    ((raw + below + 0xf) & !0xf) - below
+}
+
 /// The memory router (`0x00c8_5750`): its field `+0x10` is the allocator the block is freed through.
 const MEMORY_ROUTER: u32 = 0x00c8_5750;
 
@@ -136,93 +152,95 @@ fn write_vector_from(e: &mut Engine, archive: u32, function: u32, shape: u32, sc
 ///
 /// Every `float` goes through the x87 stack, so a signalling NaN is written quiet.
 pub fn fn_00dda8c0(e: &mut Engine, this: u32, shape: u32) {
-    let kind = e.mem.u32(shape + 0x50);
-    e.call(ARCHIVE_WRITE_8, &args![this, kind]);
-    if kind.wrapping_sub(1) > 8 {
-        return;
-    }
-    match kind {
-        1 => {
-            e.call(WRITE_TRANSFORM, &args![this, shape + 0x10]);
-            let copy = e.mem.alloc(0x10);
-            for lane in 0..4 {
-                let word = e.mem.u32(shape + 0x60 + 4 * lane);
-                e.mem.set_u32(copy + 4 * lane, word);
+    // The exe aligns ESP, then `SUB ESP,0x64` and three pushes: a 0x70-byte frame with the vector
+    // copy at +0x10 (type 1, 00dda91b), the two vectors of type 4 at +0x20 and +0x30 and the three
+    // of type 5 at +0x40, +0x50 and +0x60 (00ddaa4e..00ddaada).
+    with_aligned_frame(e, 0x70, |e, frame| {
+        let kind = e.mem.u32(shape + 0x50);
+        e.call(ARCHIVE_WRITE_8, &args![this, kind]);
+        if kind.wrapping_sub(1) > 8 {
+            return;
+        }
+        match kind {
+            1 => {
+                e.call(WRITE_TRANSFORM, &args![this, shape + 0x10]);
+                let copy = frame + 0x10;
+                for lane in 0..4 {
+                    let word = e.mem.u32(shape + 0x60 + 4 * lane);
+                    e.mem.set_u32(copy + 4 * lane, word);
+                }
+                let lane_three = e.mem.u32(copy + 0xc);
+                e.call(
+                    ARCHIVE_WRITE_FLOAT32,
+                    &args![this, x87_quiet_bits(lane_three)],
+                );
+                e.call(WRITE_VECTOR, &args![this, copy]);
+                let word = e.mem.u32(shape + 0x70);
+                e.call(ARCHIVE_WRITE_32, &args![this, word]);
+                let word = e.mem.u32(shape + 0x74);
+                e.call(ARCHIVE_WRITE_32, &args![this, word]);
             }
-            let lane_three = e.mem.u32(copy + 0xc);
-            e.call(
-                ARCHIVE_WRITE_FLOAT32,
-                &args![this, x87_quiet_bits(lane_three)],
-            );
-            e.call(WRITE_VECTOR, &args![this, copy]);
-            let word = e.mem.u32(shape + 0x70);
-            e.call(ARCHIVE_WRITE_32, &args![this, word]);
-            let word = e.mem.u32(shape + 0x74);
-            e.call(ARCHIVE_WRITE_32, &args![this, word]);
-            e.mem.free(copy);
-        }
-        2 => {
-            e.call(WRITE_TRANSFORM, &args![this, shape + 0x10]);
-            e.call(WRITE_VECTOR, &args![this, shape + 0x60]);
-        }
-        3 => {
-            for getter in [0x00de_1150, 0x00de_1160] {
-                let vector = e.call(getter, &args![shape]).u32();
-                e.call(WRITE_VECTOR, &args![this, vector]);
+            2 => {
+                e.call(WRITE_TRANSFORM, &args![this, shape + 0x10]);
+                e.call(WRITE_VECTOR, &args![this, shape + 0x60]);
+            }
+            3 => {
+                for getter in [0x00de_1150, 0x00de_1160] {
+                    let vector = e.call(getter, &args![shape]).u32();
+                    e.call(WRITE_VECTOR, &args![this, vector]);
+                }
+            }
+            4 => {
+                let scratch = frame + 0x20;
+                write_vector_from(e, this, 0x00de_5300, shape, scratch);
+                write_vector_from(e, this, 0x00de_5320, shape, scratch + 0x10);
+                for getter in [0x00de_5350, 0x00de_5340] {
+                    let value = e.call(getter, &args![shape]).f64();
+                    write_float_result(e, this, value);
+                }
+                let word = e.call(0x00de_5360, &args![shape]).u32();
+                e.call(ARCHIVE_WRITE_32, &args![this, word]);
+            }
+            5 => {
+                let scratch = frame + 0x40;
+                write_vector_from(e, this, 0x00de_4920, shape, scratch);
+                write_vector_from(e, this, 0x00de_48a0, shape, scratch + 0x10);
+                write_vector_from(e, this, 0x00de_48c0, shape, scratch + 0x20);
+                for getter in [0x00de_4900, 0x00de_48e0, 0x00de_48f0] {
+                    let value = e.call(getter, &args![shape]).f64();
+                    write_float_result(e, this, value);
+                }
+                let word = e.call(0x00de_4910, &args![shape]).u32();
+                e.call(ARCHIVE_WRITE_32, &args![this, word]);
+            }
+            6 => {
+                e.call(WRITE_TRANSFORM, &args![this, shape + 0x10]);
+                let lists = e.mem.u32(shape + 8);
+                fn_00dda7c0(e, this, lists);
+            }
+            7 => {
+                for getter in [0x00de_4df0, 0x00de_4de0, 0x00de_4e00] {
+                    let vector = e.call(getter, &args![shape]).u32();
+                    e.call(WRITE_VECTOR, &args![this, vector]);
+                }
+                let at = e.call(0x00de_4e10, &args![shape]).u32();
+                let bits = e.mem.u32(at);
+                e.call(ARCHIVE_WRITE_FLOAT32, &args![this, x87_quiet_bits(bits)]);
+            }
+            _ => {
+                // Types 8 and 9: two identical blocks in the code.
+                e.call(WRITE_TRANSFORM, &args![this, shape + 0x10]);
+                let bits = e.mem.u32(shape + 0x80);
+                e.call(ARCHIVE_WRITE_FLOAT32, &args![this, x87_quiet_bits(bits)]);
+                e.call(WRITE_VECTOR, &args![this, shape + 0x60]);
+                e.call(WRITE_VECTOR, &args![this, shape + 0x70]);
+                let word = e.mem.u32(shape + 0x84);
+                e.call(ARCHIVE_WRITE_32, &args![this, word]);
+                let word = e.mem.u32(shape + 0x88);
+                e.call(ARCHIVE_WRITE_32, &args![this, word]);
             }
         }
-        4 => {
-            let scratch = e.mem.alloc(0x20);
-            write_vector_from(e, this, 0x00de_5300, shape, scratch);
-            write_vector_from(e, this, 0x00de_5320, shape, scratch + 0x10);
-            for getter in [0x00de_5350, 0x00de_5340] {
-                let value = e.call(getter, &args![shape]).f64();
-                write_float_result(e, this, value);
-            }
-            let word = e.call(0x00de_5360, &args![shape]).u32();
-            e.call(ARCHIVE_WRITE_32, &args![this, word]);
-            e.mem.free(scratch);
-        }
-        5 => {
-            let scratch = e.mem.alloc(0x30);
-            write_vector_from(e, this, 0x00de_4920, shape, scratch);
-            write_vector_from(e, this, 0x00de_48a0, shape, scratch + 0x10);
-            write_vector_from(e, this, 0x00de_48c0, shape, scratch + 0x20);
-            for getter in [0x00de_4900, 0x00de_48e0, 0x00de_48f0] {
-                let value = e.call(getter, &args![shape]).f64();
-                write_float_result(e, this, value);
-            }
-            let word = e.call(0x00de_4910, &args![shape]).u32();
-            e.call(ARCHIVE_WRITE_32, &args![this, word]);
-            e.mem.free(scratch);
-        }
-        6 => {
-            e.call(WRITE_TRANSFORM, &args![this, shape + 0x10]);
-            let lists = e.mem.u32(shape + 8);
-            fn_00dda7c0(e, this, lists);
-        }
-        7 => {
-            for getter in [0x00de_4df0, 0x00de_4de0, 0x00de_4e00] {
-                let vector = e.call(getter, &args![shape]).u32();
-                e.call(WRITE_VECTOR, &args![this, vector]);
-            }
-            let at = e.call(0x00de_4e10, &args![shape]).u32();
-            let bits = e.mem.u32(at);
-            e.call(ARCHIVE_WRITE_FLOAT32, &args![this, x87_quiet_bits(bits)]);
-        }
-        _ => {
-            // Types 8 and 9: two identical blocks in the code.
-            e.call(WRITE_TRANSFORM, &args![this, shape + 0x10]);
-            let bits = e.mem.u32(shape + 0x80);
-            e.call(ARCHIVE_WRITE_FLOAT32, &args![this, x87_quiet_bits(bits)]);
-            e.call(WRITE_VECTOR, &args![this, shape + 0x60]);
-            e.call(WRITE_VECTOR, &args![this, shape + 0x70]);
-            let word = e.mem.u32(shape + 0x84);
-            e.call(ARCHIVE_WRITE_32, &args![this, word]);
-            let word = e.mem.u32(shape + 0x88);
-            e.call(ARCHIVE_WRITE_32, &args![this, word]);
-        }
-    }
+    })
 }
 
 // Translated from 00ddabe0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -553,6 +571,39 @@ mod a07_geometry_writer_tests {
                 c("writeFloat32", &[0x7fc0_0003]),
             ]
         );
+    }
+
+    #[test]
+    fn the_type_vectors_sit_at_their_offsets_in_the_aligned_frame() {
+        let (mut e, _log, archive) = env();
+        getters(&mut e);
+        let words =
+            |e: &Engine, at: u32| (0..4).map(|i| e.mem.u32(at + 4 * i)).collect::<Vec<u32>>();
+        for (kind, slots) in [
+            (1u32, vec![(0x10u32, vec![1, 2, 3, 0x7f80_0001])]),
+            (4, vec![(0x20, vec![0x5300; 4]), (0x30, vec![0x5320; 4])]),
+            (
+                5,
+                vec![
+                    (0x40, vec![0x4920; 4]),
+                    (0x50, vec![0x48a0; 4]),
+                    (0x60, vec![0x48c0; 4]),
+                ],
+            ),
+        ] {
+            let s = shape(&mut e, kind);
+            let raw = e.mem.alloc(0x80);
+            e.mem.free(raw);
+            e.call(0x00dd_a8c0, &args![archive, s]);
+            let frame = aligned_frame_at(raw, 0x70);
+            for (offset, expected) in slots {
+                assert_eq!(
+                    words(&e, frame + offset),
+                    expected,
+                    "type {kind} +{offset:x}"
+                );
+            }
+        }
     }
 
     /// An `hkArray`-pair record: `first` vectors (count at `+4`), `second` records (count `+0x10`).

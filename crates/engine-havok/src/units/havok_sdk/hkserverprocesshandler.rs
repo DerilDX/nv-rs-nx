@@ -161,21 +161,30 @@ pub fn hk_server_process_handler_consume_command(e: &mut Engine, this: u32, comm
         _ => return,
     };
     let archive = e.mem.u32(this + 8);
-    let value = e.mem.alloc(4);
-    let flag = e.mem.alloc(4);
-    e.call(
-        IARCHIVE_READ_ARRAY_GENERIC,
-        &args![archive, value, 4u32, 1u32],
-    );
-    let archive = e.mem.u32(this + 8);
-    let ok_at = e.call(IARCHIVE_IS_OK, &args![archive, flag]).u32();
-    if e.mem.u8(ok_at) != 0 {
-        let target = this.wrapping_sub(4);
-        let read = e.mem.u32(value);
-        e.vcall(target, slot, &args![read]);
-    }
-    e.mem.free(flag);
-    e.mem.free(value);
+    // The exe's frame (`SUB ESP,0x8`, one push) taken with the argument: the word read at +0x8
+    // (00d60c2e / 00d60c68); the `isOk` byte at +0x7 for `0xc2` (00d60c72) and in the command's
+    // own argument slot (+0x10, past the return address at +0xc) for `0xc3` (00d60c38).
+    e.with_stack(0x14, |e, frame| {
+        let frame = frame.addr();
+        e.mem.set_u32(frame + 0x10, u32::from(command));
+        let value = frame + 8;
+        let flag = if slot == 0x14 {
+            frame + 7
+        } else {
+            frame + 0x10
+        };
+        e.call(
+            IARCHIVE_READ_ARRAY_GENERIC,
+            &args![archive, value, 4u32, 1u32],
+        );
+        let archive = e.mem.u32(this + 8);
+        let ok_at = e.call(IARCHIVE_IS_OK, &args![archive, flag]).u32();
+        if e.mem.u8(ok_at) != 0 {
+            let target = this.wrapping_sub(4);
+            let read = e.mem.u32(value);
+            e.vcall(target, slot, &args![read]);
+        }
+    });
 }
 
 // Translated from 00d60ca0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -287,10 +296,13 @@ pub fn fn_00d60dd0(e: &mut Engine, this: u32, step: f32) {
     }
     let archive = e.mem.u32(this + 8);
     if archive != 0 {
-        let slot = e.mem.alloc(4);
-        e.mem.set_u32(slot, step.to_bits());
-        e.call(ROUTER_CONSUME_COMMANDS, &args![this + 0x18, slot, archive]);
-        e.mem.free(slot);
+        // The exe's frame (two pushes) taken with the argument: the router gets `step`'s own
+        // argument slot, +0xc past the return address at +0x8 (00d60e02).
+        e.with_stack(0x10, |e, frame| {
+            let slot = frame.addr() + 0xc;
+            e.mem.set_u32(slot, step.to_bits());
+            e.call(ROUTER_CONSUME_COMMANDS, &args![this + 0x18, slot, archive]);
+        });
     }
 }
 
@@ -433,12 +445,19 @@ pub fn hk_server_process_handler_constructor(
             );
         }
         let bytes = e.mem.u32(commands + 4).wrapping_mul(4);
-        let granted = e.mem.alloc(4);
-        e.mem.set_u32(granted, bytes);
-        let block = e.vcall(allocator, 0xc, &args![granted]).u32();
-        e.mem.set_u32(this + 0x44, block);
-        let size = e.mem.i32(granted);
-        e.mem.free(granted);
+        // The exe's frame (four pushes) taken with the arguments: the byte count goes to the
+        // allocator through the `commands` argument's own slot, +0x14 past the return address
+        // at +0x10 (00d61000).
+        let size = e.with_stack(0x20, |e, frame| {
+            let frame = frame.addr();
+            let granted = frame + 0x14;
+            e.mem.set_u32(frame + 0x18, input);
+            e.mem.set_u32(frame + 0x1c, output);
+            e.mem.set_u32(granted, bytes);
+            let block = e.vcall(allocator, 0xc, &args![granted]).u32();
+            e.mem.set_u32(this + 0x44, block);
+            e.mem.i32(granted)
+        });
         // `CDQ; AND EDX,3; ADD; SAR 2`: division by 4 rounding toward zero.
         e.mem
             .set_i32(this + 0x4c, size.wrapping_add((size >> 31) & 3) >> 2);
@@ -555,11 +574,13 @@ pub fn hk_process_is_ok(e: &mut Engine, this: u32) -> bool {
     if archive == 0 {
         return false;
     }
-    let flag = e.mem.alloc(4);
-    let ok_at = e.call(OARCHIVE_IS_OK, &args![archive, flag]).u32();
-    let ok = e.mem.u8(ok_at) != 0;
-    e.mem.free(flag);
-    ok
+    // The exe's frame (`PUSH ECX`): the flag byte at +0x3 (00d611e8).
+    e.with_stack(4, |e, frame| {
+        let ok_at = e
+            .call(OARCHIVE_IS_OK, &args![archive, frame.addr() + 3])
+            .u32();
+        e.mem.u8(ok_at) != 0
+    })
 }
 
 /// This unit's translated functions, by exe address.
@@ -780,8 +801,15 @@ mod tests {
         let mut e = engine();
         let (this, archive, log) = consume_setup(&mut e, true);
         e.call_log = Some(vec![]);
+        // The exe's 0x14-byte frame: the word at +0x8; the `isOk` byte at +0x7 for `0xc2` and
+        // in the command's argument slot (+0x10) for `0xc3`.
+        let frame = e.mem.alloc(0x14);
+        e.mem.free(frame);
         e.call(0x00d6_0c10, &args![this, 0xc2u32]);
         e.call(0x00d6_0c10, &args![this, 0xc3u32]);
+        let checks = calls_to(&e, IARCHIVE_IS_OK);
+        assert_eq!((checks[0][1], checks[1][1]), (frame + 7, frame + 0x10));
+        assert_eq!(calls_to(&e, IARCHIVE_READ_ARRAY_GENERIC)[0][1], frame + 8);
         assert_eq!(
             *log.borrow(),
             vec![(0x14, vec![0x1234_5678]), (0x18, vec![0x1234_5678])]
@@ -980,7 +1008,11 @@ mod tests {
         e.mem.set_u32(this + 8, archive);
         let step = 0.25f32;
         e.call_log = Some(vec![]);
+        // The router gets `step`'s own argument slot, +0xc of the exe's 0x10 bytes.
+        let frame = e.mem.alloc(0x10);
+        e.mem.free(frame);
         e.call(0x00d6_0dd0, &args![this, step]);
+        assert_eq!(calls_to(&e, ROUTER_CONSUME_COMMANDS)[0][1], frame + 0xc);
         let stepped: Vec<(u32, Vec<u32>)> = log.borrow().clone();
         let bits = step.to_bits();
         assert_eq!(
@@ -1138,10 +1170,14 @@ mod tests {
         e.mem.set_u32(commands, source);
         e.mem.set_u32(commands + 4, 3);
         e.call_log = Some(vec![]);
+        // The byte count goes through `commands`' own argument slot, +0x14 of the exe's 0x20.
+        let frame = e.mem.alloc(0x20);
+        e.mem.free(frame);
         let got = e
             .call(0x00d6_0f30, &args![this, commands, 0x1111u32, 0x2222u32])
             .u32();
         assert_eq!(got, this);
+        assert_eq!(calls_to(&e, 0x0b00_000c)[0][1], frame + 0x14);
         // The final vtables, the router and its map, the registered `hkProcess` part.
         assert_eq!(e.mem.u32(this), SERVER_HANDLER_VTABLE);
         assert_eq!(e.mem.u32(this + 8), SERVER_HANDLER_PROCESS_HANDLER_VTABLE);
@@ -1299,7 +1335,12 @@ mod tests {
                 e.mem.set_u8(a[1], u8::from(ok));
                 answer(a[1])
             });
+            // The flag byte at +0x3 of the exe's 4-byte frame.
+            let frame = e.mem.alloc(4);
+            e.mem.free(frame);
+            e.call_log = Some(vec![]);
             assert_eq!(e.call(0x00d6_11e0, &args![this]).bool(), ok);
+            assert_eq!(calls_to(&e, OARCHIVE_IS_OK)[0][1], frame + 3);
         }
     }
 }

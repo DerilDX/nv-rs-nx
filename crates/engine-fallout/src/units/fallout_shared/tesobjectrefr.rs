@@ -1794,10 +1794,12 @@ pub fn tes_object_refr_copy(e: &mut Engine, this: Ptr<TESObjectREFR>, source: Pt
         if e.call(0x0040_77c0, &args![this]).bool() {
             let base = e.get(data, OBJ_REFR::pObjectReference);
             if !base.is_null() && e.call(FORM_TYPE, &args![base]).i32() == 0x25 {
-                let node = e.vcall(base.addr(), 0x14c, &args![this, 0u32, 1u32]).u32();
-                // open: the game pushes only `node` for this call; the second
-                // argument is stack garbage, passed here as 0.
-                e.vcall(me, 0x1cc, &args![node, 0u32]);
+                // 0055cdb9: `PUSH 1; PUSH 0; PUSH this`, then the base's +0x14c, which
+                // pops two words (`this`, 0; TESBoundObject 0050ee50 is `RET 8`); the
+                // 1 left on the stack is the second word of Set3D (+0x1cc, `RET 8`),
+                // after the node pushed at 0055cde0.
+                let node = e.vcall(base.addr(), 0x14c, &args![this, 0u32]).u32();
+                e.vcall(me, 0x1cc, &args![node, 1u32]);
             }
         }
         let mut placed = false;
@@ -8507,6 +8509,33 @@ mod tests {
             calls_to(&log, 0x0056_7490),
             vec![vec![this.addr(), 2.0f32.to_bits()]]
         );
+    }
+
+    #[test]
+    fn copy_gives_the_left_over_flag_to_set3d_with_the_base_node() {
+        let (mut e, this, other) = copy_engine();
+        let me = this.addr();
+        e.mem.set_u32(other.addr() + FAKE_3D, 0x3d01); // the source has a 3D
+        returns(&mut e, 0x0040_77c0, 1);
+        let base = form(&mut e, 0x25, 1, 0);
+        let vtable = e.mem.alloc(0x200);
+        e.mem.set_u32(base, vtable);
+        e.mem.set_u32(vtable + 0x14c, 0x00ff_0040);
+        returns(&mut e, 0x00ff_0040, 0x3e3e);
+        for refr in [this, other] {
+            e.set(
+                refr.at(TESObjectREFR::data),
+                OBJ_REFR::pObjectReference,
+                Ptr::new(base),
+            );
+        }
+        e.call_log = Some(vec![]);
+        e.call(0x0055_c3e0, &args![this, other]);
+        let log = e.call_log.take().unwrap();
+        // 0055cdb9..0055cdf5: PUSH 1; PUSH 0; PUSH this; the base's +0x14c pops (this, 0);
+        // the node pushed next and the 1 left on the stack are Set3D's two words.
+        assert_eq!(calls_to(&log, 0x00ff_0040), vec![vec![base, me, 0]]);
+        assert!(set3d_calls(&log, this).contains(&vec![me, 0x3e3e, 1]));
     }
 
     #[test]
