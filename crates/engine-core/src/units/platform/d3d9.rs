@@ -124,6 +124,9 @@ pub struct Adapter {
     oem_code_page: Option<u32>,
     valid_code_pages: HashMap<u32, u32>,
     code_page_info: HashMap<u32, (u32, Vec<u8>)>,
+    /// `IDirect3DDevice9::CreateQuery(type, NULL)`: whether the device takes each query type
+    /// (`d3d9-capture device queries`).
+    queries: HashMap<u32, u32>,
 }
 
 fn words(text: &str) -> Vec<u32> {
@@ -154,7 +157,10 @@ impl Adapter {
                 "GetSystemMetrics" => {
                     a.metrics.insert(words(f[1])[0], hex(2));
                 }
-                "GetAdapterCount" | "GetAdapterMonitor" => {}
+                "GetAdapterCount" | "GetAdapterMonitor" | "CreateDevice" => {}
+                "CreateQuery" => {
+                    a.queries.insert(hex(1), hex(2));
+                }
                 "GetAdapterIdentifier" => {
                     a.identifiers.insert(words(f[1])[1], (hex(2), bytes(f[3])));
                 }
@@ -268,6 +274,12 @@ pub struct Graphics {
     pub(crate) nvapi: super::nvapi::State,
     /// The machine-local D3DX texture cache folder (`super::d3dx`).
     pub(crate) d3dx_texture_cache: Option<std::path::PathBuf>,
+    /// The real `d3d9.dll` objects behind the modelled ones (`NV_D3D9=real`, ADR-0008).
+    #[cfg(windows)]
+    pub(crate) real: super::d3d9real::Real,
+    /// The shader compiler's buffers and constant tables (`super::d3dxreal`).
+    #[cfg(windows)]
+    pub(crate) d3dx: super::d3dxreal::Objects,
 }
 
 /// Gives the layer the player's adapter table (`scripts/d3d9-capture`'s output).
@@ -295,6 +307,11 @@ fn not_captured(kind: &str, words: &[u32]) -> ! {
 
 /// The style and extended style a window made with `style` reads back (`child`: made as a
 /// child window), if the capture has them.
+/// What `CreateQuery(type, NULL)` answers on the player's device, when the table has it.
+pub fn query_support(e: &mut Engine, kind: u32) -> Option<u32> {
+    adapter(e).queries.get(&kind).copied()
+}
+
 pub fn window_style(e: &mut Engine, style: u32, child: u32) -> Option<(u32, u32)> {
     adapter(e).window_styles.get(&(style, child)).copied()
 }
@@ -539,6 +556,8 @@ pub fn direct3d_create9(e: &mut Engine, sdk: u32) -> u32 {
         .graphics
         .objects
         .insert(object, Direct3D { references: 1 });
+    #[cfg(windows)]
+    super::d3d9real::direct3d_created(e);
     object
 }
 

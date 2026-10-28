@@ -218,6 +218,10 @@ fn main() {
             }
             "image-info" => image::image_info(&mut o, module, &args[2]),
             "create-texture" => texture::create_texture(&mut o, module, &args[2]),
+            "functions-edges" => {
+                let name = args.get(2).map(String::as_str).unwrap_or("all");
+                functions::edges(&mut o, module, name);
+            }
             "functions" => {
                 let name = args.get(3).map(String::as_str).unwrap_or("all");
                 functions::measure(&mut o, module, name, count);

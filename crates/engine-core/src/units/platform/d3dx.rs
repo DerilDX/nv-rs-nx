@@ -22,6 +22,17 @@
 //!   the DLL's SSE2 quaternion (its own packed sine and cosine) and x87 matrix, followed
 //!   instruction by instruction from a private analysis of the player's DLL (no bytes copied);
 //!   52,000 measured calls match.
+//! - `D3DXVec3Normalize` (slot `00fdf41c`, thunk `00ee6dec`, called from `00b7dab0` <
+//!   `00b9a120`): the DLL's SSE2 version (the processor's `RSQRTSS` estimate and one Newton
+//!   step), from the same private analysis; all 4000 measured calls match.
+//! - `D3DXVec3TransformCoord` (thunk `00ee6df8`), `D3DXMatrixInverse` (`00ee6dda`),
+//!   `D3DXPlaneNormalize` (`00ee6dce`) and `D3DXPlaneTransform` (`00ee6dc8`; the DLL's table
+//!   gives it `D3DXVec4Transform`'s function): their SSE2 versions from the same analysis (the
+//!   inverse on a model of its XMM registers, instruction by instruction); `RCPSS`/`RCPPS` and
+//!   `RSQRTSS` are the processor's own estimates. The vector transforms take one of two paths by
+//!   whether the matrix sits on a 16-byte boundary (which operand comes first in each product,
+//!   so which NaN wins). All 20,000 measured calls match (the measured matrices sat off the
+//!   boundary).
 
 use crate::{Engine, Ptr};
 
@@ -59,6 +70,45 @@ mod single {
 
     pub fn sub(x: u32, y: u32) -> u32 {
         op(x, y, |a, b| a - b)
+    }
+
+    /// `RSQRTSS`: the processor's own reciprocal square root estimate (12 bits, its table is
+    /// the processor maker's: the host's answer is the player's on the player's machine).
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    pub fn rsqrt(x: u32) -> u32 {
+        #[cfg(target_arch = "x86")]
+        use std::arch::x86::{_mm_cvtss_f32, _mm_rsqrt_ss, _mm_set_ss};
+        #[cfg(target_arch = "x86_64")]
+        use std::arch::x86_64::{_mm_cvtss_f32, _mm_rsqrt_ss, _mm_set_ss};
+        // SSE is part of every x86-64 processor and of the targets this builds for.
+        unsafe { _mm_cvtss_f32(_mm_rsqrt_ss(_mm_set_ss(f32::from_bits(x)))).to_bits() }
+    }
+
+    /// `RCPSS`: the processor's own reciprocal estimate (as [`rsqrt`]).
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    pub fn rcp(x: u32) -> u32 {
+        #[cfg(target_arch = "x86")]
+        use std::arch::x86::{_mm_cvtss_f32, _mm_rcp_ss, _mm_set_ss};
+        #[cfg(target_arch = "x86_64")]
+        use std::arch::x86_64::{_mm_cvtss_f32, _mm_rcp_ss, _mm_set_ss};
+        unsafe { _mm_cvtss_f32(_mm_rcp_ss(_mm_set_ss(f32::from_bits(x)))).to_bits() }
+    }
+
+    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+    pub fn rcp(_x: u32) -> u32 {
+        panic!("RCPSS (the processor's reciprocal estimate) is not provided on this processor")
+    }
+
+    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+    pub fn rsqrt(_x: u32) -> u32 {
+        panic!("RSQRTSS (the processor's reciprocal square root estimate) is not provided on this processor")
+    }
+
+    /// `COMISS x, y` then `JNC`: `x >= y` as the flags say it (an unordered compare, a NaN on
+    /// either side, sets the carry: false).
+    pub fn not_below(x: u32, y: u32) -> bool {
+        let (a, b) = (f32::from_bits(x), f32::from_bits(y));
+        !(is_nan(x) || is_nan(y)) && a >= b
     }
 }
 
@@ -161,6 +211,277 @@ pub fn vec4_transform(v: &[u32], m: &[u32; 16]) -> [u32; 4] {
     })
 }
 
+/// `D3DXVec3Normalize`'s SSE2 version in the DLL (the one its start-up picks on a processor with
+/// SSE2 and without 3DNow!, read from the player's d3dx9_38.dll in a private analysis): the
+/// squared length `(x*x + y*y) + z*z`; below `2^-46` (`28800000`), or NaN (the compare is
+/// unordered), the answer is the zero vector; else one Newton step on the processor's
+/// reciprocal square root estimate `r`: `f = (3 - (r*s)*r) * (r * 0.5)` and each component
+/// times `f`.
+pub fn vec3_normalize_sse2(v: [u32; 3]) -> [u32; 3] {
+    use single::{add, mul, sub};
+    let s = add(add(mul(v[0], v[0]), mul(v[1], v[1])), mul(v[2], v[2]));
+    if !single::not_below(s, 0x2880_0000) {
+        return [0; 3];
+    }
+    let r = single::rsqrt(s);
+    let t = mul(mul(r, s), r);
+    let f = mul(sub(0x4040_0000, t), mul(r, 0x3f00_0000));
+    v.map(|c| mul(c, f))
+}
+
+// Platform: replaces d3dx9_38.dll D3DXVec3Normalize (import, thunk 00ee6dec)
+/// `D3DXVec3Normalize(out, v)` (stdcall): [`vec3_normalize_sse2`]; the input read before the
+/// output is written (out and v may be the same); answers `out`.
+pub fn vec3_normalize(e: &mut Engine, out: Ptr, v: Ptr) -> u32 {
+    let input: [u32; 3] = std::array::from_fn(|i| e.mem.u32(v.addr() + 4 * i as u32));
+    for (i, w) in vec3_normalize_sse2(input).iter().enumerate() {
+        e.mem.set_u32(out.addr() + 4 * i as u32, *w);
+    }
+    out.addr()
+}
+
+/// Checks a function against a whole measurement file of `scripts/d3dx-measure functions`
+/// (the path in `NV_D3DX_FUNCTIONS`; the machine-local file is not committed): the rows of
+/// `name`, inputs (one argument's words each, `|` between arguments) and result words. Used by
+/// the ignored tests that run on the measuring machine.
+#[cfg(test)]
+pub(crate) fn measured_rows(name: &str) -> Vec<(String, u16, Vec<Vec<u32>>, String)> {
+    let Some(path) = std::env::var_os("NV_D3DX_FUNCTIONS") else {
+        return Vec::new();
+    };
+    let text = std::fs::read_to_string(path).expect("the measurement file");
+    let words = |t: &str| -> Vec<u32> {
+        t.split(' ')
+            .filter(|w| !w.is_empty())
+            .map(|w| u32::from_str_radix(w, 16).unwrap())
+            .collect()
+    };
+    text.lines()
+        .filter(|l| l.starts_with(name) && l.as_bytes().get(name.len()) == Some(&b'\t'))
+        .map(|l| {
+            let f: Vec<&str> = l.split('\t').collect();
+            (
+                f[1].to_string(),
+                u16::from_str_radix(f[2], 16).unwrap(),
+                f[3].split('|').map(words).collect(),
+                f[4].to_string(),
+            )
+        })
+        .collect()
+}
+
+/// `SHUFPS d, s, imm`: lanes 0 and 1 from `d`, 2 and 3 from `s`, by the immediate's 2-bit fields.
+fn shufps(d: [u32; 4], s: [u32; 4], imm: u32) -> [u32; 4] {
+    let f = |k: u32| ((imm >> (2 * k)) & 3) as usize;
+    [d[f(0)], d[f(1)], s[f(2)], s[f(3)]]
+}
+
+/// A packed operation lane by lane, the destination's word first (`MULPS`, `ADDPS`, `SUBPS`).
+fn ps(d: [u32; 4], s: [u32; 4], op: fn(u32, u32) -> u32) -> [u32; 4] {
+    std::array::from_fn(|i| op(d[i], s[i]))
+}
+
+/// `D3DXMatrixInverse`'s SSE2 version in the DLL (the one its start-up picks on a processor with
+/// SSE2 and without 3DNow!; the cofactor scheme of Intel's streaming-SIMD 4x4 inverse), followed
+/// instruction by instruction from a private analysis of the player's d3dx9_38.dll (no bytes
+/// copied) on a model of its XMM registers and stack slots. `None` when the determinant compares
+/// equal to zero or is a NaN (the out matrix and the determinant are left as they were); else
+/// the determinant and the inverse (the cofactors times one Newton step on the processor's
+/// `RCPSS` estimate of 1/det). The x87 control word plays no part.
+#[allow(clippy::needless_late_init, unused_assignments)]
+pub fn matrix_inverse_sse2(m: &[u32; 16]) -> Option<(u32, [u32; 16])> {
+    use single::{add, mul, sub};
+    let mut x = [[0u32; 4]; 8];
+    x[0] = [0; 4];
+    x[2][0] = m[2];
+    x[2][1] = m[3];
+    x[4][0] = m[10];
+    x[4][1] = m[11];
+    x[2][2] = m[6];
+    x[2][3] = m[7];
+    x[4][2] = m[14];
+    x[4][3] = m[15];
+    x[3][0] = m[8];
+    x[3][1] = m[9];
+    x[1][0] = m[0];
+    x[1][1] = m[1];
+    x[3][2] = m[12];
+    x[3][3] = m[13];
+    x[1][2] = m[4];
+    x[1][3] = m[5];
+    x[5] = x[2];
+    x[5] = shufps(x[5], x[4], 0x88);
+    x[4] = shufps(x[4], x[2], 0xdd);
+    x[2] = x[4];
+    x[2] = ps(x[2], x[5], mul);
+    x[2] = shufps(x[2], x[2], 0xb1);
+    x[6] = x[2];
+    x[6] = shufps(x[6], x[6], 0x4e);
+    x[7] = x[3];
+    x[3] = shufps(x[3], x[1], 0xdd);
+    x[1] = shufps(x[1], x[7], 0x88);
+    x[7] = x[3];
+    x[3] = ps(x[3], x[6], mul);
+    x[6] = ps(x[6], x[1], mul);
+    let st_d0 = x[6];
+    x[6] = x[7];
+    x[7] = ps(x[7], x[2], mul);
+    x[2] = ps(x[2], x[1], mul);
+    x[3] = ps(x[3], x[7], sub);
+    x[7] = x[6];
+    x[7] = ps(x[7], x[5], mul);
+    x[5] = shufps(x[5], x[5], 0x4e);
+    x[7] = shufps(x[7], x[7], 0xb1);
+    let st_c0 = x[2];
+    x[2] = x[4];
+    x[2] = ps(x[2], x[7], mul);
+    x[2] = ps(x[2], x[3], add);
+    x[3] = x[7];
+    x[7] = shufps(x[7], x[7], 0x4e);
+    x[3] = ps(x[3], x[1], mul);
+    let st_b0 = x[3];
+    x[3] = x[4];
+    x[3] = ps(x[3], x[7], mul);
+    x[7] = ps(x[7], x[1], mul);
+    x[2] = ps(x[2], x[3], sub);
+    x[3] = x[6];
+    x[3] = shufps(x[3], x[3], 0x4e);
+    x[3] = ps(x[3], x[4], mul);
+    x[3] = shufps(x[3], x[3], 0xb1);
+    let st_a0 = x[7];
+    x[7] = x[5];
+    x[5] = ps(x[5], x[3], mul);
+    x[5] = ps(x[5], x[2], add);
+    x[2] = x[3];
+    x[3] = shufps(x[3], x[3], 0x4e);
+    x[2] = ps(x[2], x[1], mul);
+    let st_90 = x[4];
+    x[4] = x[7];
+    x[7] = ps(x[7], x[3], mul);
+    x[3] = ps(x[3], x[1], mul);
+    x[5] = ps(x[5], x[7], sub);
+    x[3] = ps(x[3], x[2], sub);
+    x[2] = x[1];
+    x[1] = ps(x[1], x[5], mul);
+    x[3] = shufps(x[3], x[3], 0x4e);
+    x[7] = x[1];
+    x[1] = shufps(x[1], x[1], 0x4e);
+    let st_e0 = x[5];
+    x[1] = ps(x[1], x[7], add);
+    x[5] = x[1];
+    x[1] = shufps(x[1], x[1], 0xb1);
+    x[1][0] = add(x[1][0], x[5][0]);
+    let _st_f0 = x[1];
+    x[5] = x[6];
+    x[5] = ps(x[5], x[2], mul);
+    x[5] = shufps(x[5], x[5], 0xb1);
+    x[7] = x[5];
+    x[5] = shufps(x[5], x[5], 0x4e);
+    let st_80 = x[4];
+    x[4] = st_90;
+    let st_70 = x[6];
+    x[6] = x[4];
+    x[6] = ps(x[6], x[7], mul);
+    x[6] = ps(x[6], x[3], add);
+    x[3] = x[4];
+    x[3] = ps(x[3], x[5], mul);
+    x[3] = ps(x[3], x[6], sub);
+    x[6] = x[4];
+    x[6] = ps(x[6], x[2], mul);
+    x[6] = shufps(x[6], x[6], 0xb1);
+    let st_60 = x[5];
+    x[5] = st_70;
+    let st_50 = x[7];
+    x[7] = x[6];
+    x[7] = ps(x[7], x[5], mul);
+    x[7] = ps(x[7], x[3], add);
+    x[3] = x[6];
+    x[3] = shufps(x[3], x[3], 0x4e);
+    let st_40 = x[4];
+    x[4] = x[5];
+    x[5] = ps(x[5], x[3], mul);
+    let st_30 = x[4];
+    x[4] = x[6];
+    x[6] = x[7];
+    x[6] = ps(x[6], x[5], sub);
+    x[5] = st_d0;
+    x[7] = st_c0;
+    x[5] = ps(x[5], x[7], sub);
+    x[5] = shufps(x[5], x[5], 0x4e);
+    x[7] = st_80;
+    x[4] = ps(x[4], x[7], mul);
+    x[3] = ps(x[3], x[7], mul);
+    x[5] = ps(x[5], x[4], sub);
+    x[2] = ps(x[2], x[7], mul);
+    x[3] = ps(x[3], x[5], add);
+    x[2] = shufps(x[2], x[2], 0xb1);
+    x[4] = x[2];
+    x[4] = shufps(x[4], x[4], 0x4e);
+    x[5] = st_40;
+    let st_20 = x[6];
+    x[6] = x[5];
+    x[5] = ps(x[5], x[2], mul);
+    x[6] = ps(x[6], x[4], mul);
+    x[5] = ps(x[5], x[3], add);
+    x[3] = x[4];
+    x[4] = x[5];
+    x[4] = ps(x[4], x[6], sub);
+    x[5] = st_a0;
+    x[6] = st_b0;
+    x[5] = ps(x[5], x[6], sub);
+    x[5] = shufps(x[5], x[5], 0x4e);
+    x[6] = st_50;
+    x[6] = ps(x[6], x[7], mul);
+    x[6] = ps(x[6], x[5], sub);
+    x[5] = st_60;
+    x[7] = ps(x[7], x[5], mul);
+    x[6] = ps(x[6], x[7], sub);
+    x[5] = st_30;
+    x[2] = ps(x[2], x[5], mul);
+    x[5] = ps(x[5], x[3], mul);
+    x[6] = ps(x[6], x[2], sub);
+    x[2] = x[5];
+    x[2] = ps(x[2], x[6], add);
+    let det = x[1][0];
+    // COMISS det, 0 then JZ: equal or unordered.
+    if det & 0x7fff_ffff == 0 || det & 0x7fff_ffff > 0x7f80_0000 {
+        return None;
+    }
+    let r = single::rcp(det);
+    let rr = mul(r, r);
+    let inv = sub(add(r, r), mul(det, rr));
+    let inv = [inv; 4];
+    let rows = [
+        ps(st_e0, inv, mul),
+        ps(x[4], inv, mul),
+        ps(st_20, inv, mul),
+        ps(inv, x[2], mul),
+    ];
+    let mut out = [0u32; 16];
+    for (i, row) in rows.iter().enumerate() {
+        out[4 * i..4 * i + 4].copy_from_slice(row);
+    }
+    Some((det, out))
+}
+
+// Platform: replaces d3dx9_38.dll D3DXMatrixInverse (import, thunk 00ee6dda)
+/// `D3DXMatrixInverse(out, determinant out or null, m)` (stdcall): [`matrix_inverse_sse2`]; the
+/// matrix read before anything is written; answers `out`, or null (nothing written) for a
+/// singular matrix.
+pub fn matrix_inverse(e: &mut Engine, out: Ptr, determinant: Ptr, m: Ptr) -> u32 {
+    let input = matrix(e, m.addr());
+    let Some((det, inverse)) = matrix_inverse_sse2(&input) else {
+        return 0;
+    };
+    if !determinant.is_null() {
+        e.mem.set_u32(determinant.addr(), det);
+    }
+    for (i, w) in inverse.iter().enumerate() {
+        e.mem.set_u32(out.addr() + 4 * i as u32, *w);
+    }
+    out.addr()
+}
+
 // Platform: replaces d3dx9_38.dll D3DXVec3TransformNormal (import)
 /// `D3DXVec3TransformNormal(out, v, m)` (stdcall): [`transform_normal`], the inputs read before
 /// `out` is written (measured with `out` = `v`); answers `out`.
@@ -176,9 +497,95 @@ pub fn vec3_transform_normal(e: &mut Engine, out: Ptr, v: Ptr, m: Ptr) -> u32 {
 /// `D3DXVec4Transform(out, v, m)` (stdcall): [`vec4_transform`], the inputs read before `out`
 /// is written (measured with `out` = `v`); answers `out`.
 pub fn vec4_transform_import(e: &mut Engine, out: Ptr, v: Ptr, m: Ptr) -> u32 {
-    let r = vec4_transform(&vector(e, v.addr(), 4), &matrix(e, m.addr()));
+    let r = vec4_transform_sse2(
+        &vector(e, v.addr(), 4),
+        &matrix(e, m.addr()),
+        m.addr() & 0xf == 0,
+    );
     for (i, w) in r.iter().enumerate() {
         e.mem.set_u32(out.addr().wrapping_add(4 * i as u32), *w);
+    }
+    out.addr()
+}
+
+/// `D3DXVec4Transform`'s (and `D3DXPlaneTransform`'s: the DLL's table gives both the same
+/// function) SSE2 version: column `j` is `(w*m[3][j] + z*m[2][j]) + (y*m[1][j] + x*m[0][j])`.
+/// The DLL takes one of two paths by the matrix's address: on a 16-byte boundary each product
+/// has the vector's word first, else the matrix's (which NaN wins when both are NaNs; the
+/// measured calls of 2026-10-22 all took the second path, [`vec4_transform`]).
+pub fn vec4_transform_sse2(v: &[u32], m: &[u32; 16], aligned: bool) -> [u32; 4] {
+    if !aligned {
+        return vec4_transform(v, m);
+    }
+    std::array::from_fn(|j| {
+        let p: [u32; 4] = std::array::from_fn(|k| single::mul(v[k], m[4 * k + j]));
+        single::add(single::add(p[3], p[2]), single::add(p[1], p[0]))
+    })
+}
+
+// Platform: replaces d3dx9_38.dll D3DXPlaneTransform (import, thunk 00ee6dc8)
+/// `D3DXPlaneTransform(out, plane, m)` (stdcall): the DLL's own table points it at the same SSE2
+/// function as `D3DXVec4Transform` ([`vec4_transform_sse2`]); answers `out`.
+pub fn plane_transform(e: &mut Engine, out: Ptr, plane: Ptr, m: Ptr) -> u32 {
+    vec4_transform_import(e, out, plane, m)
+}
+
+/// `D3DXPlaneNormalize`'s SSE2 version: as [`vec3_normalize_sse2`] on the normal `(a, b, c)`
+/// (all four words zero below `2^-46` or for a NaN), and `d` times the same factor (the factor's
+/// word first).
+pub fn plane_normalize_sse2(p: [u32; 4]) -> [u32; 4] {
+    use single::{add, mul, sub};
+    let s = add(add(mul(p[0], p[0]), mul(p[1], p[1])), mul(p[2], p[2]));
+    if !single::not_below(s, 0x2880_0000) {
+        return [0; 4];
+    }
+    let r = single::rsqrt(s);
+    let t = mul(mul(r, s), r);
+    let f = mul(sub(0x4040_0000, t), mul(r, 0x3f00_0000));
+    [mul(p[0], f), mul(p[1], f), mul(p[2], f), mul(f, p[3])]
+}
+
+// Platform: replaces d3dx9_38.dll D3DXPlaneNormalize (import, thunk 00ee6dce)
+/// `D3DXPlaneNormalize(out, plane)` (stdcall): [`plane_normalize_sse2`]; answers `out`.
+pub fn plane_normalize(e: &mut Engine, out: Ptr, plane: Ptr) -> u32 {
+    let p: [u32; 4] = std::array::from_fn(|i| e.mem.u32(plane.addr() + 4 * i as u32));
+    for (i, w) in plane_normalize_sse2(p).iter().enumerate() {
+        e.mem.set_u32(out.addr() + 4 * i as u32, *w);
+    }
+    out.addr()
+}
+
+/// `D3DXVec3TransformCoord`'s SSE2 version: the homogeneous row
+/// `s_j = (y*m[1][j] + x*m[0][j]) + (z*m[2][j] + m[3][j])` (each product with the vector's word
+/// first when the matrix is on a 16-byte boundary, the matrix's otherwise), then one Newton
+/// step on the processor's `RCPPS` estimate `r` of `1/w` (`w = s_3`):
+/// `q = (r + r) - (r*w)*r`, and `x, y, z = q*s_j`.
+pub fn vec3_transform_coord_sse2(v: &[u32], m: &[u32; 16], aligned: bool) -> [u32; 3] {
+    use single::{add, mul, sub};
+    let p = |k: usize, j: usize| {
+        if aligned {
+            mul(v[k], m[4 * k + j])
+        } else {
+            mul(m[4 * k + j], v[k])
+        }
+    };
+    let s: [u32; 4] = std::array::from_fn(|j| add(add(p(1, j), p(0, j)), add(p(2, j), m[12 + j])));
+    let r = single::rcp(s[3]);
+    let q = sub(add(r, r), mul(mul(r, s[3]), r));
+    [mul(q, s[0]), mul(q, s[1]), mul(q, s[2])]
+}
+
+// Platform: replaces d3dx9_38.dll D3DXVec3TransformCoord (import, thunk 00ee6df8)
+/// `D3DXVec3TransformCoord(out, v, m)` (stdcall): [`vec3_transform_coord_sse2`], the path by the
+/// matrix's address; the inputs read before `out` is written; answers `out`.
+pub fn vec3_transform_coord(e: &mut Engine, out: Ptr, v: Ptr, m: Ptr) -> u32 {
+    let r = vec3_transform_coord_sse2(
+        &vector(e, v.addr(), 3),
+        &matrix(e, m.addr()),
+        m.addr() & 0xf == 0,
+    );
+    for (i, w) in r.iter().enumerate() {
+        e.mem.set_u32(out.addr() + 4 * i as u32, *w);
     }
     out.addr()
 }
@@ -913,7 +1320,9 @@ mod tests {
             for (i, w) in v.iter().enumerate() {
                 e.mem.set_u32(at + 4 * i as u32, *w);
             }
-            let mat = e.mem.alloc(64);
+            // Off a 16-byte boundary, as the measuring tool's buffers were: the DLL's path with the
+            // matrix word first in each product.
+            let mat = (e.mem.alloc(80) + 4) | 4;
             for (i, w) in m.iter().enumerate() {
                 e.mem.set_u32(mat + 4 * i as u32, *w);
             }
@@ -1332,5 +1741,292 @@ mod tests_yaw_pitch_roll {
             .iter()
             .any(|(dll, name, _)| *dll == "d3dx9_38.dll"
                 && *name == "D3DXMatrixRotationYawPitchRoll"));
+    }
+}
+
+#[cfg(test)]
+mod tests_vec3_normalize {
+    use super::*;
+
+    /// Every measured call (`NV_D3DX_FUNCTIONS` names the machine-local file; without it the
+    /// test has nothing to check).
+    #[test]
+    fn vec3_normalize_matches_the_whole_measurement() {
+        let rows = measured_rows("D3DXVec3Normalize");
+        for (alias, cw, inputs, want) in &rows {
+            let v: [u32; 3] = inputs[0].clone().try_into().unwrap();
+            let got: Vec<String> = vec3_normalize_sse2(v)
+                .iter()
+                .map(|w| format!("{w:08x}"))
+                .collect();
+            assert_eq!(&got.join(" "), want, "{alias} {cw:04x} {v:08x?}");
+        }
+        eprintln!("D3DXVec3Normalize: {} measured calls match", rows.len());
+    }
+
+    /// Calls of the player's d3dx9_38.dll (TEST DATA from `scripts/d3dx-measure functions`,
+    /// 2026-10-22, AMD Ryzen AI 9 HX 370; all 4000 measured calls match): control word, input,
+    /// output. The SSE2 version does not read the x87 control word.
+    const MEASURED: &[(u16, &str, &str)] = &[
+        // A NaN anywhere: the length compare is unordered, the zero vector.
+        (
+            0x027f,
+            "7fc12345 bd8a73f1 e67b2ff7",
+            "00000000 00000000 00000000",
+        ),
+        (
+            0x027f,
+            "7f800001 2569bcb6 bd1eb497",
+            "00000000 00000000 00000000",
+        ),
+        // Below 2^-46 squared (denormals, tiny normals): the zero vector.
+        (
+            0x027f,
+            "1e3ce508 00800000 20000000",
+            "00000000 00000000 00000000",
+        ),
+        (
+            0x027f,
+            "00800000 8d0cfe4e 81a2d0d6",
+            "00000000 00000000 00000000",
+        ),
+        // An infinity: the estimate of 1/sqrt(inf) is 0, 0 * inf the default NaN.
+        (
+            0x027f,
+            "4b30935a 00000000 ff800000",
+            "ffc00000 ffc00000 ffc00000",
+        ),
+        // An overflowing square: the same.
+        (
+            0x007f,
+            "80000001 6ac06de4 5d8ff60e",
+            "ffc00000 ffc00000 ffc00000",
+        ),
+        // Ordinary vectors: one Newton step on the estimate.
+        (
+            0x027f,
+            "40490fdb 34000000 00800000",
+            "3f800000 3322f983 0028be61",
+        ),
+        (
+            0x027f,
+            "c0c9ff54 c024191f 40f2b5d2",
+            "bf1e7fc1 be80c2d5 3f3e71db",
+        ),
+        (
+            0x007f,
+            "c0000000 bbb19cfb bf800000",
+            "bf64f901 bb1edc92 bee4f901",
+        ),
+    ];
+
+    #[test]
+    fn vec3_normalize_matches_the_dll() {
+        let words = |t: &str| -> Vec<u32> {
+            t.split(' ')
+                .map(|w| u32::from_str_radix(w, 16).unwrap())
+                .collect()
+        };
+        for (cw, input, want) in MEASURED {
+            let mut e = Engine::new();
+            crate::units::crt::set_x87_control_word(&mut e, *cw);
+            let v = e.mem.alloc(12);
+            for (i, w) in words(input).iter().enumerate() {
+                e.mem.set_u32(v + 4 * i as u32, *w);
+            }
+            // Out and v the same: the input is read first.
+            assert_eq!(vec3_normalize(&mut e, Ptr::new(v), Ptr::new(v)), v);
+            let got: Vec<String> = (0..3)
+                .map(|i| format!("{:08x}", e.mem.u32(v + 4 * i)))
+                .collect();
+            assert_eq!(got.join(" "), *want, "{input} at {cw:04x}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests_measured_files {
+    use super::*;
+
+    fn hex(words: &[u32]) -> String {
+        words
+            .iter()
+            .map(|w| format!("{w:08x}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// Every measured call of the four functions (`NV_D3DX_FUNCTIONS`, see [`measured_rows`]).
+    /// The measurement did not record where its matrix buffers sat, so a transform must match
+    /// one of the two paths.
+    #[test]
+    fn the_sse2_functions_match_the_whole_measurement() {
+        let mut n = 0;
+        for (alias, cw, i, want) in measured_rows("D3DXVec3Normalize") {
+            let got = hex(&vec3_normalize_sse2(i[0].clone().try_into().unwrap()));
+            assert_eq!(got, want, "Vec3Normalize {alias} {cw:04x} {:08x?}", i[0]);
+            n += 1;
+        }
+        for (alias, cw, i, want) in measured_rows("D3DXPlaneNormalize") {
+            let got = hex(&plane_normalize_sse2(i[0].clone().try_into().unwrap()));
+            assert_eq!(got, want, "PlaneNormalize {alias} {cw:04x} {:08x?}", i[0]);
+            n += 1;
+        }
+        for name in [
+            "D3DXPlaneTransform",
+            "D3DXVec3TransformCoord",
+            "D3DXVec4Transform",
+        ] {
+            for (alias, cw, i, want) in measured_rows(name) {
+                let m: [u32; 16] = i[1].clone().try_into().unwrap();
+                // `/m16`, `/m4`: the matrix on or off a 16-byte boundary (the edge measurement);
+                // no tag: not recorded, either path.
+                let which: &[bool] = if alias.ends_with("/m16") {
+                    &[true]
+                } else if alias.ends_with("/m4") {
+                    &[false]
+                } else {
+                    &[false, true]
+                };
+                let paths: Vec<String> = which
+                    .iter()
+                    .map(|&a| {
+                        if name != "D3DXVec3TransformCoord" {
+                            hex(&vec4_transform_sse2(&i[0], &m, a))
+                        } else {
+                            hex(&vec3_transform_coord_sse2(&i[0], &m, a))
+                        }
+                    })
+                    .collect();
+                assert!(
+                    paths.contains(&want),
+                    "{name} {alias} {cw:04x} {:08x?} {m:08x?}: {want} not in {paths:?}",
+                    i[0]
+                );
+                n += 1;
+            }
+        }
+        for (alias, cw, i, want) in measured_rows("D3DXMatrixInverse") {
+            let m: [u32; 16] = i[0].clone().try_into().unwrap();
+            let (result, det) = want.split_once('|').unwrap();
+            match matrix_inverse_sse2(&m) {
+                Some((d, inv)) => {
+                    let base = if alias == "out=in" {
+                        m
+                    } else {
+                        [0x5555_5555; 16]
+                    };
+                    let _ = base;
+                    assert_eq!(hex(&inv), result, "Inverse {alias} {cw:04x} {m:08x?}");
+                    if det != "-" {
+                        assert_eq!(format!("{d:08x}"), det, "Inverse det {m:08x?}");
+                    }
+                }
+                None => {
+                    // Nothing written: the out buffer as the tool filled it (or the input).
+                    let untouched = if alias == "out=in" {
+                        hex(&m)
+                    } else {
+                        hex(&[0x5555_5555; 16])
+                    };
+                    assert_eq!(result, untouched, "Inverse singular {alias} {m:08x?}");
+                    if det != "-" {
+                        assert_eq!(det, "55555555", "Inverse singular det {m:08x?}");
+                    }
+                }
+            }
+            n += 1;
+        }
+        eprintln!("{n} measured calls match");
+    }
+}
+
+#[cfg(test)]
+mod tests_sse2_functions {
+    use super::*;
+
+    fn words(t: &str) -> Vec<u32> {
+        t.split(' ')
+            .map(|w| u32::from_str_radix(w, 16).unwrap())
+            .collect()
+    }
+
+    fn hex(w: &[u32]) -> String {
+        w.iter()
+            .map(|w| format!("{w:08x}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    // Calls of the player's d3dx9_38.dll (TEST DATA from `scripts/d3dx-measure functions`,
+    // 2026-10-22, AMD Ryzen AI 9 HX 370; all 20,000 measured calls of the four functions match):
+    // input words, output words. The measured matrices sat off a 16-byte boundary.
+
+    #[test]
+    fn plane_normalize_matches_the_dll() {
+        for (input, want) in [
+            // A NaN in the normal: all four zero.
+            (
+                "d3feed54 5b1dadf9 7f800001 eb2d318b",
+                "00000000 00000000 00000000 00000000",
+            ),
+            (
+                "1e3ce508 7fc12345 1e3ce508 ffc00000",
+                "00000000 00000000 00000000 00000000",
+            ),
+            // An overflowing square: the default NaN everywhere.
+            (
+                "5b0ad945 bd4dc548 7a33da59 dadf75b2",
+                "ffc00000 ffc00000 ffc00000 ffc00000",
+            ),
+        ] {
+            let p: [u32; 4] = words(input).try_into().unwrap();
+            assert_eq!(hex(&plane_normalize_sse2(p)), want, "{input}");
+        }
+    }
+
+    #[test]
+    fn transforms_match_the_dll() {
+        for (v, m, want) in [
+            ("bf800000 7fc12345 bf800000", "3f080b70 bd666117 c107882d c20e7268 bf20fa26 39ae03dc c01c34ca bb686714 3f5111c0 3a337df8 3969a8ad 3b34abb8 4111a064 3f1b25e2 bec49d84 c2b9f7ba", "7fc12345 7fc12345 7fc12345"),
+            ("6616aafd 2b2a6c45 3540d4a7", "398932ea 3b475c33 c11bc793 bdb4d888 c035b89b 422fc87a c4585b66 bd2ad4bd 395218a4 42983d67 bd5e4ee0 39e0b303 3d9731e3 bf744566 bd9b0072 3f24d23c", "bb4236f5 bd0d1aaa 42dc8458"),
+        ] {
+            let m: [u32; 16] = words(m).try_into().unwrap();
+            assert_eq!(hex(&vec3_transform_coord_sse2(&words(v), &m, false)), want, "{v}");
+        }
+        for (v, m, want) in [
+            ("2b1c723c e0ee1787 98e36450 ea6ef488", "420ebbeb 41a6fa8f 402db204 bf5d1ab0 3bdb78e1 c0a00442 bac0dd66 3f0193fc c0892191 3d98c3f7 c44f23df 43cb97c0 3f126d00 c4514d41 3f74ad22 c053716a", "ea08ad34 6f435dbf ea6462ad 6b455d65"),
+            ("bcfdc8ba 4029713d b4703f8d b58eff69", "b9648796 c43c3652 c02f6d42 00000000 ba179c3e ba5526bb c4549196 00000000 bbad3619 3d5ffe57 bf606396 00000000 80800000 7fc12345 80800000 3f800000", "bac7cfd3 7fc12345 c50cb0c7 b58eff69"),
+        ] {
+            let m: [u32; 16] = words(m).try_into().unwrap();
+            assert_eq!(hex(&vec4_transform_sse2(&words(v), &m, false)), want, "{v}");
+        }
+    }
+
+    #[test]
+    fn matrix_inverse_matches_the_dll() {
+        let m: [u32; 16] = words("c4779013 c46d0c0d 439e49be 3d003fc3 4402c71e c227972c 3f403b3a 42e78421 ba6d58e4 3c1fc7e7 400d85ba c0ffa558 bf1ad120 3e2376d8 c080bfba bd7af630").try_into().unwrap();
+        let (det, inv) = matrix_inverse_sse2(&m).expect("not singular");
+        assert_eq!(det, 0xcb81_be35);
+        assert_eq!(hex(&inv), "b8a10f25 3ae8c904 3cd24882 3c099229 ba80eb10 bb011313 bce3f7e5 bdbe9279 b7e5678f b9b425e5 bb476aeb be813f09 b712fe43 b8cceb6a be0113d9 bd8f5532");
+        // A determinant of infinity: every word the default NaN, the determinant written.
+        let m: [u32; 16] = words("5ff3eb27 fac1e3eb e1d816db 40408654 9cc61f6f 8d906b31 c298b5ff d2b8bdad 11b37d63 7856a80d 2fa573a2 bc087d0b 868ba278 9b4efcc8 b6a75f56 125dbdf1").try_into().unwrap();
+        let (det, inv) = matrix_inverse_sse2(&m).expect("an infinite determinant is not zero");
+        assert_eq!(det, 0x7f80_0000);
+        assert!(inv.iter().all(|&w| w == 0xffc0_0000));
+        // A NaN determinant: null, nothing written.
+        let m: [u32; 16] = words("80800000 80800000 80800000 7fc00000 7f800000 ff7fffff 40490fdb 00000001 40490fdb 3eaaaaab 1e3ce508 7fc00000 7f800000 00800000 34000000 3eaaaaab").try_into().unwrap();
+        assert_eq!(matrix_inverse_sse2(&m), None);
+        let mut e = Engine::new();
+        let (out, det, at) = (e.mem.alloc(64), e.mem.alloc(4), e.mem.alloc(64));
+        e.mem.set_u32(det, 0x5555_5555);
+        for (i, w) in m.iter().enumerate() {
+            e.mem.set_u32(at + 4 * i as u32, *w);
+        }
+        assert_eq!(
+            matrix_inverse(&mut e, Ptr::new(out), Ptr::new(det), Ptr::new(at)),
+            0
+        );
+        assert_eq!(e.mem.u32(det), 0x5555_5555);
     }
 }

@@ -68,9 +68,45 @@ impl Host {
             ));
         }
         let mut engine = Box::new(Engine::with_exe(&exe)?);
+        // The play loop's patches (`crates/play-patch`, empty on main) replace the entries with
+        // the same addresses.
+        for (address, function) in play_patch::funcs() {
+            engine.register(address, function);
+        }
         // The game's clock (`GetTickCount`, `timeGetTime`, `QueryPerformanceCounter`) runs with
         // the real time from here on, `Sleep` moving it on too (`Engine::clock_now_ms`).
         engine.start_real_clock();
+        // How the game's threads are ordered (`engine::thread_host::Scheme`): by default a
+        // signal from the main thread runs the threads it wakes soon after (`NV_WAKE_DELAY`
+        // calls later, at main's next platform call), a used-up slice ends at the next
+        // platform call and game threads' timed waits time out. `NV_THREADS=slice` keeps the
+        // scheme before; `NV_THREADS=nowake,anycall,notimeout` (any of them) turns parts off.
+        engine.kernel.threads.scheme =
+            engine::thread_host::Scheme::from_name(std::env::var("NV_THREADS").ok().as_deref())?;
+        if let Some(delay) = std::env::var("NV_WAKE_DELAY")
+            .ok()
+            .and_then(|v| v.trim().parse().ok())
+        {
+            engine.kernel.threads.wake_delay = delay;
+        }
+        // The game's threads take turns every `NV_SLICE` calls (200000 unless set; 0: only at
+        // waits and sleeps), as they would run side by side on Windows
+        // (`engine::thread_host::preempt`).
+        let slice = std::env::var("NV_SLICE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(200_000u64);
+        if slice != 0 {
+            engine::thread_host::start_slicing(&mut engine, slice);
+        }
+        // `NV_SOUND=out`: the game's sound on the player's default device, from when the game
+        // makes its DirectSound device on; `NV_SOUND_RECORD=FILE.wav` also records what goes
+        // to the device, with a log of what started when (`FILE.log`). Off by default.
+        // `NV_SOUND=device` keeps the device's pace instead of the game's clock.
+        if let Ok(mode @ ("out" | "device")) = std::env::var("NV_SOUND").as_deref() {
+            let record = std::env::var_os("NV_SOUND_RECORD").map(std::path::PathBuf::from);
+            engine::units::platform::dsound::want_output(&mut engine, record, mode == "device");
+        }
         let mut movement = player_move::PlayerMovement::default();
         // Diagnostics: with `NV_MOVE_PROBE` set, start-up's `__mtinit` and `NiInit` are probe
         // runs too (they go on past misses with zero results and record them all).
@@ -318,6 +354,11 @@ pub const STAND_INS: [engine::static_init::StandIn; 1] = [(0x00fb_66a0, start_al
 /// calls its `Initialize` (slot +0x1c). (`00866690` ends with a call to a
 /// library singleton's slot +4 that is not reproduced.)
 pub fn start_allocator(e: &mut Engine) {
+    // `00aa3880` on the memory manager (`011f6238`), the parts that are game objects and not the
+    // heaps: `kThreadScrapHeapMap` (+0x114: `00aa47e0(map, 0x25)`, then its vtable `010a25f8`),
+    // which `MemoryManager::GetThreadScrapHeap` (`00aa42e0`) looks the threads up in.
+    e.call(0x00aa_47e0, &[0x011f_6238 + 0x114, 0x25]);
+    e.mem.set_u32(0x011f_6238 + 0x114, 0x010a_25f8);
     // `00866690`: `operator new(8)` for the holder, `operator new(4)` for the
     // allocator and its constructor `00aa2230`, the holder's constructor
     // `00aa21d0`, the store at `011f6118`, then `00aa2020`. (Its null checks
@@ -329,8 +370,10 @@ pub fn start_allocator(e: &mut Engine) {
     e.mem.set_u32(0x011f_6118, holder);
     e.call(0x00aa_2020, &[]);
     // Not reproduced: `00866690`'s last call, slot +4 of the singleton
-    // `00af2640` answers with (0, 0, 0), and the rest of `00aa3880` (the
-    // memory manager itself is platform).
+    // `00af2640` answers with (0, 0, 0), and the heap set-up of `00aa3880` (the
+    // memory manager's heaps are platform).
+    // `00aa3880`'s last step: the scrap-heap manager (`00aa58d0`).
+    e.call(0x00aa_58d0, &[]);
 }
 
 #[cfg(test)]

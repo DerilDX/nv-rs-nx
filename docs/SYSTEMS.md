@@ -25,26 +25,26 @@ build. Game threads are stepped on the main thread behind one seam in
 ## Coverage by code group
 
 "Covered" counts translated, partial and table-run static initializer
-functions (ledger of 2026-10-27). Regenerate the numbers before relying on them.
+functions (ledger of 2026-10-28). Regenerate the numbers before relying on them.
 
 | Code group | Functions | Covered | % | System(s) | Phase |
 |---|---:|---:|---:|---|---|
 | compiler: static init/exit | 22,767 | 22,767 | 100 | Start-up and shut-down (table-run initializers and atexit destructors; refused rows left for hand translation) | done |
-| (unplaced: no unit in the map) | 2,435 | 2,432 | 100 | Spread across every system; assign by caller | all |
+| (unplaced: no unit in the map) | 2,436 | 2,433 | 100 | Spread across every system; assign by caller | all |
 | fallout shared (forms, references, world data) | 10,479 | 10,479 | 100 | Forms, records, references, cells, extra data | C |
 | fallout/ai | 4,849 | 4,849 | 100 | AI, processes, movement, combat AI | A (movement), C |
 | fallout/interface | 2,645 | 2,645 | 100 | Menus, HUD, interface manager | C |
-| Havok SDK | 7,377 | 7,377 | 100 | Physics engine (739 functions keep a marked part, mostly C++ exception frames) | A |
+| Havok SDK | 7,381 | 7,381 | 100 | Physics engine (739 functions keep a marked part, mostly C++ exception frames) | A |
 | BSHavok | 1,634 | 1,634 | 100 | Bethesda's Havok layer: character controller, ragdolls, constraints | A |
-| NiCollision | 236 | 236 | 100 | Gamebryo collision | A |
+| NiCollision | 237 | 237 | 100 | Gamebryo collision | A |
 | fallout shared/havok | 478 | 478 | 100 | Game-side physics: water, camera caster, listeners | A |
 | fallout shared/pathfinding | 1,788 | 1,788 | 100 | Navmesh, pathfinding | C |
 | NiAnimation | 1,413 | 1,413 | 100 | Animation: controllers, blending, keyframes | A |
 | FaceGen + fallout shared/facegen | 907 | 907 | 100 | Faces, head morphs, lip sync | A |
 | BSAudio + fallout/audio | 494 | 494 | 100 | Audio | A |
 | NiMain | 1,722 | 1,722 | 100 | Scene graph, cameras, properties | B |
-| BSShader | 1,987 | 1,987 | 100 | Shaders, passes, accumulators, image space (game code, ADR-0007) | B |
-| NiXenonRenderer + d3d9/d3dx9 | 991 | 989 | 100 | Gamebryo Direct3D 9 renderer, translated onto our own Direct3D 9 layer (ADR-0007) | B |
+| BSShader | 1,996 | 1,996 | 100 | Shaders, passes, accumulators, image space (game code, ADR-0007) | B |
+| NiXenonRenderer + d3d9/d3dx9 | 991 | 989 | 100 | Gamebryo Direct3D 9 renderer, translated onto our own Direct3D 9 layer (ADR-0007); on Windows the layer can forward to the real d3d9.dll (`NV_D3D9=real`, ADR-0008) | B |
 | NiParticle | 704 | 704 | 100 | Particles, effects | B |
 | SpeedTree + fallout shared/speedtree | 847 | 847 | 100 | Trees | B |
 | BSMain | 991 | 991 | 100 | Scene helpers, culling, debris, scene graph | B |
@@ -141,7 +141,9 @@ translation yet.
 
 ### Platform (needed by all phases)
 - Windows stand-ins: memory, files (`BSFile` and `ReadF`, needed to finish the real quest loader), events, semaphores, threads (the seam), timers.
-- Direct3D 9 calls go to our own Direct3D 9 layer on wgpu (ADR-0007), with D3DX supplied by that layer; DirectInput becomes Bevy input; XAudio2 and DirectSound become the audio back end.
+- Direct3D 9 calls go to our own Direct3D 9 layer (ADR-0007), with D3DX supplied by that layer (its maths measured bit for bit against the player's d3dx9_38.dll; on Windows the shader compiler is the player's own DLL, loaded from the system folder). The layer is a model that draws nothing; on Windows, `NV_D3D9=real` also forwards each call that changes what is drawn to the real d3d9.dll in a real window (ADR-0008), whose keyboard and mouse feed the game's DirectInput. The wgpu back end for other platforms is not built yet.
+- Sound: DirectSound, the music graph, Vorbis and the mixer are our own layer; `NV_SOUND=out` plays the mix on the real audio device. The resampler, the 3D law and distortion are approximate for now (docs/SOUND.md).
+- State today (2026-10-28, play build, Windows): the game's own code starts a new game, loads Doc Mitchell's house, plays the opening (Doc's speech, the name box) and reaches the race menu. Not yet compared frame by frame against the original.
 - The exe check: 1.4.0.525 now; GOG and Epic versions later (maintainer decision).
 
 ### After the port (planned, not part of 1:1)
@@ -150,6 +152,6 @@ translation yet.
 - **GOG and Epic exe support.**
 
 ## Known corrections and open items
-- The Havok SDK is not ported. Earlier notes counted the B1 solver work (79 functions in `crates/physics`) as "Havok translated".
+- The Havok SDK is translated in `crates/engine-havok` (see the table), not yet compared against the original in play. Earlier notes had counted the B1 solver work (79 functions in `crates/physics`) as "Havok translated".
 - The private x87 NaN helpers in several units disagree (`expression.rs`, `actionpoints.rs`, `static_init.rs` and newer files). Consolidate them into `crate::x87` against recordings from the real CPU.
 - Shared layouts that translators keep asking for are listed in docs/HANDOFF.md.

@@ -546,6 +546,17 @@ pub fn create_window_ex_a(
         e.mem.cstr(title.addr())
     };
     let handle = e.kernel.insert(KernelObject::Window);
+    let rect = [x, y, x.wrapping_add(width), y.wrapping_add(height)];
+    #[cfg(windows)]
+    super::d3d9real::window_created(
+        e,
+        handle,
+        &title,
+        style,
+        ex_style,
+        rect,
+        if child { parent } else { 0 },
+    );
     e.kernel.windows.windows.insert(
         handle,
         Window {
@@ -554,7 +565,7 @@ pub fn create_window_ex_a(
             style,
             ex_style,
             parent,
-            rect: [x, y, x.wrapping_add(width), y.wrapping_add(height)],
+            rect,
         },
     );
     if !child && style & WS_VISIBLE != 0 && e.kernel.main_window == 0 {
@@ -636,6 +647,11 @@ pub fn set_window_pos(
         size_h = height;
     }
     w.rect = [nx, ny, nx.wrapping_add(size_w), ny.wrapping_add(size_h)];
+    #[cfg(windows)]
+    {
+        let rect = w.rect;
+        super::d3d9real::window_moved(e, handle, rect, flags);
+    }
     1
 }
 

@@ -176,6 +176,29 @@ pub unsafe fn measure(o: &mut impl Write) {
         o.flush().unwrap();
         return;
     }
+    // `device queries`: the machine table's lines of which query types the device takes
+    // (`CreateQuery` with a null out), `CreateQuery<TAB>type<TAB>hr`, to add to the table.
+    if std::env::args().nth(2).as_deref() == Some("queries") {
+        for kind in 0..=20usize {
+            let hr = call(device, CREATE_QUERY, &[kind, 0]);
+            writeln!(o, "CreateQuery\t{kind:x}\t{hr:x}").unwrap();
+        }
+        call(device, RELEASE, &[]);
+        return;
+    }
+    if std::env::args().nth(2).as_deref() == Some("refs") {
+        refs(o, device);
+        return;
+    }
+    if std::env::args().nth(2).as_deref() == Some("reset") {
+        reset(o, device, &pp);
+        return;
+    }
+    if std::env::args().nth(2).as_deref() == Some("extra") {
+        extra(o, device);
+        call(device, RELEASE, &[]);
+        return;
+    }
     if std::env::args().nth(2).as_deref() == Some("fixed") {
         fixed_function(o, device);
         if let Some(case) = std::env::args().nth(3).filter(|a| a.starts_with("texture:")) {
@@ -504,4 +527,320 @@ unsafe fn textures(o: &mut impl Write, device: P, only: &str) {
     let hr = call(device, UPDATE_TEXTURE, &[sys1 as usize, def1 as usize]);
     writeln!(o, "UpdateTexture\tin a scene, sysmem 1 level to default 1 level\t{hr:x}").unwrap(); o.flush().unwrap();
     call(device, END_SCENE, &[]);
+}
+
+/// `IDirect3DDevice9` slots of `device extra`, and `IDirect3DQuery9`'s / `IDirect3DSurface9`'s.
+const TEST_COOPERATIVE_LEVEL: usize = 3;
+const GET_BACK_BUFFER: usize = 18;
+const GET_RENDER_TARGET_DATA: usize = 32;
+const COLOR_FILL: usize = 35;
+const CREATE_QUERY: usize = 118;
+const QUERY_GET_TYPE: usize = 4;
+const QUERY_GET_DATA_SIZE: usize = 5;
+const QUERY_ISSUE: usize = 6;
+const QUERY_GET_DATA: usize = 7;
+const SURFACE_LOCK_RECT: usize = 13;
+const SURFACE_UNLOCK_RECT: usize = 14;
+
+/// `device extra`: queries (support by type, event and occlusion life cycle), offscreen plain
+/// surfaces, `GetRenderTargetData`, `ColorFill`, `TestCooperativeLevel`.
+unsafe fn extra(o: &mut impl Write, device: P) {
+    macro_rules! line {
+        ($($t:tt)*) => {{ writeln!(o, $($t)*).unwrap(); o.flush().unwrap(); }};
+    }
+    line!("TestCooperativeLevel\twindowed, fresh\t{:x}", call(device, TEST_COOPERATIVE_LEVEL, &[]));
+    for kind in 0..=20usize {
+        line!("CreateQuery\ttype {kind:x}, null out\t{:x}", call(device, CREATE_QUERY, &[kind, 0]));
+    }
+    // An event query (8) and an occlusion query (9) through their life cycle.
+    for kind in [8usize, 9] {
+        let mut q: P = std::ptr::null_mut();
+        let hr = call(device, CREATE_QUERY, &[kind, &mut q as *mut P as usize]);
+        line!("CreateQuery\ttype {kind:x}\t{hr:x}");
+        if q.is_null() {
+            continue;
+        }
+        line!("Query::GetType\ttype {kind:x}\t{:x}", call(q, QUERY_GET_TYPE, &[]));
+        line!("Query::GetDataSize\ttype {kind:x}\t{:x}", call(q, QUERY_GET_DATA_SIZE, &[]));
+        let mut value = 0xaaaa_aaaau32;
+        let hr = call(q, QUERY_GET_DATA, &[&mut value as *mut u32 as usize, 4, 1]);
+        line!("Query::GetData\ttype {kind:x}, never issued, flush\t{hr:x}\t{value:x}");
+        line!("Query::Issue\ttype {kind:x}, END first\t{:x}", call(q, QUERY_ISSUE, &[1]));
+        line!("Query::Issue\ttype {kind:x}, BEGIN\t{:x}", call(q, QUERY_ISSUE, &[2]));
+        line!("Query::Issue\ttype {kind:x}, BEGIN twice\t{:x}", call(q, QUERY_ISSUE, &[2]));
+        let mut value = 0xaaaa_aaaau32;
+        let hr = call(q, QUERY_GET_DATA, &[&mut value as *mut u32 as usize, 4, 1]);
+        line!("Query::GetData\ttype {kind:x}, after BEGIN, flush\t{hr:x}\t{value:x}");
+        line!("Query::Issue\ttype {kind:x}, END\t{:x}", call(q, QUERY_ISSUE, &[1]));
+        let (mut first, mut polls) = (u32::MAX, 0u32);
+        let mut value = 0xaaaa_aaaau32;
+        let hr = loop {
+            let hr = call(q, QUERY_GET_DATA, &[&mut value as *mut u32 as usize, 4, 1]);
+            if first == u32::MAX {
+                first = hr;
+            }
+            polls += 1;
+            if hr != 1 || polls > 1_000_000 {
+                break hr;
+            }
+        };
+        line!("Query::GetData\ttype {kind:x}, after END, flush, polled\t{hr:x}\t{value:x}\tfirst {first:x} polls {polls}");
+        line!("Query::GetData\ttype {kind:x}, done, null data size 0\t{:x}", call(q, QUERY_GET_DATA, &[0, 0, 0]));
+        let mut big = [0xaaaa_aaaau32; 2];
+        let hr = call(q, QUERY_GET_DATA, &[big.as_mut_ptr() as usize, 8, 0]);
+        line!("Query::GetData\ttype {kind:x}, done, size 8\t{hr:x}\t{:x} {:x}", big[0], big[1]);
+        let mut small = 0xaaaa_aaaau32;
+        let hr = call(q, QUERY_GET_DATA, &[&mut small as *mut u32 as usize, 2, 0]);
+        line!("Query::GetData\ttype {kind:x}, done, size 2\t{hr:x}\t{small:x}");
+        line!("Query::Release\ttype {kind:x}\t{:x}", call(q, RELEASE, &[]));
+    }
+    // Offscreen plain surfaces, X8R8G8B8 (22), by pool.
+    for pool in 0..=3usize {
+        let mut s: P = std::ptr::null_mut();
+        let hr = call(device, CREATE_OFFSCREEN_PLAIN_SURFACE, &[64, 64, 22, pool, &mut s as *mut P as usize, 0]);
+        line!("CreateOffscreenPlainSurface\t64x64 X8R8G8B8 pool {pool}\t{hr:x}");
+        if !s.is_null() {
+            let hr = call(device, COLOR_FILL, &[s as usize, 0, 0xff11_2233]);
+            let mut locked = [0usize; 2];
+            let lr = call(s, SURFACE_LOCK_RECT, &[locked.as_mut_ptr() as usize, 0, 0]);
+            let first = if lr == 0 { *(locked[1] as *const u32) } else { 0 };
+            if lr == 0 {
+                call(s, SURFACE_UNLOCK_RECT, &[]);
+            }
+            line!("ColorFill\toffscreen pool {pool}, whole, ff112233\t{hr:x}\tlock {lr:x} first {first:x}");
+            let rect = [8i32, 8, 16, 16];
+            let hr = call(device, COLOR_FILL, &[s as usize, rect.as_ptr() as usize, 0x0044_5566]);
+            line!("ColorFill\toffscreen pool {pool}, 8,8-16,16\t{hr:x}");
+            let bad = [8i32, 8, 100, 16];
+            let hr = call(device, COLOR_FILL, &[s as usize, bad.as_ptr() as usize, 0]);
+            line!("ColorFill\toffscreen pool {pool}, rect past the edge\t{hr:x}");
+            call(s, RELEASE, &[]);
+        }
+    }
+    let mut zero: P = std::ptr::null_mut();
+    let hr = call(device, CREATE_OFFSCREEN_PLAIN_SURFACE, &[0, 64, 22, 2, &mut zero as *mut P as usize, 0]);
+    line!("CreateOffscreenPlainSurface\t0x64 sysmem\t{hr:x}");
+    // GetRenderTargetData from the back buffer (320x240, the display format).
+    let mut back: P = std::ptr::null_mut();
+    call(device, GET_BACK_BUFFER, &[0, 0, 0, &mut back as *mut P as usize]);
+    let mut desc = [0u32; 8];
+    call(back, 12, &[desc.as_mut_ptr() as usize]);
+    line!("GetBackBuffer\tdesc\t{}", words(&desc));
+    let format = desc[0] as usize;
+    let surface = |w: usize, h: usize, f: usize, pool: usize| {
+        let mut s: P = std::ptr::null_mut();
+        call(device, CREATE_OFFSCREEN_PLAIN_SURFACE, &[w, h, f, pool, &mut s as *mut P as usize, 0]);
+        s
+    };
+    let cases: [(&str, usize, usize, usize, usize); 5] = [
+        ("same size and format, sysmem", 320, 240, format, 2),
+        ("same size and format, default pool", 320, 240, format, 0),
+        ("smaller, sysmem", 160, 120, format, 2),
+        ("another format (A8R8G8B8 21 / X8R8G8B8 22), sysmem", 320, 240, if format == 22 { 21 } else { 22 }, 2),
+        ("same size and format, scratch", 320, 240, format, 3),
+    ];
+    call(device, 43, &[0, 0, 1, 0xff12_3456, 0x3f80_0000, 0]);
+    for (case, w, h, f, pool) in cases {
+        let s = surface(w, h, f, pool);
+        if s.is_null() {
+            line!("GetRenderTargetData\t{case}\tno surface");
+            continue;
+        }
+        let hr = call(device, GET_RENDER_TARGET_DATA, &[back as usize, s as usize]);
+        let mut locked = [0usize; 2];
+        let lr = call(s, SURFACE_LOCK_RECT, &[locked.as_mut_ptr() as usize, 0, 0x10]);
+        let first = if lr == 0 { *(locked[1] as *const u32) } else { 0 };
+        if lr == 0 {
+            call(s, SURFACE_UNLOCK_RECT, &[]);
+        }
+        line!("GetRenderTargetData\t{case}\t{hr:x}\tlock {lr:x} first {first:x}");
+        call(s, RELEASE, &[]);
+    }
+    let s = surface(320, 240, format, 2);
+    call(device, BEGIN_SCENE, &[]);
+    line!("GetRenderTargetData\tin a scene\t{:x}", call(device, GET_RENDER_TARGET_DATA, &[back as usize, s as usize]));
+    line!("ColorFill\tback buffer, in a scene\t{:x}", call(device, COLOR_FILL, &[back as usize, 0, 0]));
+    call(device, END_SCENE, &[]);
+    line!("ColorFill\tback buffer\t{:x}", call(device, COLOR_FILL, &[back as usize, 0, 0]));
+    line!("GetRenderTargetData\tsysmem source\t{:x}", call(device, GET_RENDER_TARGET_DATA, &[s as usize, s as usize]));
+    call(s, RELEASE, &[]);
+    call(back, RELEASE, &[]);
+}
+
+/// `device reset`: `Reset` on a windowed device: with a default-pool resource alive, with only
+/// managed ones, in a scene, with a back buffer reference held, at another size; the device's
+/// states and bindings before and after, and what `TestCooperativeLevel` answers around it.
+unsafe fn reset(o: &mut impl Write, device: P, pp: &PresentParameters) {
+    const RESET: usize = 16;
+    const GET_RENDER_TARGET: usize = 38;
+    const GET_DEPTH_STENCIL: usize = 40;
+    const SET_VIEWPORT: usize = 47;
+    const GET_VIEWPORT: usize = 48;
+    const GET_RENDER_STATE: usize = 58;
+    const GET_TEXTURE: usize = 64;
+    const SET_SAMPLER_STATE: usize = 69;
+    const GET_SAMPLER_STATE: usize = 68;
+    const SET_TRANSFORM: usize = 44;
+    const GET_TRANSFORM: usize = 45;
+    macro_rules! line {
+        ($($t:tt)*) => {{ writeln!(o, $($t)*).unwrap(); o.flush().unwrap(); }};
+    }
+    let state = |device: P, rs: usize| {
+        let mut v = 0xaaaa_aaaau32;
+        call(device, GET_RENDER_STATE, &[rs, &mut v as *mut u32 as usize]);
+        v
+    };
+    let object = |device: P, slot: usize, index: Option<usize>| {
+        let mut p: usize = 0;
+        let hr = match index {
+            Some(i) => call(device, slot, &[i, &mut p as *mut usize as usize]),
+            None => call(device, slot, &[&mut p as *mut usize as usize]),
+        };
+        if p != 0 {
+            call(p as P, RELEASE, &[]);
+        }
+        (hr, p)
+    };
+    let report = |o: &mut dyn Write, device: P, when: &str| {
+        let mut vp = [0u32; 6];
+        call(device, GET_VIEWPORT, &[vp.as_mut_ptr() as usize]);
+        let mut sampler = 0xaaaa_aaaau32;
+        call(device, GET_SAMPLER_STATE, &[0, 5, &mut sampler as *mut u32 as usize]);
+        let mut world = [0u32; 16];
+        call(device, GET_TRANSFORM, &[256, world.as_mut_ptr() as usize]);
+        let (_, rt) = object(device, GET_RENDER_TARGET, Some(0));
+        let (_, ds) = object(device, GET_DEPTH_STENCIL, None);
+        let (_, tex) = object(device, GET_TEXTURE, Some(0));
+        let (_, back) = {
+            let mut p: usize = 0;
+            let hr = call(device, GET_BACK_BUFFER, &[0, 0, 0, &mut p as *mut usize as usize]);
+            let mut desc = [0u32; 8];
+            call(p as P, 12, &[desc.as_mut_ptr() as usize]);
+            call(p as P, RELEASE, &[]);
+            writeln!(o, "GetBackBuffer\t{when}\t{hr:x}\t{}", words(&desc)).unwrap();
+            (hr, p)
+        };
+        writeln!(
+            o,
+            "State\t{when}\tzenable {:x} cullmode {:x} lighting {:x} magfilter {sampler:x} world[0] {:x} world[12] {:x} viewport {} rt=back {} depth {} texture0 {}",
+            state(device, 7),
+            state(device, 22),
+            state(device, 137),
+            world[0],
+            world[12],
+            words(&vp),
+            rt == back,
+            ds != 0,
+            tex != 0
+        )
+        .unwrap();
+        o.flush().unwrap();
+    };
+    report(o, device, "fresh");
+    // Change states and bindings.
+    call(device, SET_RENDER_STATE, &[7, 0]);
+    call(device, SET_RENDER_STATE, &[22, 1]);
+    call(device, SET_RENDER_STATE, &[137, 0]);
+    call(device, SET_SAMPLER_STATE, &[0, 5, 1]);
+    let mut m = [0u32; 16];
+    m[0] = 0x4000_0000;
+    m[12] = 0x4040_0000;
+    call(device, SET_TRANSFORM, &[256, m.as_ptr() as usize]);
+    let vp = [10u32, 10, 100, 100, 0, 0x3f80_0000];
+    call(device, SET_VIEWPORT, &[vp.as_ptr() as usize]);
+    let mut managed: P = std::ptr::null_mut();
+    line!("CreateTexture\tmanaged\t{:x}", call(device, CREATE_TEXTURE, &[64, 64, 1, 0, 21, 1, &mut managed as *mut P as usize, 0]));
+    call(device, SET_TEXTURE, &[0, managed as usize]);
+    report(o, device, "changed");
+    let mut default: P = std::ptr::null_mut();
+    line!("CreateTexture\tdefault pool\t{:x}", call(device, CREATE_TEXTURE, &[64, 64, 1, 1, 21, 0, &mut default as *mut P as usize, 0]));
+    let mut p = *pp;
+    line!("Reset\twith a default-pool texture alive\t{:x}", call(device, RESET, &[&mut p as *mut PresentParameters as usize]));
+    line!("TestCooperativeLevel\tafter the failed Reset\t{:x}", call(device, TEST_COOPERATIVE_LEVEL, &[]));
+    line!("BeginScene\tafter the failed Reset\t{:x}", call(device, BEGIN_SCENE, &[]));
+    line!("EndScene\tafter the failed Reset\t{:x}", call(device, END_SCENE, &[]));
+    line!("Present\tafter the failed Reset\t{:x}", call(device, PRESENT, &[0, 0, 0, 0]));
+    line!("Release\tthe default-pool texture\t{:x}", call(default, RELEASE, &[]));
+    line!("TestCooperativeLevel\tafter its release\t{:x}", call(device, TEST_COOPERATIVE_LEVEL, &[]));
+    // A back buffer reference held across Reset.
+    let mut held: usize = 0;
+    call(device, GET_BACK_BUFFER, &[0, 0, 0, &mut held as *mut usize as usize]);
+    let mut p = *pp;
+    line!("Reset\twith a back buffer reference held\t{:x}", call(device, RESET, &[&mut p as *mut PresentParameters as usize]));
+    // The reference held is not released: after this Reset it no longer points at a live
+    // object (releasing it faulted, 2026-10-27).
+    let _ = held;
+    let mut p = *pp;
+    line!("Reset\tonly managed resources\t{:x}\tcount {:x} format {:x}", call(device, RESET, &[&mut p as *mut PresentParameters as usize]), p.count, p.format);
+    line!("TestCooperativeLevel\tafter Reset\t{:x}", call(device, TEST_COOPERATIVE_LEVEL, &[]));
+    report(o, device, "after Reset");
+    call(device, BEGIN_SCENE, &[]);
+    let mut p = *pp;
+    line!("Reset\tin a scene\t{:x}", call(device, RESET, &[&mut p as *mut PresentParameters as usize]));
+    line!("EndScene\tafter Reset in a scene\t{:x}", call(device, END_SCENE, &[]));
+    let mut p = PresentParameters { width: 640, height: 480, ..*pp };
+    line!("Reset\t640x480\t{:x}", call(device, RESET, &[&mut p as *mut PresentParameters as usize]));
+    report(o, device, "after Reset 640x480");
+    let mut p = PresentParameters { width: 0, height: 0, ..*pp };
+    line!("Reset\t0x0 (the window's client area)\t{:x}\twidth {} height {}", call(device, RESET, &[&mut p as *mut PresentParameters as usize]), p.width, p.height);
+    let mut p = PresentParameters { count: 4, ..*pp };
+    line!("Reset\tfour back buffers\t{:x}\tcount {}", call(device, RESET, &[&mut p as *mut PresentParameters as usize]), p.count);
+    line!("TestCooperativeLevel\tafter that\t{:x}", call(device, TEST_COOPERATIVE_LEVEL, &[]));
+    call(managed, RELEASE, &[]);
+    line!("Release\tdevice\t{:x}", call(device, RELEASE, &[]));
+}
+
+/// `device refs`: the reference counts `AddRef`/`Release` answer for buffers and textures bound
+/// to the device (`SetIndices`, `SetStreamSource`, `SetTexture`) and read back (`GetIndices`,
+/// `GetStreamSource`, `GetTexture`), and whether a buffer released to 0 while bound can still be
+/// read back.
+unsafe fn refs(o: &mut impl Write, device: P) {
+    const ADD_REF: usize = 1;
+    const GET_INDICES: usize = 105;
+    const GET_TEXTURE: usize = 64;
+    macro_rules! line {
+        ($($t:tt)*) => {{ writeln!(o, $($t)*).unwrap(); o.flush().unwrap(); }};
+    }
+    let count = |object: P| {
+        let up = call(object, ADD_REF, &[]);
+        let down = call(object, RELEASE, &[]);
+        (up, down)
+    };
+    let mut ib: P = std::ptr::null_mut();
+    line!("CreateIndexBuffer\t12 bytes\t{:x}", call(device, CREATE_INDEX_BUFFER, &[12, 8, 101, 0, &mut ib as *mut P as usize, 0]));
+    line!("IndexBuffer\tfresh: AddRef, Release\t{:x?}", count(ib));
+    line!("SetIndices\t\t{:x}", call(device, SET_INDICES, &[ib as usize]));
+    line!("IndexBuffer\tbound: AddRef, Release\t{:x?}", count(ib));
+    let mut back: usize = 0;
+    line!("GetIndices\t\t{:x}\tsame {}", call(device, GET_INDICES, &[&mut back as *mut usize as usize]), back == ib as usize);
+    line!("IndexBuffer\tafter GetIndices: AddRef, Release\t{:x?}", count(ib));
+    line!("Release\tthe GetIndices reference\t{:x}", call(back as P, RELEASE, &[]));
+    line!("Release\tthe creation reference, still bound\t{:x}", call(ib, RELEASE, &[]));
+    let mut again: usize = 0;
+    line!("GetIndices\tafter the last Release, still bound\t{:x}\tsame {}", call(device, GET_INDICES, &[&mut again as *mut usize as usize]), again == ib as usize);
+    if again != 0 {
+        line!("Release\tthat reference\t{:x}", call(again as P, RELEASE, &[]));
+    }
+    line!("SetIndices\tnull (unbinds)\t{:x}", call(device, SET_INDICES, &[0]));
+
+    let mut vb: P = std::ptr::null_mut();
+    line!("CreateVertexBuffer\t96 bytes\t{:x}", call(device, CREATE_VERTEX_BUFFER, &[96, 8, 0, 0, &mut vb as *mut P as usize, 0]));
+    line!("SetStreamSource\t0\t{:x}", call(device, SET_STREAM_SOURCE, &[0, vb as usize, 0, 24]));
+    line!("VertexBuffer\tbound: AddRef, Release\t{:x?}", count(vb));
+    line!("Release\tthe creation reference, still bound\t{:x}", call(vb, RELEASE, &[]));
+    line!("SetStreamSource\tnull\t{:x}", call(device, SET_STREAM_SOURCE, &[0, 0, 0, 0]));
+
+    let mut tex: P = std::ptr::null_mut();
+    line!("CreateTexture\t64x64 managed\t{:x}", call(device, CREATE_TEXTURE, &[64, 64, 1, 0, 21, 1, &mut tex as *mut P as usize, 0]));
+    line!("SetTexture\t0\t{:x}", call(device, SET_TEXTURE, &[0, tex as usize]));
+    line!("Texture\tbound: AddRef, Release\t{:x?}", count(tex));
+    let mut t: usize = 0;
+    line!("GetTexture\t0\t{:x}\tsame {}", call(device, GET_TEXTURE, &[0, &mut t as *mut usize as usize]), t == tex as usize);
+    line!("Texture\tafter GetTexture: AddRef, Release\t{:x?}", count(tex));
+    if t != 0 {
+        call(t as P, RELEASE, &[]);
+    }
+    line!("Release\tthe creation reference, still bound\t{:x}", call(tex, RELEASE, &[]));
+    line!("SetTexture\tnull\t{:x}", call(device, SET_TEXTURE, &[0, 0]));
+    line!("Release\tdevice\t{:x}", call(device, RELEASE, &[]));
 }

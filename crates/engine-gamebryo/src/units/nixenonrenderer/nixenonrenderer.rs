@@ -4446,6 +4446,10 @@ pub fn fn_00e74840(e: &mut Engine, this: Ptr<NiDX9Renderer>, geometry: Ptr) {
     if e.vcall(data, 0x90, &args![]).u16() == 0 {
         return;
     }
+    // Diagnostic only (`NV_HEAD_CHECK`, not exe behaviour): notes the geometry's skin and data.
+    if super::run_00e6fbb0::head_check_enabled() {
+        super::run_00e6fbb0::head_check_note_geometry(e, g);
+    }
     let skin = e.mem.u32(g.wrapping_add(0xbc));
     let bound = match e.mem.u32(g.wrapping_add(0x20)) {
         0 => DEFAULT_BOUND,

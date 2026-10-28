@@ -822,6 +822,15 @@ pub fn create_file_a(
 ) -> u32 {
     let name = full_path(e, &e.mem.cstr(path.addr()));
     let path = key(&name);
+    // A sound file (music among them) opened: named in the sound recording's log, when
+    // there is one (`super::dsound::note`).
+    if [".mp3", ".wav", ".ogg", ".bik"]
+        .iter()
+        .any(|x| path.ends_with(x.as_bytes()))
+    {
+        let what = format!("open {}", String::from_utf8_lossy(&name));
+        super::dsound::note(e, &what);
+    }
     // A file of the player's opened for reading only is read from disk where the reads ask
     // (`Disk::player`); the outcome is that of an existing file's open.
     if access & GENERIC_WRITE == 0
@@ -1131,6 +1140,211 @@ pub fn get_file_size_ex(e: &mut Engine, handle: u32, size: Ptr) -> u32 {
     e.mem.set_u32(size.addr(), bytes as u32);
     e.mem.set_u32(size.addr() + 4, (bytes >> 32) as u32);
     1
+}
+
+/// `ERROR_INVALID_NAME` (winerror.h), `GetFullPathNameA`'s answer to an empty name.
+pub const ERROR_INVALID_NAME: u32 = 123;
+/// The path separator `\`.
+const SEPARATOR: u8 = b'\\';
+
+/// The parts of a path after its root, `.` and `..` resolved, empty parts (repeated separators)
+/// dropped; `None` for a shape not measured (a part other than `.`/`..` that ends in a dot or a
+/// space before the last part).
+fn resolve_parts(parts: Vec<&[u8]>) -> Option<Vec<Vec<u8>>> {
+    let mut out: Vec<Vec<u8>> = Vec::new();
+    let count = parts.len();
+    for (index, part) in parts.into_iter().enumerate() {
+        match part {
+            b"" | b"." => {}
+            b".." => {
+                out.pop();
+            }
+            _ => {
+                let last = index + 1 == count;
+                let mut part = part.to_vec();
+                if last {
+                    while matches!(part.last(), Some(b'.') | Some(b' ')) {
+                        part.pop();
+                    }
+                } else if matches!(part.last(), Some(b'.') | Some(b' ')) {
+                    return None;
+                }
+                if !part.is_empty() {
+                    out.push(part);
+                }
+            }
+        }
+    }
+    Some(out)
+}
+
+// Platform: replaces KERNEL32.DLL GetFullPathNameA (import slot 00fdf194)
+/// `GetFullPathNameA(name, size, buffer, file part)` as measured on scratch names
+/// (`build43-scratch/measure/fullpath/measured-2026-10-27.txt`, Windows 11): a relative name is
+/// joined to the current directory (`Kernel::current_directory`, `GetCurrentDirectoryA`'s), a
+/// name starting with a separator to its drive, and a drive-relative name of the current drive
+/// (`C:x`) to the current directory; `/` reads as `\`, repeated separators collapse, `.` parts go
+/// and `..` goes up (never past the root), and the last part loses its trailing dots and spaces.
+/// A name that ends in a separator keeps it and has no file part (null); otherwise the file part
+/// points at the last part. The answer is the length; with too small a buffer, the length with
+/// its terminator, the buffer untouched. The last error is left as it was, except for an empty
+/// name: 0 and `ERROR_INVALID_NAME`. Other drives, UNC and device names, and trailing dots or
+/// spaces inside the path were not measured and stop the run.
+pub fn get_full_path_name_a(
+    e: &mut Engine,
+    name: Ptr,
+    size: u32,
+    buffer: Ptr,
+    part_out: Ptr,
+) -> u32 {
+    let text = e.mem.cstr(name.addr());
+    if text.is_empty() {
+        e.kernel.last_error = ERROR_INVALID_NAME;
+        return 0;
+    }
+    let text: Vec<u8> = text
+        .iter()
+        .map(|&c| if c == b'/' { SEPARATOR } else { c })
+        .collect();
+    let current = e.kernel.current_directory.clone();
+    assert!(
+        current.len() >= 2 && current[1] == b':' && !text.starts_with(br"\\"),
+        "GetFullPathNameA({}): not provided (UNC or device name)",
+        String::from_utf8_lossy(&text)
+    );
+    let drive = current[..2].to_vec();
+    let (root, rest): (Vec<u8>, Vec<u8>) = if text.len() >= 2 && text[1] == b':' {
+        assert!(
+            text[0].eq_ignore_ascii_case(&drive[0]),
+            "GetFullPathNameA({}): another drive is not provided",
+            String::from_utf8_lossy(&text)
+        );
+        if text.get(2) == Some(&SEPARATOR) {
+            (text[..2].to_vec(), text[2..].to_vec())
+        } else {
+            let mut joined = current[2..].to_vec();
+            joined.push(SEPARATOR);
+            joined.extend_from_slice(&text[2..]);
+            (drive.clone(), joined)
+        }
+    } else if text[0] == SEPARATOR {
+        (drive.clone(), text.clone())
+    } else {
+        let mut joined = current[2..].to_vec();
+        joined.push(SEPARATOR);
+        joined.extend_from_slice(&text);
+        (drive.clone(), joined)
+    };
+    let ends_with_separator = text.last() == Some(&SEPARATOR);
+    let parts: Vec<&[u8]> = rest.split(|&c| c == SEPARATOR).collect();
+    let resolved = resolve_parts(parts).unwrap_or_else(|| {
+        panic!(
+            "GetFullPathNameA({}): a part ending in a dot or space is not provided",
+            String::from_utf8_lossy(&text)
+        )
+    });
+    let mut full = root;
+    let mut file_part = 0usize;
+    for part in &resolved {
+        full.push(SEPARATOR);
+        file_part = full.len();
+        full.extend_from_slice(part);
+    }
+    if resolved.is_empty() || ends_with_separator {
+        full.push(SEPARATOR);
+    }
+    let length = full.len() as u32;
+    if size <= length {
+        return length + 1;
+    }
+    e.mem.set_cstr(buffer.addr(), &full);
+    if !part_out.is_null() {
+        let part = if ends_with_separator || resolved.is_empty() {
+            0
+        } else {
+            buffer.addr() + file_part as u32
+        };
+        e.mem.set_u32(part_out.addr(), part);
+    }
+    length
+}
+
+#[cfg(test)]
+mod tests_full_path_name {
+    use super::*;
+
+    /// `GetFullPathNameA` of `name` with a `size`-byte buffer: the answer, the text (empty when
+    /// the buffer was left untouched), the file part's offset in the buffer (0 for null,
+    /// `0xcccccccc` untouched) and the last error.
+    fn full(e: &mut Engine, name: &str, size: u32) -> (u32, String, u32, u32) {
+        let at = e.mem.alloc(0x400);
+        e.mem.set_cstr(at, name.as_bytes());
+        let buffer = at + 0x100;
+        let part = at + 0x300;
+        e.mem.write(buffer, &[0xcc; 5]);
+        e.mem.set_u32(part, 0xcccc_cccc);
+        e.kernel.last_error = 0x1234;
+        let n = get_full_path_name_a(e, Ptr::new(at), size, Ptr::new(buffer), Ptr::new(part));
+        let text = if e.mem.u8(buffer) == 0xcc {
+            String::new()
+        } else {
+            String::from_utf8(e.mem.cstr(buffer).to_vec()).unwrap_or_default()
+        };
+        let p = e.mem.u32(part);
+        let offset = if p == 0 || p == 0xcccc_cccc {
+            p
+        } else {
+            p - buffer
+        };
+        (n, text, offset, e.kernel.last_error)
+    }
+
+    /// Every row of the measurement (2026-10-27), with the current directory `C:\G\F` in place
+    /// of the scratch folder's: the text, the length, the file part and the last error.
+    #[test]
+    fn full_path_names_follow_the_measured_rows() {
+        let mut e = Engine::new();
+        e.kernel.current_directory = br"C:\G\F".to_vec();
+        let rows: &[(&str, &str, u32)] = &[
+            (
+                r"Data\Video\FNVIntro.bik",
+                r"C:\G\F\Data\Video\FNVIntro.bik",
+                18,
+            ),
+            ("Data/Video/a.bik", r"C:\G\F\Data\Video\a.bik", 18),
+            (r".\Data\x", r"C:\G\F\Data\x", 12),
+            (r"..\x\y", r"C:\G\x\y", 7),
+            (r"Data\..\y", r"C:\G\F\y", 7),
+            (r"\root\x", r"C:\root\x", 8),
+            ("C:x", r"C:\G\F\x", 7),
+            (r"C:\a\b", r"C:\a\b", 5),
+            (r"a\\b", r"C:\G\F\a\b", 9),
+            ("x.", r"C:\G\F\x", 7),
+            ("x ", r"C:\G\F\x", 7),
+            (r"Data\Video\", r"C:\G\F\Data\Video\", 0),
+            ("a/./b/../c", r"C:\G\F\a\c", 9),
+            (r"C:\a\..\..\..\b", r"C:\b", 3),
+        ];
+        for &(name, text, part) in rows {
+            assert_eq!(
+                full(&mut e, name, 260),
+                (text.len() as u32, text.into(), part, 0x1234),
+                "{name:?}"
+            );
+            // Four bytes: the length with its terminator, the buffer untouched (the file part
+            // was not measured here).
+            let (n, short, _, error) = full(&mut e, name, 4);
+            assert_eq!(
+                (n, short, error),
+                (text.len() as u32 + 1, String::new(), 0x1234),
+                "{name:?} with four bytes"
+            );
+        }
+        for size in [260, 4] {
+            let (n, text, _, error) = full(&mut e, "", size);
+            assert_eq!((n, text, error), (0, String::new(), 123), "empty, {size}");
+        }
+    }
 }
 
 #[cfg(test)]

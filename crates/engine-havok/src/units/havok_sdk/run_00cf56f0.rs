@@ -152,6 +152,25 @@ pub fn fn_00cf57d0(e: &mut Engine, this: Ptr, flags: u8) -> Ptr {
     shape
 }
 
+// Translated from 00cf57e0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function; 00cf57e0 to the `RET 4` at 00cf580f, inside the extent the
+/// map gives `00cf57d0`): the deleting destructor of the shape itself (vtable `0102e388`), the
+/// body [`fn_00cf57d0`] reaches after its `SUB ECX, 0x10`. `thiscall` with one stack word:
+/// writes `010c6fb0` at `+0x10` and `0102e388` at `+0`, and with bit 0 of the word set frees the
+/// block through the memory router's allocator (slot `8`) with the 16-bit size at `+4`. Answers
+/// `this`.
+pub fn fn_00cf57e0(e: &mut Engine, this: Ptr, flags: u8) -> Ptr {
+    e.mem.set_u32(this.addr() + 0x10, 0x010c_6fb0);
+    e.mem.set_u32(this.addr(), 0x0102_e388);
+    if flags & 1 != 0 {
+        let router = e.call(MEMORY_ROUTER, &args![]).u32();
+        let size = u32::from(e.mem.u16(this.addr() + 4));
+        let allocator = e.mem.u32(router + 0x10);
+        e.vcall(allocator, 8, &args![this, size]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -163,6 +182,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00cf_56f0, fn_00cf56f0(Ptr, u32) -> Ptr),
         entry!(0x00cf_5750, fn_00cf5750(Ptr)),
         entry!(0x00cf_57d0, fn_00cf57d0(Ptr, u8) -> Ptr),
+        entry!(0x00cf_57e0, fn_00cf57e0(Ptr, u8) -> Ptr),
     ]
 }
 
@@ -423,5 +443,40 @@ mod tests_00cf56f0 {
         assert!(log.borrow().is_empty());
         e.call(0x00cf_57d0, &args![shape + 0x10, 1u32]);
         assert_eq!(*log.borrow(), vec![2, shape, 0x38]);
+    }
+}
+
+#[cfg(test)]
+mod gap1_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00cf57e0_stores_the_vtables_and_frees_with_the_size() {
+        let mut e = Engine::new();
+        let mut slots = [0u32; 4];
+        slots[2] = 0x0f00_0008;
+        e.put_vtable(0x0f00_1000, &slots);
+        e.register(0x0f00_0008, |_, _| Ret::default());
+        let allocator = e.mem.alloc(4);
+        e.mem.set_u32(allocator, 0x0f00_1000);
+        let router = e.mem.alloc(0x14);
+        e.mem.set_u32(router + 0x10, allocator);
+        e.register_double(MEMORY_ROUTER, move |_, _| router.into_ret());
+        e.call_log = Some(vec![]);
+        let this = e.mem.alloc(0x20);
+        e.mem.set_u16(this + 4, 0x60);
+        assert_eq!(e.call(0x00cf_57e0, &args![this, 0u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), 0x0102_e388);
+        assert_eq!(e.mem.u32(this + 0x10), 0x010c_6fb0);
+        assert_eq!(e.call(0x00cf_57e0, &args![this, 1u32]).u32(), this);
+        let freed: Vec<Vec<u32>> = e
+            .call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| *a == 0x0f00_0008)
+            .map(|(_, w)| w)
+            .collect();
+        assert_eq!(freed, vec![vec![allocator, this, 0x60]]);
     }
 }

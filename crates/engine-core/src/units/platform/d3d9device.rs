@@ -312,6 +312,9 @@ struct Device {
     lights: HashMap<u32, [u32; 26]>,
     enabled_lights: std::collections::BTreeSet<u32>,
     software_vertex_processing: bool,
+    /// After a `Reset` that failed: the device needs a successful `Reset` (`TestCooperativeLevel`
+    /// answers `D3DERR_DEVICENOTRESET`; scenes and `Present` are refused).
+    lost: bool,
 }
 
 /// A surface of this layer.
@@ -346,6 +349,8 @@ pub struct Objects {
     textures: HashMap<u32, Texture>,
     /// The buffers, shaders and declarations (`super::d3d9resource`).
     pub(super) resources: super::d3d9resource::Resources,
+    /// The queries (`super::d3d9query`).
+    pub(super) queries: super::d3d9query::Queries,
 }
 
 fn vtable(e: &mut Engine, base: u32, slots: usize) -> u32 {
@@ -356,8 +361,269 @@ fn vtable(e: &mut Engine, base: u32, slots: usize) -> u32 {
     table
 }
 
+/// A word of a call's arguments, as the real side (`super::d3d9real`) takes it.
+pub(super) trait Word: Copy {
+    fn word(self) -> u32;
+}
+impl Word for u32 {
+    fn word(self) -> u32 {
+        self
+    }
+}
+impl Word for Ptr {
+    fn word(self) -> u32 {
+        self.addr()
+    }
+}
+
+/// The slots that change what is drawn: the model's answer, and with `NV_D3D9=real` the same
+/// call made on the real device (ADR-0008, `super::d3d9real`), which gets the model's answer
+/// to compare.
+macro_rules! forwarded {
+    ($($vis:vis fn $name:ident = $model:ident($($a:ident: $t:ty),*) => $real:ident;)*) => {$(
+        $vis fn $name(e: &mut Engine, this: Ptr, $($a: $t),*) -> u32 {
+            let model = $model(e, this, $($a),*);
+            // A call the model refuses changes nothing, so the real device does not get it.
+            #[cfg(windows)]
+            if model == D3D_OK {
+                super::d3d9real::$real(e, this.addr(), $(Word::word($a),)* model);
+            }
+            model
+        }
+    )*};
+}
+pub(super) use forwarded;
+
+forwarded! {
+    fn fwd_set_render_target = set_render_target(index: u32, surface: u32) => set_render_target;
+    fn fwd_set_depth_stencil_surface = set_depth_stencil_surface(surface: u32)
+        => set_depth_stencil_surface;
+    fn fwd_set_viewport = set_viewport(viewport: Ptr) => set_viewport;
+    fn fwd_set_transform = set_transform(state: u32, matrix: Ptr) => set_transform;
+    fn fwd_set_scissor_rect = set_scissor_rect(rect: Ptr) => set_scissor_rect;
+    fn fwd_set_clip_plane = set_clip_plane(index: u32, plane: Ptr) => set_clip_plane;
+    fn fwd_set_render_state = set_render_state(state: u32, value: u32) => set_render_state;
+    fn fwd_set_texture_stage_state = set_texture_stage_state(stage: u32, kind: u32, value: u32)
+        => set_texture_stage_state;
+    fn fwd_set_sampler_state = set_sampler_state(sampler: u32, kind: u32, value: u32)
+        => set_sampler_state;
+    fn fwd_set_texture = set_texture(sampler: u32, texture: u32) => set_texture;
+    fn fwd_set_material = set_material(material: Ptr) => set_material;
+    fn fwd_set_light = set_light(index: u32, light: Ptr) => set_light;
+    fn fwd_light_enable = light_enable(index: u32, enable: u32) => light_enable;
+    fn fwd_set_software_vertex_processing = set_software_vertex_processing(software: u32)
+        => set_software_vertex_processing;
+    fn fwd_update_texture = update_texture(source: u32, destination: u32) => update_texture;
+    fn fwd_stretch_rect = stretch_rect(
+        source: u32, source_rect: u32, destination: u32, destination_rect: u32, filter: u32
+    ) => stretch_rect;
+}
+
+/// `CreateTexture`, then (`NV_D3D9=real`) the real texture of the same arguments.
+#[allow(clippy::too_many_arguments)]
+fn fwd_create_texture(
+    e: &mut Engine,
+    this: Ptr,
+    width: u32,
+    height: u32,
+    levels: u32,
+    usage: u32,
+    format: u32,
+    pool: u32,
+    out: Ptr,
+    shared: u32,
+) -> u32 {
+    let model = create_texture(
+        e, this, width, height, levels, usage, format, pool, out, shared,
+    );
+    #[cfg(windows)]
+    if model == D3D_OK {
+        let texture = e.mem.u32(out.addr());
+        let surfaces = e.kernel.graphics.device_objects.textures[&texture]
+            .levels
+            .clone();
+        super::d3d9real::texture_created(
+            e,
+            this.addr(),
+            texture,
+            &surfaces,
+            width,
+            height,
+            usage,
+            format,
+            pool,
+        );
+    }
+    model
+}
+
+/// `CreateCubeTexture`, then (`NV_D3D9=real`) the real cube texture of the same arguments.
+#[allow(clippy::too_many_arguments)]
+fn fwd_create_cube_texture(
+    e: &mut Engine,
+    this: Ptr,
+    edge: u32,
+    levels: u32,
+    usage: u32,
+    format: u32,
+    pool: u32,
+    out: Ptr,
+    shared: u32,
+) -> u32 {
+    let model = create_cube_texture(e, this, edge, levels, usage, format, pool, out, shared);
+    #[cfg(windows)]
+    if model == D3D_OK {
+        let texture = e.mem.u32(out.addr());
+        let surfaces = e.kernel.graphics.device_objects.textures[&texture]
+            .levels
+            .clone();
+        super::d3d9real::cube_created(
+            e,
+            this.addr(),
+            texture,
+            &surfaces,
+            edge,
+            usage,
+            format,
+            pool,
+        );
+    }
+    model
+}
+
+/// `CreateRenderTarget` / `CreateDepthStencilSurface`, then (`NV_D3D9=real`) the real surface.
+#[allow(clippy::too_many_arguments)]
+fn fwd_create_surface(
+    e: &mut Engine,
+    this: Ptr,
+    depth: bool,
+    width: u32,
+    height: u32,
+    format: u32,
+    multisample: u32,
+    quality: u32,
+    flag: u32,
+    out: Ptr,
+    shared: u32,
+) -> u32 {
+    let model = if depth {
+        create_depth_stencil_surface(
+            e,
+            this,
+            width,
+            height,
+            format,
+            multisample,
+            quality,
+            flag,
+            out,
+            shared,
+        )
+    } else {
+        create_render_target(
+            e,
+            this,
+            width,
+            height,
+            format,
+            multisample,
+            quality,
+            flag,
+            out,
+            shared,
+        )
+    };
+    #[cfg(windows)]
+    if model == D3D_OK {
+        let surface = e.mem.u32(out.addr());
+        super::d3d9real::surface_created(
+            e,
+            this.addr(),
+            surface,
+            depth,
+            width,
+            height,
+            format,
+            multisample,
+            quality,
+            flag,
+        );
+    }
+    model
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fwd_create_render_target(
+    e: &mut Engine,
+    this: Ptr,
+    width: u32,
+    height: u32,
+    format: u32,
+    multisample: u32,
+    quality: u32,
+    lockable: u32,
+    out: Ptr,
+    shared: u32,
+) -> u32 {
+    fwd_create_surface(
+        e,
+        this,
+        false,
+        width,
+        height,
+        format,
+        multisample,
+        quality,
+        lockable,
+        out,
+        shared,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fwd_create_depth_stencil_surface(
+    e: &mut Engine,
+    this: Ptr,
+    width: u32,
+    height: u32,
+    format: u32,
+    multisample: u32,
+    quality: u32,
+    discard: u32,
+    out: Ptr,
+    shared: u32,
+) -> u32 {
+    fwd_create_surface(
+        e,
+        this,
+        true,
+        width,
+        height,
+        format,
+        multisample,
+        quality,
+        discard,
+        out,
+        shared,
+    )
+}
+
 fn register_code(e: &mut Engine) {
-    let device: [(u32, crate::AbiFn); 42] = [
+    let device: [(u32, crate::AbiFn); 47] = [
+        (16, crate::entry!(0, reset(Ptr, Ptr) -> u32).1),
+        (
+            32,
+            crate::entry!(0, get_render_target_data(Ptr, u32, u32) -> u32).1,
+        ),
+        (35, crate::entry!(0, color_fill(Ptr, u32, Ptr, u32) -> u32).1),
+        (
+            36,
+            crate::entry!(0, create_offscreen_plain_surface(Ptr, u32, u32, u32, u32, Ptr, u32) -> u32).1,
+        ),
+        (
+            118,
+            crate::entry!(0, super::d3d9query::create_query(Ptr, u32, Ptr) -> u32).1,
+        ),
         (
             0,
             crate::entry!(0, device_query_interface(Ptr, Ptr, Ptr) -> u32).1,
@@ -380,23 +646,23 @@ fn register_code(e: &mut Engine) {
         ),
         (
             23,
-            crate::entry!(0, create_texture(Ptr, u32, u32, u32, u32, u32, u32, Ptr, u32) -> u32).1,
+            crate::entry!(0, fwd_create_texture(Ptr, u32, u32, u32, u32, u32, u32, Ptr, u32) -> u32).1,
         ),
         (
             25,
-            crate::entry!(0, create_cube_texture(Ptr, u32, u32, u32, u32, u32, Ptr, u32) -> u32).1,
+            crate::entry!(0, fwd_create_cube_texture(Ptr, u32, u32, u32, u32, u32, Ptr, u32) -> u32).1,
         ),
         (
             28,
-            crate::entry!(0, create_render_target(Ptr, u32, u32, u32, u32, u32, u32, Ptr, u32) -> u32).1,
+            crate::entry!(0, fwd_create_render_target(Ptr, u32, u32, u32, u32, u32, u32, Ptr, u32) -> u32).1,
         ),
         (
             29,
-            crate::entry!(0, create_depth_stencil_surface(Ptr, u32, u32, u32, u32, u32, u32, Ptr, u32) -> u32).1,
+            crate::entry!(0, fwd_create_depth_stencil_surface(Ptr, u32, u32, u32, u32, u32, u32, Ptr, u32) -> u32).1,
         ),
         (
             37,
-            crate::entry!(0, set_render_target(Ptr, u32, u32) -> u32).1,
+            crate::entry!(0, fwd_set_render_target(Ptr, u32, u32) -> u32).1,
         ),
         (
             38,
@@ -404,13 +670,13 @@ fn register_code(e: &mut Engine) {
         ),
         (
             39,
-            crate::entry!(0, set_depth_stencil_surface(Ptr, u32) -> u32).1,
+            crate::entry!(0, fwd_set_depth_stencil_surface(Ptr, u32) -> u32).1,
         ),
         (
             40,
             crate::entry!(0, get_depth_stencil_surface(Ptr, Ptr) -> u32).1,
         ),
-        (47, crate::entry!(0, set_viewport(Ptr, Ptr) -> u32).1),
+        (47, crate::entry!(0, fwd_set_viewport(Ptr, Ptr) -> u32).1),
         (3, crate::entry!(0, test_cooperative_level(Ptr) -> u32).1),
         (
             17,
@@ -422,28 +688,28 @@ fn register_code(e: &mut Engine) {
             43,
             crate::entry!(0, clear(Ptr, u32, Ptr, u32, u32, u32, u32) -> u32).1,
         ),
-        (44, crate::entry!(0, set_transform(Ptr, u32, Ptr) -> u32).1),
+        (44, crate::entry!(0, fwd_set_transform(Ptr, u32, Ptr) -> u32).1),
         (45, crate::entry!(0, get_transform(Ptr, u32, Ptr) -> u32).1),
-        (55, crate::entry!(0, set_clip_plane(Ptr, u32, Ptr) -> u32).1),
-        (75, crate::entry!(0, set_scissor_rect(Ptr, Ptr) -> u32).1),
+        (55, crate::entry!(0, fwd_set_clip_plane(Ptr, u32, Ptr) -> u32).1),
+        (75, crate::entry!(0, fwd_set_scissor_rect(Ptr, Ptr) -> u32).1),
         (76, crate::entry!(0, get_scissor_rect(Ptr, Ptr) -> u32).1),
         (
             57,
-            crate::entry!(0, set_render_state(Ptr, u32, u32) -> u32).1,
+            crate::entry!(0, fwd_set_render_state(Ptr, u32, u32) -> u32).1,
         ),
         (
             58,
             crate::entry!(0, get_render_state(Ptr, u32, Ptr) -> u32).1,
         ),
         (64, crate::entry!(0, get_texture(Ptr, u32, Ptr) -> u32).1),
-        (65, crate::entry!(0, set_texture(Ptr, u32, u32) -> u32).1),
+        (65, crate::entry!(0, fwd_set_texture(Ptr, u32, u32) -> u32).1),
         (
             66,
             crate::entry!(0, get_texture_stage_state(Ptr, u32, u32, Ptr) -> u32).1,
         ),
         (
             67,
-            crate::entry!(0, set_texture_stage_state(Ptr, u32, u32, u32) -> u32).1,
+            crate::entry!(0, fwd_set_texture_stage_state(Ptr, u32, u32, u32) -> u32).1,
         ),
         (
             68,
@@ -451,23 +717,23 @@ fn register_code(e: &mut Engine) {
         ),
         (
             69,
-            crate::entry!(0, set_sampler_state(Ptr, u32, u32, u32) -> u32).1,
+            crate::entry!(0, fwd_set_sampler_state(Ptr, u32, u32, u32) -> u32).1,
         ),
         (48, crate::entry!(0, get_viewport(Ptr, Ptr) -> u32).1),
-        (49, crate::entry!(0, set_material(Ptr, Ptr) -> u32).1),
-        (51, crate::entry!(0, set_light(Ptr, u32, Ptr) -> u32).1),
-        (53, crate::entry!(0, light_enable(Ptr, u32, u32) -> u32).1),
+        (49, crate::entry!(0, fwd_set_material(Ptr, Ptr) -> u32).1),
+        (51, crate::entry!(0, fwd_set_light(Ptr, u32, Ptr) -> u32).1),
+        (53, crate::entry!(0, fwd_light_enable(Ptr, u32, u32) -> u32).1),
         (
             77,
-            crate::entry!(0, set_software_vertex_processing(Ptr, u32) -> u32).1,
+            crate::entry!(0, fwd_set_software_vertex_processing(Ptr, u32) -> u32).1,
         ),
         (
             31,
-            crate::entry!(0, update_texture(Ptr, u32, u32) -> u32).1,
+            crate::entry!(0, fwd_update_texture(Ptr, u32, u32) -> u32).1,
         ),
         (
             34,
-            crate::entry!(0, stretch_rect(Ptr, u32, u32, u32, u32, u32) -> u32).1,
+            crate::entry!(0, fwd_stretch_rect(Ptr, u32, u32, u32, u32, u32) -> u32).1,
         ),
     ];
     for (slot, f) in device {
@@ -489,9 +755,9 @@ fn register_code(e: &mut Engine) {
         ),
         (
             87,
-            crate::entry!(0, r::set_vertex_declaration(Ptr, u32) -> u32).1,
+            crate::entry!(0, r::fwd_set_vertex_declaration(Ptr, u32) -> u32).1,
         ),
-        (89, crate::entry!(0, r::set_fvf(Ptr, u32) -> u32).1),
+        (89, crate::entry!(0, r::fwd_set_fvf(Ptr, u32) -> u32).1),
         (90, crate::entry!(0, r::get_fvf(Ptr, Ptr) -> u32).1),
         (
             91,
@@ -499,7 +765,7 @@ fn register_code(e: &mut Engine) {
         ),
         (
             92,
-            crate::entry!(0, r::set_vertex_shader(Ptr, u32) -> u32).1,
+            crate::entry!(0, r::fwd_set_vertex_shader(Ptr, u32) -> u32).1,
         ),
         (
             93,
@@ -507,7 +773,7 @@ fn register_code(e: &mut Engine) {
         ),
         (
             94,
-            crate::entry!(0, r::set_vertex_constant_f(Ptr, u32, Ptr, u32) -> u32).1,
+            crate::entry!(0, r::fwd_set_vertex_constant_f(Ptr, u32, Ptr, u32) -> u32).1,
         ),
         (
             95,
@@ -515,7 +781,7 @@ fn register_code(e: &mut Engine) {
         ),
         (
             96,
-            crate::entry!(0, r::set_vertex_constant_i(Ptr, u32, Ptr, u32) -> u32).1,
+            crate::entry!(0, r::fwd_set_vertex_constant_i(Ptr, u32, Ptr, u32) -> u32).1,
         ),
         (
             97,
@@ -523,7 +789,7 @@ fn register_code(e: &mut Engine) {
         ),
         (
             98,
-            crate::entry!(0, r::set_vertex_constant_b(Ptr, u32, Ptr, u32) -> u32).1,
+            crate::entry!(0, r::fwd_set_vertex_constant_b(Ptr, u32, Ptr, u32) -> u32).1,
         ),
         (
             99,
@@ -531,7 +797,7 @@ fn register_code(e: &mut Engine) {
         ),
         (
             100,
-            crate::entry!(0, r::set_stream_source(Ptr, u32, u32, u32, u32) -> u32).1,
+            crate::entry!(0, r::fwd_set_stream_source(Ptr, u32, u32, u32, u32) -> u32).1,
         ),
         (
             101,
@@ -539,21 +805,21 @@ fn register_code(e: &mut Engine) {
         ),
         (
             81,
-            crate::entry!(0, r::draw_primitive(Ptr, u32, u32, u32) -> u32).1,
+            crate::entry!(0, r::fwd_draw_primitive(Ptr, u32, u32, u32) -> u32).1,
         ),
         (
             82,
-            crate::entry!(0, r::draw_indexed_primitive(Ptr, u32, u32, u32, u32, u32, u32) -> u32).1,
+            crate::entry!(0, r::fwd_draw_indexed_primitive(Ptr, u32, u32, u32, u32, u32, u32) -> u32).1,
         ),
         (
             83,
-            crate::entry!(0, r::draw_primitive_up(Ptr, u32, u32, u32, u32) -> u32).1,
+            crate::entry!(0, r::fwd_draw_primitive_up(Ptr, u32, u32, u32, u32) -> u32).1,
         ),
         (
             88,
             crate::entry!(0, r::get_vertex_declaration(Ptr, Ptr) -> u32).1,
         ),
-        (104, crate::entry!(0, r::set_indices(Ptr, u32) -> u32).1),
+        (104, crate::entry!(0, r::fwd_set_indices(Ptr, u32) -> u32).1),
         (105, crate::entry!(0, r::get_indices(Ptr, Ptr) -> u32).1),
         (
             106,
@@ -561,7 +827,7 @@ fn register_code(e: &mut Engine) {
         ),
         (
             107,
-            crate::entry!(0, r::set_pixel_shader(Ptr, u32) -> u32).1,
+            crate::entry!(0, r::fwd_set_pixel_shader(Ptr, u32) -> u32).1,
         ),
         (
             108,
@@ -569,7 +835,7 @@ fn register_code(e: &mut Engine) {
         ),
         (
             109,
-            crate::entry!(0, r::set_pixel_constant_f(Ptr, u32, Ptr, u32) -> u32).1,
+            crate::entry!(0, r::fwd_set_pixel_constant_f(Ptr, u32, Ptr, u32) -> u32).1,
         ),
         (
             110,
@@ -577,7 +843,7 @@ fn register_code(e: &mut Engine) {
         ),
         (
             111,
-            crate::entry!(0, r::set_pixel_constant_i(Ptr, u32, Ptr, u32) -> u32).1,
+            crate::entry!(0, r::fwd_set_pixel_constant_i(Ptr, u32, Ptr, u32) -> u32).1,
         ),
         (
             112,
@@ -585,7 +851,7 @@ fn register_code(e: &mut Engine) {
         ),
         (
             113,
-            crate::entry!(0, r::set_pixel_constant_b(Ptr, u32, Ptr, u32) -> u32).1,
+            crate::entry!(0, r::fwd_set_pixel_constant_b(Ptr, u32, Ptr, u32) -> u32).1,
         ),
         (
             114,
@@ -630,7 +896,7 @@ fn register_code(e: &mut Engine) {
         (8, crate::entry!(0, texture_get_priority(Ptr) -> u32).1),
         (9, crate::entry!(0, texture_pre_load(Ptr)).1),
         (10, crate::entry!(0, texture_get_type(Ptr) -> u32).1),
-        (11, crate::entry!(0, texture_set_lod(Ptr, u32) -> u32).1),
+        (11, crate::entry!(0, fwd_texture_set_lod(Ptr, u32) -> u32).1),
         (12, crate::entry!(0, texture_get_lod(Ptr) -> u32).1),
         (13, crate::entry!(0, texture_get_level_count(Ptr) -> u32).1),
         (
@@ -664,7 +930,7 @@ fn register_code(e: &mut Engine) {
         (8, crate::entry!(0, texture_get_priority(Ptr) -> u32).1),
         (9, crate::entry!(0, texture_pre_load(Ptr)).1),
         (10, crate::entry!(0, cube_get_type(Ptr) -> u32).1),
-        (11, crate::entry!(0, texture_set_lod(Ptr, u32) -> u32).1),
+        (11, crate::entry!(0, fwd_texture_set_lod(Ptr, u32) -> u32).1),
         (12, crate::entry!(0, texture_get_lod(Ptr) -> u32).1),
         (13, crate::entry!(0, texture_get_level_count(Ptr) -> u32).1),
         (
@@ -878,6 +1144,7 @@ pub fn create_device(
         lights: HashMap::new(),
         enabled_lights: std::collections::BTreeSet::new(),
         software_vertex_processing: false,
+        lost: false,
     };
     e.kernel
         .graphics
@@ -885,6 +1152,13 @@ pub fn create_device(
         .devices
         .insert(object, device);
     crate::units::platform::direct3d_device_created(e, behavior);
+    #[cfg(windows)]
+    {
+        let d = &e.kernel.graphics.device_objects.devices[&object];
+        let (present, back_buffers, depth) =
+            (d.present.clone(), d.back_buffers.clone(), d.depth_stencil);
+        super::d3d9real::device_created(e, object, focus, behavior, &present, &back_buffers, depth);
+    }
     e.mem.set_u32(out.addr(), object);
     D3D_OK
 }
@@ -951,7 +1225,7 @@ pub(super) fn device_release(e: &mut Engine, this: Ptr) -> u32 {
             }
         }
         for texture in d.textures.values() {
-            texture_release(e, Ptr::new(*texture));
+            texture_unbind(e, Ptr::new(*texture));
         }
         super::d3d9resource::release_bindings(e, this.addr());
         let implicit: Vec<u32> = e
@@ -965,8 +1239,12 @@ pub(super) fn device_release(e: &mut Engine, this: Ptr) -> u32 {
             .collect();
         for surface in implicit {
             e.kernel.graphics.device_objects.surfaces.remove(&surface);
+            #[cfg(windows)]
+            super::d3d9real::forget(e, surface);
             e.mem.free(surface);
         }
+        #[cfg(windows)]
+        super::d3d9real::forget(e, this.addr());
         e.vcall(d.direct3d, 4 * 2, &[]);
         e.mem.free(this.addr());
     }
@@ -1230,6 +1508,8 @@ fn surface_release(e: &mut Engine, this: Ptr) -> u32 {
                 e.mem.free(s.bits);
             }
         }
+        #[cfg(windows)]
+        super::d3d9real::forget(e, this.addr());
         e.mem.free(this.addr());
         // A surface the program made (CreateRenderTarget, CreateDepthStencilSurface) held its
         // device.
@@ -1365,22 +1645,34 @@ fn max_user_clip_planes(e: &mut Engine, this: Ptr) -> u32 {
 
 /// `BeginScene()`: starts a scene; inside one already, `D3DERR_INVALIDCALL`.
 fn begin_scene(e: &mut Engine, this: Ptr) -> u32 {
-    let d = device(e, this);
-    if d.in_scene {
-        return D3DERR_INVALIDCALL;
-    }
-    d.in_scene = true;
-    D3D_OK
+    let model = {
+        let d = device(e, this);
+        if d.in_scene || d.lost {
+            D3DERR_INVALIDCALL
+        } else {
+            d.in_scene = true;
+            D3D_OK
+        }
+    };
+    #[cfg(windows)]
+    super::d3d9real::begin_scene(e, this.addr(), model);
+    model
 }
 
 /// `EndScene()`: ends the scene; outside one, `D3DERR_INVALIDCALL`.
 fn end_scene(e: &mut Engine, this: Ptr) -> u32 {
-    let d = device(e, this);
-    if !d.in_scene {
-        return D3DERR_INVALIDCALL;
-    }
-    d.in_scene = false;
-    D3D_OK
+    let model = {
+        let d = device(e, this);
+        if !d.in_scene || d.lost {
+            D3DERR_INVALIDCALL
+        } else {
+            d.in_scene = false;
+            D3D_OK
+        }
+    };
+    #[cfg(windows)]
+    super::d3d9real::end_scene(e, this.addr(), model);
+    model
 }
 
 /// `D3DCLEAR_TARGET`, `D3DCLEAR_ZBUFFER`, `D3DCLEAR_STENCIL`.
@@ -1400,10 +1692,28 @@ fn clear(
     count: u32,
     rects: Ptr,
     flags: u32,
-    _colour: u32,
-    _z: u32,
-    _stencil: u32,
+    colour: u32,
+    z: u32,
+    stencil: u32,
 ) -> u32 {
+    let model = clear_answer(e, this, count, rects, flags);
+    #[cfg(windows)]
+    super::d3d9real::clear(
+        e,
+        this.addr(),
+        count,
+        rects.addr(),
+        flags,
+        colour,
+        z,
+        stencil,
+        model,
+    );
+    let _ = (colour, z, stencil);
+    model
+}
+
+fn clear_answer(e: &mut Engine, this: Ptr, count: u32, rects: Ptr, flags: u32) -> u32 {
     if (count == 0) != rects.is_null() {
         return D3DERR_INVALIDCALL;
     }
@@ -1421,15 +1731,25 @@ fn clear(
 /// `Present(source, dest, window, dirty region)`: shows the back buffer; nothing is shown yet
 /// (the viewer draws), so it answers `D3D_OK` outside a scene and `D3DERR_INVALIDCALL` inside
 /// one.
-fn present(e: &mut Engine, this: Ptr, _source: u32, _dest: u32, _window: u32, _dirty: u32) -> u32 {
-    if device(e, this).in_scene {
-        return D3DERR_INVALIDCALL;
-    }
-    D3D_OK
+fn present(e: &mut Engine, this: Ptr, source: u32, dest: u32, window: u32, dirty: u32) -> u32 {
+    let model = if device(e, this).in_scene || device(e, this).lost {
+        D3DERR_INVALIDCALL
+    } else {
+        D3D_OK
+    };
+    #[cfg(windows)]
+    super::d3d9real::present(e, this.addr(), source, dest, window, dirty, model);
+    let _ = (source, dest, window, dirty);
+    model
 }
 
-/// `TestCooperativeLevel()`: the device is never lost here: `D3D_OK`.
-fn test_cooperative_level(_e: &mut Engine, _this: Ptr) -> u32 {
+/// `TestCooperativeLevel()`: a windowed device is not lost here: `D3D_OK`, or
+/// `D3DERR_DEVICENOTRESET` after a `Reset` that failed until one succeeds (measured, 2026-10-27).
+const D3DERR_DEVICENOTRESET: u32 = 0x8876_0869;
+fn test_cooperative_level(e: &mut Engine, this: Ptr) -> u32 {
+    if device(e, this).lost {
+        return D3DERR_DEVICENOTRESET;
+    }
     D3D_OK
 }
 
@@ -1539,7 +1859,7 @@ fn set_texture(e: &mut Engine, this: Ptr, sampler: u32, texture: u32) -> u32 {
                 .contains_key(&texture),
             "IDirect3DDevice9::SetTexture({sampler}, {texture:#x}): not a texture of this layer"
         );
-        texture_add_ref(e, Ptr::new(texture));
+        self::texture(e, Ptr::new(texture)).bound += 1;
     }
     let d = device(e, this);
     let old = if texture != 0 {
@@ -1548,7 +1868,7 @@ fn set_texture(e: &mut Engine, this: Ptr, sampler: u32, texture: u32) -> u32 {
         d.textures.remove(&sampler)
     };
     if let Some(old) = old {
-        texture_release(e, Ptr::new(old));
+        texture_unbind(e, Ptr::new(old));
     }
     D3D_OK
 }
@@ -1635,7 +1955,11 @@ fn level_layout(format: u32, width: u32, height: u32) -> (u32, u32) {
 /// A texture of this layer.
 #[derive(Debug, Clone)]
 struct Texture {
+    /// The program's references (what `AddRef` and `Release` answer).
     references: u32,
+    /// The device's samplers holding it: apart from the program's count, as the retail
+    /// runtime keeps them (`d3d9-capture device refs`, 2026-10-27).
+    bound: u32,
     device: u32,
     pool: u32,
     /// 1, or 6 for a cube texture.
@@ -1777,6 +2101,7 @@ fn create_texture(
         object,
         Texture {
             references: 1,
+            bound: 0,
             device: device_addr,
             pool,
             faces: 1,
@@ -1893,6 +2218,7 @@ fn create_cube_texture(
         object,
         Texture {
             references: 1,
+            bound: 0,
             device: device_addr,
             pool,
             faces: 6,
@@ -2100,6 +2426,342 @@ fn create_depth_stencil_surface(
     D3D_OK
 }
 
+// Platform: replaces D3D9.DLL IDirect3DDevice9::CreateOffscreenPlainSurface (vtable +0x90)
+/// `CreateOffscreenPlainSurface(width, height, format, pool, out, shared handle)`, as the retail
+/// runtime answered (`d3d9-capture device extra`, 2026-10-27): a zero side, a null out, a shared
+/// handle, `D3DPOOL_MANAGED` or a format the table's `CheckDeviceFormat` (usage 0,
+/// `D3DRTYPE_SURFACE`) refuses answer `D3DERR_INVALIDCALL`; in the other pools (default, system
+/// memory, scratch) the surface has memory the program can lock (rows packed tightly), and holds
+/// the device.
+#[allow(clippy::too_many_arguments)]
+fn create_offscreen_plain_surface(
+    e: &mut Engine,
+    this: Ptr,
+    width: u32,
+    height: u32,
+    format: u32,
+    pool: u32,
+    out: Ptr,
+    shared: u32,
+) -> u32 {
+    if width == 0 || height == 0 || out.is_null() || shared != 0 || pool == D3DPOOL_MANAGED {
+        return D3DERR_INVALIDCALL;
+    }
+    let d = device(e, this);
+    let (direct3d, [adapter, device_type, ..]) = (d.direct3d, d.creation);
+    let display_format = e.with_stack(0x10, |e, mode| {
+        let hr = e.vcall(direct3d, 4 * 8, &[adapter, mode.addr()]).u32();
+        assert_eq!(
+            hr, D3D_OK,
+            "GetAdapterDisplayMode for CreateOffscreenPlainSurface"
+        );
+        e.mem.u32(mode.addr() + 0xc)
+    });
+    let check = e
+        .vcall(
+            direct3d,
+            4 * 10,
+            &[
+                adapter,
+                device_type,
+                display_format,
+                0,
+                D3DRTYPE_SURFACE,
+                format,
+            ],
+        )
+        .u32();
+    if check != D3D_OK {
+        return D3DERR_INVALIDCALL;
+    }
+    let desc = [format, D3DRTYPE_SURFACE, 0, pool, 0, 0, width, height];
+    let surface = new_surface(e, this.addr(), false, desc);
+    let (pitch, size) = level_layout(format, width, height);
+    let bits = e.mem.alloc(size);
+    let s = e
+        .kernel
+        .graphics
+        .device_objects
+        .surfaces
+        .get_mut(&surface)
+        .expect("the surface");
+    s.bits = bits;
+    s.pitch = pitch;
+    device_add_ref(e, this);
+    #[cfg(windows)]
+    super::d3d9real::offscreen_created(e, this.addr(), surface, width, height, format, pool);
+    e.mem.set_u32(out.addr(), surface);
+    D3D_OK
+}
+
+/// A rectangle (`RECT`) inside a `width` by `height` surface, or the whole surface for null.
+fn rect_inside(e: &Engine, rect: Ptr, width: u32, height: u32) -> Option<[u32; 4]> {
+    if rect.is_null() {
+        return Some([0, 0, width, height]);
+    }
+    let r: [i32; 4] = std::array::from_fn(|i| e.mem.i32(rect.addr() + 4 * i as u32));
+    let inside = r[0] >= 0
+        && r[1] >= 0
+        && r[0] <= r[2]
+        && r[1] <= r[3]
+        && r[2] as u32 <= width
+        && r[3] as u32 <= height;
+    inside.then(|| r.map(|v| v as u32))
+}
+
+// Platform: replaces D3D9.DLL IDirect3DDevice9::ColorFill (vtable +0x8C)
+/// `ColorFill(surface, rect, colour)`, as the retail runtime answered (2026-10-27): a surface
+/// outside `D3DPOOL_DEFAULT` or a rectangle past its edges answers `D3DERR_INVALIDCALL`; in a
+/// scene too it answers `D3D_OK`. The surface's memory, when it has some here, takes the colour
+/// as the runtime wrote it: `X8R8G8B8` with the unused byte 0, `A8R8G8B8` the colour; other
+/// formats with memory are not provided. A render target's pixels are the real device's
+/// (`NV_D3D9=real`).
+fn color_fill(e: &mut Engine, this: Ptr, surface: u32, rect: Ptr, colour: u32) -> u32 {
+    let Some(s) = e
+        .kernel
+        .graphics
+        .device_objects
+        .surfaces
+        .get(&surface)
+        .cloned()
+    else {
+        return D3DERR_INVALIDCALL;
+    };
+    if s.desc[3] != D3DPOOL_DEFAULT {
+        return D3DERR_INVALIDCALL;
+    }
+    let Some([left, top, right, bottom]) = rect_inside(e, rect, s.desc[6], s.desc[7]) else {
+        return D3DERR_INVALIDCALL;
+    };
+    if s.bits != 0 {
+        let word = match s.desc[0] {
+            22 => colour & 0x00ff_ffff,
+            21 => colour,
+            f => panic!("IDirect3DDevice9::ColorFill of a surface of format {f} is not provided"),
+        };
+        for y in top..bottom {
+            for x in left..right {
+                e.mem.set_u32(s.bits + y * s.pitch + 4 * x, word);
+            }
+        }
+    }
+    #[cfg(windows)]
+    super::d3d9real::color_fill(e, this.addr(), surface, rect.addr(), colour, D3D_OK);
+    let _ = this;
+    D3D_OK
+}
+
+// Platform: replaces D3D9.DLL IDirect3DDevice9::GetRenderTargetData (vtable +0x80)
+/// `GetRenderTargetData(render target, destination)`, as the retail runtime answered
+/// (2026-10-27): the source must be a render target in `D3DPOOL_DEFAULT`, the destination a
+/// `D3DPOOL_SYSTEMMEM` surface of the same size and format, else `D3DERR_INVALIDCALL`; in a
+/// scene too it answers `D3D_OK`. The pixels are the real device's: with `NV_D3D9=real` they are
+/// read back into the destination's memory; without it nothing is drawn and the copy is not
+/// provided (the run stops).
+fn get_render_target_data(e: &mut Engine, this: Ptr, source: u32, destination: u32) -> u32 {
+    let surfaces = &e.kernel.graphics.device_objects.surfaces;
+    let (Some(from), Some(to)) = (
+        surfaces.get(&source).cloned(),
+        surfaces.get(&destination).cloned(),
+    ) else {
+        return D3DERR_INVALIDCALL;
+    };
+    let ok = from.desc[2] & D3DUSAGE_RENDERTARGET != 0
+        && from.desc[3] == D3DPOOL_DEFAULT
+        && to.desc[3] == D3DPOOL_SYSTEMMEM
+        && (from.desc[0], from.desc[6], from.desc[7]) == (to.desc[0], to.desc[6], to.desc[7]);
+    if !ok {
+        return D3DERR_INVALIDCALL;
+    }
+    #[cfg(windows)]
+    if super::d3d9real::get_render_target_data(
+        e,
+        this.addr(),
+        source,
+        destination,
+        to.bits,
+        to.pitch,
+    ) {
+        return D3D_OK;
+    }
+    let _ = this;
+    panic!(
+        "IDirect3DDevice9::GetRenderTargetData without NV_D3D9=real (nothing is drawn, so no \
+         pixels to read back) is not provided"
+    )
+}
+
+/// Whether the device has a resource of its own in `D3DPOOL_DEFAULT` alive (a texture, a
+/// surface it did not make itself, a buffer).
+fn default_pool_alive(e: &Engine, device: u32) -> bool {
+    let o = &e.kernel.graphics.device_objects;
+    o.textures
+        .values()
+        .any(|t| t.device == device && t.pool == D3DPOOL_DEFAULT)
+        || o.surfaces.values().any(|s| {
+            s.device == device && !s.implicit && s.container == 0 && s.desc[3] == D3DPOOL_DEFAULT
+        })
+        || super::d3d9resource::default_pool_alive(e, device)
+}
+
+// Platform: replaces D3D9.DLL IDirect3DDevice9::Reset (vtable +0x40)
+/// `Reset(present parameters)`, as the retail runtime answered on a windowed device
+/// (`d3d9-capture device reset`, 2026-10-27):
+/// - with a resource of the device's own in `D3DPOOL_DEFAULT` alive, or more than three back
+///   buffers (the count left as given), it answers `D3DERR_INVALIDCALL` and the device needs a
+///   successful `Reset`: `TestCooperativeLevel` answers `D3DERR_DEVICENOTRESET`, `BeginScene`,
+///   `EndScene` and `Present` are refused, also after the resource is released;
+/// - else, in a scene too (which it ends), it answers `D3D_OK` with a count of 0 made 1 and
+///   `D3DFMT_UNKNOWN` the display format (written back); the old back buffers and automatic
+///   depth surface go (a reference the program still holds no longer names a live surface) and
+///   new ones of the parameters are made, render target 0 the first back buffer, the depth
+///   surface the automatic one; every state the program set returns to its default (render,
+///   texture stage and sampler states, transforms, clip planes, material and lights, textures,
+///   streams, indices, declaration, FVF, shaders, constants), the viewport and scissor the whole
+///   back buffer.
+///
+/// Not provided (the run stops): a full-screen device, a size taken from the window (0),
+/// multisampling.
+fn reset(e: &mut Engine, this: Ptr, present: Ptr) -> u32 {
+    if present.is_null() {
+        return D3DERR_INVALIDCALL;
+    }
+    let p = present.addr();
+    let field = |e: &Engine, offset: u32| e.mem.u32(p + offset);
+    if field(e, PP_WINDOWED) == 0 {
+        panic!("IDirect3DDevice9::Reset to a full-screen device is not provided");
+    }
+    if default_pool_alive(e, this.addr()) || field(e, PP_COUNT) > BACK_BUFFERS_MAX {
+        device(e, this).lost = true;
+        return D3DERR_INVALIDCALL;
+    }
+    if field(e, PP_WIDTH) == 0 || field(e, PP_HEIGHT) == 0 {
+        panic!(
+            "IDirect3DDevice9::Reset with a back buffer size taken from the window is not provided"
+        );
+    }
+    if field(e, PP_MULTISAMPLE) != 0 {
+        panic!("IDirect3DDevice9::Reset with multisampling is not provided");
+    }
+    let (direct3d, adapter) = {
+        let d = device(e, this);
+        (d.direct3d, d.creation[0])
+    };
+    let display_format = e.with_stack(0x10, |e, mode| {
+        let hr = e.vcall(direct3d, 4 * 8, &[adapter, mode.addr()]).u32();
+        assert_eq!(hr, D3D_OK, "GetAdapterDisplayMode for Reset");
+        e.mem.u32(mode.addr() + 0xc)
+    });
+    if field(e, PP_COUNT) == 0 {
+        e.mem.set_u32(p + PP_COUNT, 1);
+    }
+    if field(e, PP_FORMAT) == D3DFMT_UNKNOWN {
+        e.mem.set_u32(p + PP_FORMAT, display_format);
+    }
+    // The device's bindings and states go back to their defaults.
+    let old = {
+        let d = device(e, this);
+        let held: Vec<u32> = d
+            .render_targets
+            .iter()
+            .chain([&d.depth_stencil])
+            .copied()
+            .filter(|&s| s != 0)
+            .collect();
+        let textures: Vec<u32> = d.textures.values().copied().collect();
+        d.render_targets = [0; RENDER_TARGETS];
+        d.depth_stencil = 0;
+        d.textures.clear();
+        d.render_states.clear();
+        d.stage_states.clear();
+        d.sampler_states.clear();
+        d.transforms.clear();
+        d.clip_planes.clear();
+        d.material = None;
+        d.lights.clear();
+        d.enabled_lights.clear();
+        d.in_scene = false;
+        (held, textures)
+    };
+    for surface in old.0 {
+        surface_release(e, Ptr::new(surface));
+    }
+    for texture in old.1 {
+        texture_unbind(e, Ptr::new(texture));
+    }
+    super::d3d9resource::release_bindings(e, this.addr());
+    let implicit: Vec<u32> = e
+        .kernel
+        .graphics
+        .device_objects
+        .surfaces
+        .iter()
+        .filter(|(_, s)| s.device == this.addr() && s.implicit)
+        .map(|(a, _)| *a)
+        .collect();
+    for surface in implicit {
+        e.kernel.graphics.device_objects.surfaces.remove(&surface);
+        #[cfg(windows)]
+        super::d3d9real::forget(e, surface);
+        e.mem.free(surface);
+    }
+    // The new swap chain.
+    let format = field(e, PP_FORMAT);
+    let (width, height, quality) = (
+        field(e, PP_WIDTH),
+        field(e, PP_HEIGHT),
+        field(e, PP_QUALITY),
+    );
+    let back_buffers: Vec<u32> = (0..field(e, PP_COUNT))
+        .map(|_| {
+            let desc = [
+                format,
+                D3DRTYPE_SURFACE,
+                D3DUSAGE_RENDERTARGET,
+                0,
+                0,
+                quality,
+                width,
+                height,
+            ];
+            new_surface(e, this.addr(), true, desc)
+        })
+        .collect();
+    let depth_stencil = if field(e, PP_AUTO_DEPTH) != 0 {
+        let desc = [
+            field(e, PP_DEPTH_FORMAT),
+            D3DRTYPE_SURFACE,
+            D3DUSAGE_DEPTHSTENCIL,
+            0,
+            0,
+            quality,
+            width,
+            height,
+        ];
+        new_surface(e, this.addr(), true, desc)
+    } else {
+        0
+    };
+    surface_add_ref(e, Ptr::new(back_buffers[0]));
+    if depth_stencil != 0 {
+        surface_add_ref(e, Ptr::new(depth_stencil));
+    }
+    let bytes = e.mem.bytes(p, PRESENT_SIZE);
+    {
+        let d = device(e, this);
+        d.present = bytes.clone();
+        d.back_buffers = back_buffers.clone();
+        d.render_targets[0] = back_buffers[0];
+        d.depth_stencil = depth_stencil;
+        d.viewport = [0, 0, width, height, 0f32.to_bits(), 1f32.to_bits()];
+        d.scissor = [0, 0, width, height];
+        d.lost = false;
+    }
+    #[cfg(windows)]
+    super::d3d9real::device_reset(e, this.addr(), &bytes, &back_buffers, depth_stencil);
+    D3D_OK
+}
+
 /// `QueryInterface(iid, out)`: `IUnknown`, `IDirect3DResource9`, `IDirect3DBaseTexture9` and
 /// `IDirect3DTexture9` answer the texture (counted); others `E_NOINTERFACE` with a null out.
 fn texture_query_interface(e: &mut Engine, this: Ptr, iid: Ptr, out: Ptr) -> u32 {
@@ -2130,8 +2792,24 @@ fn texture_add_ref(e: &mut Engine, this: Ptr) -> u32 {
 fn texture_release(e: &mut Engine, this: Ptr) -> u32 {
     let t = texture(e, this);
     t.references -= 1;
-    let left = t.references;
-    if left == 0 {
+    let (left, bound) = (t.references, t.bound);
+    if left == 0 && bound == 0 {
+        texture_destroy(e, this);
+    }
+    left
+}
+
+/// A sampler lets go of `this`; the texture goes once neither the program nor a sampler holds it.
+fn texture_unbind(e: &mut Engine, this: Ptr) {
+    let t = texture(e, this);
+    t.bound -= 1;
+    if t.bound == 0 && t.references == 0 {
+        texture_destroy(e, this);
+    }
+}
+
+fn texture_destroy(e: &mut Engine, this: Ptr) {
+    {
         let t = e
             .kernel
             .graphics
@@ -2148,12 +2826,15 @@ fn texture_release(e: &mut Engine, this: Ptr) -> u32 {
                 .remove(&level)
                 .expect("the level");
             e.mem.free(s.bits);
+            #[cfg(windows)]
+            super::d3d9real::forget(e, level);
             e.mem.free(level);
         }
+        #[cfg(windows)]
+        super::d3d9real::forget(e, this.addr());
         e.mem.free(this.addr());
         device_release(e, Ptr::new(t.device));
     }
-    left
 }
 
 /// `GetDevice(out)`: the texture's device, counted.
@@ -2198,6 +2879,17 @@ fn texture_set_lod(e: &mut Engine, this: Ptr, lod: u32) -> u32 {
     }
     let last = t.levels.len() as u32 / t.faces - 1;
     std::mem::replace(&mut t.lod, lod.min(last))
+}
+
+/// `SetLOD`, then (`NV_D3D9=real`) the same on the real texture, whose sampling starts at that
+/// level too (a managed texture; the model's answer stands).
+fn fwd_texture_set_lod(e: &mut Engine, this: Ptr, lod: u32) -> u32 {
+    let previous = texture_set_lod(e, this, lod);
+    #[cfg(windows)]
+    if texture(e, this).pool == D3DPOOL_MANAGED {
+        super::d3d9real::texture_set_lod(e, this.addr(), lod, previous);
+    }
+    previous
 }
 
 /// `GetLOD()`.
@@ -2382,6 +3074,12 @@ fn surface_unlock_rect(e: &mut Engine, this: Ptr) -> u32 {
         return D3DERR_INVALIDCALL;
     }
     s.locked = false;
+    #[cfg(windows)]
+    {
+        let (bits, pitch, desc) = (s.bits, s.pitch, s.desc);
+        let (_, size) = level_layout(desc[0], desc[6], desc[7]);
+        super::d3d9real::surface_unlocked(e, this.addr(), bits, pitch, pitch, size / pitch.max(1));
+    }
     D3D_OK
 }
 
@@ -2989,9 +3687,12 @@ mod tests {
         assert_eq!(e.vcall(device, 4 * 65, &[0, texture]).u32(), D3D_OK);
         assert_eq!(e.vcall(device, 4 * 64, &[0, value]).u32(), D3D_OK);
         assert_eq!(e.mem.u32(value), texture);
-        // The program's reference, the sampler's and GetTexture's.
-        assert_eq!(e.vcall(texture, 8, &[]).u32(), 2);
+        // The program's reference and GetTexture's: the sampler's binding is not counted (the
+        // retail runtime, `d3d9-capture device refs`, 2026-10-27); released to 0 while bound,
+        // the texture lives on until the sampler lets go.
         assert_eq!(e.vcall(texture, 8, &[]).u32(), 1);
+        assert_eq!(e.vcall(texture, 8, &[]).u32(), 0);
+        assert!(!e.kernel.graphics.device_objects.textures.is_empty());
         assert_eq!(e.vcall(device, 4 * 65, &[0, 0]).u32(), D3D_OK);
         assert!(e.kernel.graphics.device_objects.textures.is_empty());
         assert_eq!(e.vcall(device, 4 * 64, &[0, value]).u32(), D3D_OK);
@@ -3079,12 +3780,10 @@ mod tests {
             D3D_OK
         );
         assert_eq!((e.mem.u32(got), e.mem.u32(got + 8)), (vb, 32));
-        assert_eq!(
-            e.vcall(vb, 8, &[]).u32(),
-            2,
-            "the stream's and the program's"
-        );
-        assert_eq!(e.vcall(vb, 8, &[]).u32(), 1, "the stream's");
+        // GetStreamSource's reference and the program's; the stream's binding is not counted.
+        assert_eq!(e.vcall(vb, 8, &[]).u32(), 1, "the program's");
+        assert_eq!(e.vcall(vb, 8, &[]).u32(), 0, "none: still bound");
+        assert!(e.kernel.graphics.device_objects.resources_hold(vb));
         // Constants.
         let four = e.mem.alloc(32);
         e.mem.set_u32(four + 16, 7);
@@ -3349,5 +4048,204 @@ mod tests {
 
     fn device_state(e: &Engine, device: u32) -> &Device {
         &e.kernel.graphics.device_objects.devices[&device]
+    }
+
+    /// The test table with what the offscreen, fill and query calls ask: `CheckDeviceFormat` of
+    /// an X8R8G8B8 plain surface (usage 0, `D3DRTYPE_SURFACE`) and the query types this machine's
+    /// device took (`d3d9-capture device queries`, 2026-10-27: event, occlusion and a few more).
+    fn extra_device() -> (Engine, u32) {
+        let mut e = Engine::new();
+        let table = test_table()
+            + "\nDomain\td1\t15,16\nCheckDeviceFormat\t0 1 16 0 1\t0\t\td1"
+            + "\nCreateQuery\t1\t8876086a\nCreateQuery\t8\t0\nCreateQuery\t9\t0\nCreateQuery\ta\t0";
+        d3d9::load_adapter_table(&mut e, &table);
+        let create = d3d9::proc_address(&mut e, b"Direct3DCreate9").unwrap();
+        let d3d = e.call(create, &[d3d9::D3D_SDK_VERSION]).u32();
+        let present = e.mem.alloc(PRESENT_SIZE);
+        e.mem.set_u32(present + PP_WIDTH, 640);
+        e.mem.set_u32(present + PP_HEIGHT, 480);
+        e.mem.set_u32(present + PP_WINDOW, 0x11c);
+        e.mem.set_u32(present + PP_WINDOWED, 1);
+        let out = e.mem.alloc(4);
+        let hr = e
+            .vcall(d3d, CREATE_DEVICE, &[0, 1, 0x11c, 0x40, present, out])
+            .u32();
+        assert_eq!(hr, D3D_OK);
+        let device = e.mem.u32(out);
+        (e, device)
+    }
+
+    /// `CreateOffscreenPlainSurface` (+0x90) and `ColorFill` (+0x8C) as the retail runtime
+    /// answered (`d3d9-capture device extra`, 2026-10-27).
+    #[test]
+    fn offscreen_surfaces_and_fills_answer_as_measured() {
+        let (mut e, device) = extra_device();
+        let out = e.mem.alloc(4);
+        let make = |e: &mut Engine, w: u32, pool: u32| {
+            let hr = e.vcall(device, 0x90, &[w, 64, 0x16, pool, out, 0]).u32();
+            (hr, e.mem.u32(out))
+        };
+        assert_eq!(make(&mut e, 64, 1).0, D3DERR_INVALIDCALL, "managed");
+        assert_eq!(make(&mut e, 0, 2).0, D3DERR_INVALIDCALL, "a zero side");
+        let (hr, system) = make(&mut e, 64, 2);
+        assert_eq!(hr, D3D_OK);
+        let (hr, default) = make(&mut e, 64, 0);
+        assert_eq!(hr, D3D_OK);
+        // Outside the default pool a fill is refused; X8R8G8B8 takes the colour with byte 3 zero.
+        assert_eq!(
+            e.vcall(device, 0x8c, &[system, 0, 0xff11_2233]).u32(),
+            D3DERR_INVALIDCALL
+        );
+        assert_eq!(
+            e.vcall(device, 0x8c, &[default, 0, 0xff11_2233]).u32(),
+            D3D_OK
+        );
+        let locked = e.mem.alloc(8);
+        assert_eq!(e.vcall(default, 4 * 13, &[locked, 0, 0]).u32(), D3D_OK);
+        let bits = e.mem.u32(locked + 4);
+        assert_eq!(e.mem.u32(bits), 0x0011_2233);
+        assert_eq!(e.vcall(default, 4 * 14, &[]).u32(), D3D_OK);
+        // A rectangle inside fills; past the edge is refused.
+        let rect = e.mem.alloc(16);
+        for (i, v) in [8u32, 8, 16, 16].iter().enumerate() {
+            e.mem.set_u32(rect + 4 * i as u32, *v);
+        }
+        assert_eq!(
+            e.vcall(device, 0x8c, &[default, rect, 0x0044_5566]).u32(),
+            D3D_OK
+        );
+        e.mem.set_u32(rect + 8, 100);
+        assert_eq!(
+            e.vcall(device, 0x8c, &[default, rect, 0]).u32(),
+            D3DERR_INVALIDCALL
+        );
+        // GetRenderTargetData (+0x80): a system-memory destination of the back buffer's size and
+        // format is taken (the pixels are the real device's); another size or pool is refused.
+        let back = device_state(&e, device).render_targets[0];
+        let (_, small) = make(&mut e, 32, 2);
+        assert_eq!(
+            e.vcall(device, 0x80, &[back, small]).u32(),
+            D3DERR_INVALIDCALL
+        );
+        assert_eq!(
+            e.vcall(device, 0x80, &[back, default]).u32(),
+            D3DERR_INVALIDCALL
+        );
+        assert_eq!(
+            e.vcall(device, 0x80, &[system, system]).u32(),
+            D3DERR_INVALIDCALL
+        );
+    }
+
+    /// `CreateQuery` (+0x1D8) and the event query's life as the retail runtime answered
+    /// (2026-10-27); without `NV_D3D9=real` an ended event query is done at once.
+    #[test]
+    fn queries_answer_as_measured() {
+        let (mut e, device) = extra_device();
+        assert_eq!(e.vcall(device, 0x1d8, &[1, 0]).u32(), 0x8876_086a);
+        assert_eq!(e.vcall(device, 0x1d8, &[8, 0]).u32(), D3D_OK);
+        let out = e.mem.alloc(4);
+        assert_eq!(e.vcall(device, 0x1d8, &[8, out]).u32(), D3D_OK);
+        let q = e.mem.u32(out);
+        assert_eq!(e.vcall(q, 0x10, &[]).u32(), 8, "GetType");
+        assert_eq!(e.vcall(q, 0x14, &[]).u32(), 4, "GetDataSize");
+        let data = e.mem.alloc(8);
+        e.mem.set_u32(data, 0xaaaa_aaaa);
+        // Never issued: S_OK and dddddddd.
+        assert_eq!(e.vcall(q, 0x1c, &[data, 4, 1]).u32(), D3D_OK);
+        assert_eq!(e.mem.u32(data), 0xdddd_dddd);
+        assert_eq!(e.vcall(q, 0x18, &[2]).u32(), D3D_OK, "BEGIN");
+        e.mem.set_u32(data, 0xaaaa_aaaa);
+        assert_eq!(
+            e.vcall(q, 0x1c, &[data, 4, 1]).u32(),
+            1,
+            "S_FALSE after BEGIN"
+        );
+        assert_eq!(e.mem.u32(data), 0xaaaa_aaaa);
+        assert_eq!(e.vcall(q, 0x18, &[1]).u32(), D3D_OK, "END");
+        assert_eq!(e.vcall(q, 0x1c, &[data, 4, 1]).u32(), D3D_OK);
+        assert_eq!(e.mem.u32(data), 1);
+        // Size 2 writes two bytes; size 8 zero-extends.
+        e.mem.set_u32(data, 0xaaaa_aaaa);
+        assert_eq!(e.vcall(q, 0x1c, &[data, 2, 0]).u32(), D3D_OK);
+        assert_eq!(e.mem.u32(data), 0xaaaa_0001);
+        e.mem.set_u32(data + 4, 0xaaaa_aaaa);
+        assert_eq!(e.vcall(q, 0x1c, &[data, 8, 0]).u32(), D3D_OK);
+        assert_eq!([e.mem.u32(data), e.mem.u32(data + 4)], [1, 0]);
+        assert_eq!(e.vcall(q, 0x1c, &[0, 0, 0]).u32(), D3D_OK);
+        assert_eq!(e.vcall(q, 8, &[]).u32(), 0, "Release");
+    }
+
+    /// `Reset` (+0x40) as the retail runtime answered (`d3d9-capture device reset`, 2026-10-27).
+    #[test]
+    fn reset_answers_as_measured() {
+        let (mut e, device) = extra_device();
+        let pp = e.mem.alloc(PRESENT_SIZE);
+        let fill = |e: &mut Engine, count: u32, width: u32| {
+            for i in 0..PRESENT_SIZE / 4 {
+                e.mem.set_u32(pp + 4 * i, 0);
+            }
+            e.mem.set_u32(pp + PP_WIDTH, width);
+            e.mem.set_u32(pp + PP_HEIGHT, 480);
+            e.mem.set_u32(pp + PP_COUNT, count);
+            e.mem.set_u32(pp + PP_WINDOW, 0x11c);
+            e.mem.set_u32(pp + PP_WINDOWED, 1);
+        };
+        // States set before Reset.
+        assert_eq!(e.vcall(device, 0xe4, &[7, 0]).u32(), D3D_OK);
+        // A default-pool surface alive: refused, and the device needs a Reset.
+        let out = e.mem.alloc(4);
+        assert_eq!(
+            e.vcall(device, 0x90, &[64, 64, 0x16, 0, out, 0]).u32(),
+            D3D_OK
+        );
+        let surface = e.mem.u32(out);
+        fill(&mut e, 0, 640);
+        assert_eq!(e.vcall(device, 0x40, &[pp]).u32(), D3DERR_INVALIDCALL);
+        assert_eq!(e.vcall(device, 0xc, &[]).u32(), D3DERR_DEVICENOTRESET);
+        assert_eq!(
+            e.vcall(device, 0xa4, &[]).u32(),
+            D3DERR_INVALIDCALL,
+            "BeginScene"
+        );
+        assert_eq!(
+            e.vcall(device, 0x44, &[0, 0, 0, 0]).u32(),
+            D3DERR_INVALIDCALL,
+            "Present"
+        );
+        assert_eq!(e.vcall(surface, 8, &[]).u32(), 0);
+        assert_eq!(
+            e.vcall(device, 0xc, &[]).u32(),
+            D3DERR_DEVICENOTRESET,
+            "still"
+        );
+        // Four back buffers: refused, the count left as given.
+        fill(&mut e, 4, 640);
+        assert_eq!(e.vcall(device, 0x40, &[pp]).u32(), D3DERR_INVALIDCALL);
+        assert_eq!(e.mem.u32(pp + PP_COUNT), 4);
+        // A good Reset: defaults filled in, the device usable again, its states cleared, the
+        // render target the new back buffer of the new size.
+        fill(&mut e, 0, 800);
+        assert_eq!(e.vcall(device, 0x40, &[pp]).u32(), D3D_OK);
+        assert_eq!(e.mem.u32(pp + PP_COUNT), 1);
+        assert_eq!(e.mem.u32(pp + PP_FORMAT), 0x16);
+        assert_eq!(e.vcall(device, 0xc, &[]).u32(), D3D_OK);
+        let d = device_state(&e, device);
+        assert!(d.render_states.is_empty());
+        assert_eq!(d.viewport[2..4], [800, 480]);
+        let back = d.back_buffers[0];
+        assert_eq!(d.render_targets[0], back);
+        assert_eq!(
+            e.kernel.graphics.device_objects.surfaces[&back].desc[6..8],
+            [800, 480]
+        );
+        // In a scene too; the scene ends.
+        assert_eq!(e.vcall(device, 0xa4, &[]).u32(), D3D_OK);
+        assert_eq!(e.vcall(device, 0x40, &[pp]).u32(), D3D_OK);
+        assert_eq!(
+            e.vcall(device, 0xa8, &[]).u32(),
+            D3DERR_INVALIDCALL,
+            "EndScene"
+        );
     }
 }

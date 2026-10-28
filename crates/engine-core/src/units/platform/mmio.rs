@@ -160,6 +160,13 @@ pub fn mmio_open_a(e: &mut Engine, name: Ptr, info: Ptr, flags: u32) -> u32 {
         "mmioOpenA with flags {flags:#x} and this MMIOINFO is not provided (only an I/O \
          procedure with MMIO_ALLOCBUF)"
     );
+    if !name.is_null() {
+        let what = format!(
+            "mmioOpen {}",
+            String::from_utf8_lossy(&e.mem.cstr(name.addr()))
+        );
+        super::dsound::note(e, &what);
+    }
     let h = e.mem.alloc(MMIOINFO_SIZE);
     let buffer = e.mem.alloc(BUFFER_SIZE);
     e.mem.set_u32(h + DW_FLAGS, MMIO_ALLOCBUF);

@@ -2025,6 +2025,7 @@ dependencies = [
  "bink",
  "mp3",
  "vorbis",
+ "windows 0.58.0",
 ]
 
 [[package]]
@@ -2601,6 +2602,7 @@ version = "0.1.0"
 dependencies = [
  "engine",
  "esm",
+ "play-patch",
  "script",
  "world",
 ]
@@ -3633,6 +3635,13 @@ name = "plain"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
+
+[[package]]
+name = "play-patch"
+version = "0.1.0"
+dependencies = [
+ "engine",
+]
 
 [[package]]
 name = "png"

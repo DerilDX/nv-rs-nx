@@ -74,50 +74,296 @@ pub struct Voice {
     pub looping: bool,
     /// The frame the next output frame reads; `None` when not playing.
     pub position: Option<usize>,
+    /// Source frames per output frame (the buffer's frequency over the device's rate): exactly 1
+    /// on the exact path, else the approximate resampler ([`resample_kernel`]).
+    pub step: f64,
+    /// The fraction of a source frame past `position` (resampled voices only).
+    pub frac: f64,
+    /// A 3D buffer's left and right attenuation from its position (hundredths of a decibel,
+    /// before the volume; [`spatial_millibels`]), in place of the pan. Approximate.
+    pub spatial: Option<(f64, f64)>,
 }
 
 impl Voice {
+    /// A voice of `data` that is not playing, with volume, pan and frequency at their defaults.
+    pub fn new(data: Vec<u8>, channels: u16, bits: u16) -> Voice {
+        Voice {
+            data,
+            channels,
+            bits,
+            volume: 0,
+            pan: 0,
+            looping: false,
+            position: None,
+            step: 1.0,
+            frac: 0.0,
+            spatial: None,
+        }
+    }
+
     fn frames(&self) -> usize {
         self.data.len() / (usize::from(self.channels) * usize::from(self.bits) / 8)
     }
+
+    /// Whether the voice is on the measured exact path (device rate, no 3D).
+    pub fn exact(&self) -> bool {
+        self.step == 1.0 && self.frac == 0.0 && self.spatial.is_none()
+    }
 }
 
-/// Adds `voices` into `out` (interleaved stereo, `out.len() / 2` frames), moving each playing
-/// voice on by one frame per output frame (the exact path: the buffers are at the device's rate).
+/// The gain for an attenuation of `millibels` from the 3D stage (approximate): rounded to the
+/// 0.1 dB steps the measured 3D gains come in, then `floor(65536 * 10^(d / 2000)) / 65535` as
+/// in the measured volume law.
+pub fn spatial_gain(millibels: f64) -> f32 {
+    if millibels >= 0.0 {
+        return 1.0;
+    }
+    if millibels <= -10000.0 {
+        return 0.0;
+    }
+    let d = (millibels / 10.0).round() * 10.0;
+    let k = (65536.0 * 10f64.powf(d / 2000.0)).floor() as f32;
+    k * (1.0f32 / 65535.0)
+}
+
+/// The share of the 3D stage's power that goes to the near channel, by the source's angle from
+/// straight ahead or behind (degrees, 0 to 90), far from the listener: measured on the
+/// `dsmix-3d` grid (`build43-scratch/measure/dsmix-3d-2026-10-24`, positions 2.5 to 5.7 units
+/// away, minimum distance 1); linear between the measured angles.
+const NEAR_SHARE: [(f64, f64); 20] = [
+    (0.0, 0.5),
+    (7.13, 0.5345),
+    (14.04, 0.5630),
+    (20.56, 0.5911),
+    (26.57, 0.6186),
+    (32.01, 0.6453),
+    (36.87, 0.6661),
+    (39.81, 0.6813),
+    (41.19, 0.6912),
+    (45.0, 0.7058),
+    (49.40, 0.7291),
+    (53.13, 0.7512),
+    (56.31, 0.7681),
+    (60.26, 0.7918),
+    (63.43, 0.8101),
+    (68.20, 0.8368),
+    (71.57, 0.8604),
+    (74.05, 0.8762),
+    (75.96, 0.8905),
+    (90.0, 1.0),
+];
+
+/// The 3D stage's left and right attenuation (hundredths of a decibel) for a source at `at` in
+/// the listener's frame (x right, y up, z ahead), with the buffer's minimum and maximum
+/// distance and the listener's rolloff factor. Approximate, from what `dsmix-3d` measured:
+/// - The two channels' power adds up to a third (each channel -7.8 dB straight ahead).
+/// - The near channel's share by angle ([`NEAR_SHARE`]); closer than 2.5 units the share moves
+///   toward a half in proportion to the distance (measured with minimum distance 1; whether it
+///   scales with the minimum distance is not measured).
+/// - Past the minimum distance the level falls by `min / (min + rolloff * (d - min))`, `d` held
+///   at the maximum distance (7 distances and 3 rolloffs fit to 0.1 dB).
+/// - Height only counts in the distance. Doppler is not applied.
+pub fn spatial_millibels(at: [f32; 3], min: f32, max: f32, rolloff: f32) -> (f64, f64) {
+    let [x, y, z] = at.map(f64::from);
+    let d = (x * x + y * y + z * z).sqrt();
+    let (min, max, rolloff) = (f64::from(min), f64::from(max), f64::from(rolloff));
+    let distance = if d <= min {
+        0.0
+    } else {
+        let d = d.min(max.max(min));
+        2000.0 * (min / (min + rolloff * (d - min))).log10()
+    };
+    let horizontal = (x * x + z * z).sqrt();
+    let share = if horizontal == 0.0 {
+        0.5
+    } else {
+        let angle = (x.abs() / horizontal).min(1.0).asin().to_degrees();
+        let i = NEAR_SHARE
+            .windows(2)
+            .position(|w| angle <= w[1].0)
+            .unwrap_or(NEAR_SHARE.len() - 2);
+        let (a, b) = (NEAR_SHARE[i], NEAR_SHARE[i + 1]);
+        let far = a.1 + (b.1 - a.1) * (angle - a.0) / (b.0 - a.0);
+        0.5 + (far - 0.5) * (d / 2.5).min(1.0)
+    };
+    let mb = |p: f64| {
+        if p <= 0.0 {
+            -10000.0
+        } else {
+            1000.0 * (p / 3.0).log10()
+        }
+    };
+    let (near, far) = (mb(share), mb(1.0 - share));
+    if x < 0.0 {
+        (near + distance, far + distance)
+    } else {
+        (far + distance, near + distance)
+    }
+}
+
+/// Phases of the resampler's kernel table.
+const PHASES: usize = 1024;
+/// Half the resampler's taps.
+const HALF: usize = 32;
+
+/// The approximate resampler's kernel for `step` source frames per output frame: a sinc
+/// windowed by a Blackman window over 64 taps, cut off at 0.95 of the lower Nyquist rate, in
+/// [`PHASES`] phases (`table[phase * 64 + j]` weighs source frame `n - 31 + j` for a position
+/// `n + phase / PHASES`). It is not Windows' filter. Of the windowed sincs, linear and cubic
+/// interpolation tried against `dsmix-measure`'s captures (`dsmix-vd-2026-10-24`), this one is
+/// closest for 44100 Hz on 48000 (-25.8 dB residual); Windows' own filter is not pinned down
+/// (docs/SOUND.md).
+pub fn resample_kernel(step: f64) -> std::sync::Arc<Vec<f32>> {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<HashMap<u64, Arc<Vec<f32>>>>> = OnceLock::new();
+    let cut = 0.95 * if step > 1.0 { 1.0 / step } else { 1.0 };
+    let cache = CACHE.get_or_init(Default::default);
+    let mut cache = cache.lock().expect("the kernel cache");
+    cache
+        .entry(cut.to_bits())
+        .or_insert_with(|| {
+            let pi = std::f64::consts::PI;
+            let mut table = vec![0f32; PHASES * 2 * HALF];
+            for phase in 0..PHASES {
+                let f = phase as f64 / PHASES as f64;
+                for j in 0..2 * HALF {
+                    let d = f + (HALF - 1) as f64 - j as f64;
+                    let t = d / HALF as f64;
+                    let window = if t.abs() >= 1.0 {
+                        0.0
+                    } else {
+                        let a = pi * (t + 1.0);
+                        0.42 - 0.5 * a.cos() + 0.08 * (2.0 * a).cos()
+                    };
+                    let x = cut * d;
+                    let sinc = if x.abs() < 1e-12 {
+                        1.0
+                    } else {
+                        (pi * x).sin() / (pi * x)
+                    };
+                    table[phase * 2 * HALF + j] = (cut * sinc * window) as f32;
+                }
+            }
+            Arc::new(table)
+        })
+        .clone()
+}
+
+/// Adds `voices` into `out` (interleaved stereo, `out.len() / 2` frames). A voice on the exact
+/// path moves on one frame per output frame (the buffers are at the device's rate); another is
+/// resampled by [`resample_kernel`], with its 3D gains from [`Voice::spatial`] (approximate).
 /// A non-looping voice stops at its end. `voices` come newest first (the measured order of the
 /// sum, module documentation).
 pub fn render(voices: &mut [&mut Voice], out: &mut [f32]) {
     for v in voices.iter_mut() {
-        let Some(mut at) = v.position else { continue };
-        let (gl, gr) = channel_gains(v.volume, v.pan);
-        let frames = v.frames();
-        for frame in out.chunks_mut(2) {
-            if at >= frames {
-                if v.looping && frames > 0 {
-                    at = 0;
-                } else {
-                    break;
-                }
-            }
-            let (l, r) = if v.channels == 1 {
-                let s = sample(&v.data, v.bits, at);
-                (s, s)
-            } else {
-                (
-                    sample(&v.data, v.bits, 2 * at),
-                    sample(&v.data, v.bits, 2 * at + 1),
-                )
-            };
-            frame[0] += if gl == 1.0 { l } else { l * gl };
-            frame[1] += if gr == 1.0 { r } else { r * gr };
-            at += 1;
+        if v.position.is_none() {
+            continue;
         }
-        v.position = match (at >= frames, v.looping) {
-            (false, _) => Some(at),
-            (true, true) => Some(0),
-            (true, false) => None,
-        };
+        if v.exact() {
+            render_exact(v, out);
+        } else {
+            render_resampled(v, out);
+        }
     }
+}
+
+fn render_exact(v: &mut Voice, out: &mut [f32]) {
+    let Some(mut at) = v.position else { return };
+    let (gl, gr) = channel_gains(v.volume, v.pan);
+    let frames = v.frames();
+    for frame in out.chunks_mut(2) {
+        if at >= frames {
+            if v.looping && frames > 0 {
+                at = 0;
+            } else {
+                break;
+            }
+        }
+        let (l, r) = if v.channels == 1 {
+            let s = sample(&v.data, v.bits, at);
+            (s, s)
+        } else {
+            (
+                sample(&v.data, v.bits, 2 * at),
+                sample(&v.data, v.bits, 2 * at + 1),
+            )
+        };
+        frame[0] += if gl == 1.0 { l } else { l * gl };
+        frame[1] += if gr == 1.0 { r } else { r * gr };
+        at += 1;
+    }
+    v.position = match (at >= frames, v.looping) {
+        (false, _) => Some(at),
+        (true, true) => Some(0),
+        (true, false) => None,
+    };
+}
+
+fn render_resampled(v: &mut Voice, out: &mut [f32]) {
+    let Some(mut at) = v.position else { return };
+    let (gl, gr) = match v.spatial {
+        Some((l, r)) => (
+            spatial_gain(f64::from(v.volume) + l),
+            spatial_gain(f64::from(v.volume) + r),
+        ),
+        None => channel_gains(v.volume, v.pan),
+    };
+    let frames = v.frames();
+    if frames == 0 || v.step <= 0.0 {
+        v.position = None;
+        return;
+    }
+    let kernel = resample_kernel(v.step);
+    let channels = usize::from(v.channels);
+    let mut frac = v.frac;
+    let mut ended = false;
+    for frame in out.chunks_mut(2) {
+        if at >= frames {
+            if v.looping {
+                at %= frames;
+            } else {
+                ended = true;
+                break;
+            }
+        }
+        let phase = ((frac * PHASES as f64) as usize).min(PHASES - 1);
+        let taps = &kernel[phase * 2 * HALF..(phase + 1) * 2 * HALF];
+        let (mut l, mut r) = (0f32, 0f32);
+        for (j, w) in taps.iter().enumerate() {
+            let k = at as isize - (HALF as isize - 1) + j as isize;
+            let k = if k >= 0 && (k as usize) < frames {
+                k as usize
+            } else if v.looping {
+                k.rem_euclid(frames as isize) as usize
+            } else {
+                continue;
+            };
+            if channels == 1 {
+                let s = sample(&v.data, v.bits, k) * w;
+                l += s;
+                r += s;
+            } else {
+                l += sample(&v.data, v.bits, 2 * k) * w;
+                r += sample(&v.data, v.bits, 2 * k + 1) * w;
+            }
+        }
+        frame[0] += l * gl;
+        frame[1] += r * gr;
+        frac += v.step;
+        let whole = frac.floor();
+        at += whole as usize;
+        frac -= whole;
+    }
+    if !ended && at >= frames {
+        if v.looping {
+            at %= frames;
+        } else {
+            ended = true;
+        }
+    }
+    v.frac = if ended { 0.0 } else { frac };
+    v.position = if ended { None } else { Some(at) };
 }
 
 #[cfg(test)]
@@ -613,6 +859,9 @@ mod tests {
             pan: 0,
             looping: false,
             position: Some(0),
+            step: 1.0,
+            frac: 0.0,
+            spatial: None,
         };
         let mut b = Voice {
             data: vec![128, 255],
@@ -622,6 +871,9 @@ mod tests {
             pan: 0,
             looping: true,
             position: Some(0),
+            step: 1.0,
+            frac: 0.0,
+            spatial: None,
         };
         let mut out = vec![0f32; 2 * 6];
         render(&mut [&mut a, &mut b], &mut out);
@@ -635,5 +887,51 @@ mod tests {
         assert_eq!(out[10], x(127.0 * 256.0));
         assert_eq!(a.position, None);
         assert_eq!(b.position, Some(0));
+    }
+
+    /// The approximate 3D law against `dsmix-3d`'s measured gains (0.1 dB steps; measured with
+    /// minimum distance 1 and rolloff 1 unless noted): within one step.
+    #[test]
+    fn spatial_gains_follow_the_measured_points() {
+        let step = |mb: f64| (mb / 10.0).round() as i32;
+        let cases: [([f32; 3], f32, f32, i32, i32); 8] = [
+            ([0.0, 0.0, 1.0], 1.0, 1.0, -78, -78),
+            ([0.0, 0.0, 2.0], 1.0, 1.0, -138, -138),
+            ([0.0, 0.0, 7.0], 1.0, 1.0, -247, -247),
+            ([0.0, 0.0, 20.0], 3.0, 1.0, -243, -243),
+            ([0.0, 0.0, 4.0], 1.0, 1.5, -226, -226),
+            ([0.0, 0.0, 2.0], 1.0, 0.5, -113, -113),
+            ([-4.0, 0.0, -4.0], 1.0, 1.0, -214, -252),
+            ([4.0, 0.0, 4.0], 1.0, 1.0, -252, -214),
+        ];
+        for (at, min, rolloff, l, r) in cases {
+            let (gl, gr) = spatial_millibels(at, min, 1e9, rolloff);
+            assert!(
+                (step(gl) - l).abs() <= 1 && (step(gr) - r).abs() <= 1,
+                "{at:?}: {gl} {gr}, measured {l}0 {r}0"
+            );
+        }
+        // Straight to the left, far: the right channel is silent.
+        let (gl, gr) = spatial_millibels([-4.0, 0.0, 0.0], 1.0, 1e9, 1.0);
+        assert!((step(gl) + 169).abs() <= 1 && gr <= -10000.0);
+    }
+
+    /// A resampled voice keeps a steady level, moves on by its step and ends at its end.
+    #[test]
+    fn resampled_voices_keep_their_level_and_end() {
+        let data: Vec<u8> = std::iter::repeat_n(8192i16, 441)
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        let mut v = Voice::new(data, 1, 16);
+        v.position = Some(0);
+        v.step = 44100.0 / 48000.0;
+        let mut out = vec![0f32; 2 * 600];
+        render(&mut [&mut v], &mut out);
+        // In the middle the kernel sums to about 1 (0.25 in, about 0.25 out).
+        assert!((out[2 * 200] - 0.25).abs() < 0.01, "{}", out[2 * 200]);
+        assert_eq!(out[2 * 200], out[2 * 200 + 1]);
+        // 441 frames at 0.91875 a frame: 480 output frames, then silence.
+        assert_eq!(v.position, None);
+        assert_eq!(out[2 * 500], 0.0);
     }
 }

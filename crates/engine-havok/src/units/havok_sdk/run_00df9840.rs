@@ -775,9 +775,158 @@ pub fn fn_00df9880(
     1
 }
 
+/// The job finisher `00df9840` and the result copy `00df7d00` (`cdecl`: job, result block).
+const FINISH_JOB_00DF9840: u32 = 0x00df_9840;
+const COPY_RESULT_00DF7D00: u32 = 0x00df_7d00;
+
+/// The jump table of `00df9920` for job kinds 0 to 7 (`00df9aa4`, read from the exe).
+const TARGETS_00DF9AA4: [u32; 8] = [
+    0x00df_993c,
+    0x00df_993c,
+    0x00df_9941,
+    0x00df_99b1,
+    0x00df_993c,
+    0x00df_9952,
+    0x00df_99c8,
+    0x00df_99d0,
+];
+
+/// The first bytes of the result block header `00df9920` writes (at `out + 0x10`): `first`, 3,
+/// 2 and the 16-bit 0x50.
+fn result_header(e: &mut Engine, block: u32, first: u8) {
+    e.mem.set_u8(block, first);
+    e.mem.set_u8(block.wrapping_add(1), 3);
+    e.mem.set_u8(block.wrapping_add(2), 2);
+    e.mem.set_u16(block.wrapping_add(4), 0x50);
+}
+
+// Translated from 00df9920 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function; 00df9920 to the `RET` at 00df9aa1, its jump table after it):
+/// the job-finished function `00da3400` registers for job type 3, `cdecl` with four words (the
+/// third the job, the fourth the output; the first two not read). By the job's kind (byte `+0`,
+/// the jump table at `00df9aa4`): 0, 1 and 4 drop the counter at `*(job + 0x14)` and at 0 finish
+/// the job ([`fn_00df9840`]); 2 finishes it; 3 finishes it while `job + 0x38` is below 8
+/// (signed); 6 finishes it when the counter is 0; 5 drops the counter (when the pointer is set)
+/// and finishes the job when `job + 0x60` is 0, else with the counter at 0 writes a kind-3
+/// result header at `out + 0x10`, clears the output word and copies the job's result
+/// (`00df7d00`), answering 0; 7 writes a kind-1 result header from the job's words (+0x44 ..
+/// +0x6c; the block count `(n - 1) / 64 + 1` (1 for 0) stored at `*(job + 0x58)`), sets the output
+/// word to 1 and its byte +0x12 to 1, answering 0. Other kinds, and the paths above that do not
+/// say otherwise, answer 1.
+pub fn fn_00df9920(e: &mut Engine, _unused_1: u32, _unused_2: u32, job: Ptr, out: Ptr) -> u32 {
+    let job = job.addr();
+    let out = out.addr();
+    let kind = u32::from(e.mem.u8(job));
+    let counter = e.mem.u32(job.wrapping_add(0x14));
+    if kind > 7 {
+        return 1;
+    }
+    match TARGETS_00DF9AA4[kind as usize] {
+        0x00df_993c => {
+            let left = e.mem.u32(counter).wrapping_sub(1);
+            e.mem.set_u32(counter, left);
+            if left == 0 {
+                e.call(FINISH_JOB_00DF9840, &args![job]);
+            }
+            1
+        }
+        0x00df_9941 => {
+            e.call(FINISH_JOB_00DF9840, &args![job]);
+            1
+        }
+        0x00df_99b1 => {
+            if (e.mem.u32(job.wrapping_add(0x38)) as i32) < 8 {
+                e.call(FINISH_JOB_00DF9840, &args![job]);
+            }
+            1
+        }
+        0x00df_99c8 => {
+            if e.mem.u32(counter) == 0 {
+                e.call(FINISH_JOB_00DF9840, &args![job]);
+            }
+            1
+        }
+        0x00df_9952 => {
+            if counter != 0 {
+                let left = e.mem.u32(counter).wrapping_sub(1);
+                e.mem.set_u32(counter, left);
+            }
+            if e.mem.u32(job.wrapping_add(0x60)) == 0 {
+                e.call(FINISH_JOB_00DF9840, &args![job]);
+                return 1;
+            }
+            // 00df995f reads the counter even when its pointer is null, as the exe does.
+            if e.mem.u32(counter) != 0 {
+                return 1;
+            }
+            let block = out.wrapping_add(0x10);
+            if block != 0 {
+                let word = e.mem.u32(job.wrapping_add(0x14));
+                result_header(e, block, 3);
+                e.mem.set_u16(block.wrapping_add(6), 0xffff);
+                e.mem.set_u32(block.wrapping_add(0x10), 0);
+                e.mem.set_u32(block.wrapping_add(0x18), 0);
+                e.mem.set_u8(block.wrapping_add(2), 1);
+                e.mem.set_u32(block.wrapping_add(0x30), 0);
+                e.mem.set_u32(block.wrapping_add(0x14), word);
+            }
+            e.mem.set_u32(out, 0);
+            e.call(COPY_RESULT_00DF7D00, &args![job, block]);
+            0
+        }
+        // 00df99d0: kind 7.
+        _ => {
+            let block = out.wrapping_add(0x10);
+            if block != 0 {
+                let word_60 = e.mem.u32(job.wrapping_add(0x60));
+                let word_44 = e.mem.u32(job.wrapping_add(0x44));
+                let word_5c = e.mem.u32(job.wrapping_add(0x5c));
+                let word_54 = e.mem.u32(job.wrapping_add(0x54));
+                let total = e.mem.u32(job.wrapping_add(0x48));
+                let target = e.mem.u32(job.wrapping_add(0x58));
+                result_header(e, block, 1);
+                e.mem.set_u32(block.wrapping_add(0x10), word_5c);
+                e.mem.set_u16(block.wrapping_add(6), 0xffff);
+                e.mem.set_u32(block.wrapping_add(0x24), word_44);
+                e.mem.set_u32(block.wrapping_add(0x1c), word_54);
+                e.mem.set_u32(block.wrapping_add(0x18), 0);
+                e.mem.set_u8(block.wrapping_add(2), 1);
+                e.mem.set_u32(block.wrapping_add(0x14), target);
+                e.mem.set_u32(block.wrapping_add(0x20), 0x40);
+                e.mem.set_u32(block.wrapping_add(0x28), total);
+                e.mem.set_u32(block.wrapping_add(0x34), word_60);
+                // DEC; CDQ; AND EDX, 0x3f; ADD; SAR 6: a signed division by 64 toward zero.
+                let blocks = if total == 0 {
+                    1
+                } else {
+                    ((total.wrapping_sub(1) as i32) / 64).wrapping_add(1) as u32
+                };
+                e.mem.set_u32(target, blocks);
+                for offset in [0x38u32, 0x3c, 0x40, 0x2c, 0x30] {
+                    e.mem.set_u32(block.wrapping_add(offset), 0);
+                }
+            }
+            for (to, from) in [
+                (0x38u32, 0x64u32),
+                (0x3c, 0x68),
+                (0x40, 0x6c),
+                (0x2c, 0x4c),
+                (0x30, 0x50),
+            ] {
+                let word = e.mem.u32(job.wrapping_add(from));
+                e.mem.set_u32(block.wrapping_add(to), word);
+            }
+            e.mem.set_u32(out, 1);
+            e.mem.set_u8(out.wrapping_add(0x12), 1);
+            0
+        }
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00df_9920, fn_00df9920(u32, u32, Ptr, Ptr) -> u32),
         entry!(0x00df9ae0, fn_00df9ae0(u32) -> f32),
         entry!(0x00df9b50, fn_00df9b50(Ptr, Ptr, Ptr)),
         entry!(0x00df9c40, fn_00df9c40(Ptr, Ptr)),
@@ -1337,5 +1486,119 @@ mod tests_a01 {
                 .u32(),
             0
         );
+    }
+}
+
+#[cfg(test)]
+mod gap1_tests {
+    use super::*;
+
+    type Calls = Vec<(u32, Vec<u32>)>;
+
+    fn rig() -> Engine {
+        let mut e = Engine::new();
+        e.register(COPY_RESULT_00DF7D00, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    fn take(e: &mut Engine, addresses: &[u32]) -> Calls {
+        let log = e.call_log.replace(vec![]).unwrap();
+        log.into_iter()
+            .filter(|(a, _)| addresses.contains(a))
+            .collect()
+    }
+
+    #[test]
+    fn fn_00df9920_finishes_or_writes_the_result_by_kind() {
+        let mut e = rig();
+        e.register(FINISH_JOB_00DF9840, |_, _| Ret::default());
+        let counter = e.mem.alloc(4);
+        let job = e.mem.alloc(0x70);
+        e.mem.set_u32(job + 0x14, counter);
+        let out = e.mem.alloc(0x60);
+        let run = |e: &mut Engine, kind: u8, count: u32| -> (u32, usize) {
+            e.mem.set_u8(job, kind);
+            e.mem.set_u32(counter, count);
+            let start = e.call_log.as_ref().unwrap().len();
+            let answer = e.call(0x00df_9920, &args![0u32, 0u32, job, out]).u32();
+            let finished = e.call_log.as_ref().unwrap()[start..]
+                .iter()
+                .filter(|(a, _)| *a == FINISH_JOB_00DF9840)
+                .count();
+            (answer, finished)
+        };
+        // 0, 1, 4: drop, finish at 0.
+        for kind in [0u8, 1, 4] {
+            assert_eq!(run(&mut e, kind, 2), (1, 0));
+            assert_eq!(e.mem.u32(counter), 1);
+            assert_eq!(run(&mut e, kind, 1), (1, 1));
+        }
+        assert_eq!(run(&mut e, 2, 9), (1, 1));
+        e.mem.set_u32(job + 0x38, 7);
+        assert_eq!(run(&mut e, 3, 9), (1, 1));
+        e.mem.set_u32(job + 0x38, 8);
+        assert_eq!(run(&mut e, 3, 9), (1, 0));
+        assert_eq!(run(&mut e, 6, 1), (1, 0));
+        assert_eq!(run(&mut e, 6, 0), (1, 1));
+        assert_eq!(run(&mut e, 8, 0), (1, 0));
+        // 5 with +0x60 clear: drop and finish.
+        assert_eq!(run(&mut e, 5, 4), (1, 1));
+        assert_eq!(e.mem.u32(counter), 3);
+        // 5 with +0x60 set: the counter not at 0 answers 1, at 0 the header and copy.
+        e.mem.set_u32(job + 0x60, 9);
+        assert_eq!(run(&mut e, 5, 4), (1, 0));
+        e.mem.set_u32(out, 0x77);
+        assert_eq!(run(&mut e, 5, 1), (0, 0));
+        let block = out + 0x10;
+        assert_eq!(e.mem.u32(out), 0);
+        assert_eq!(
+            (e.mem.u8(block), e.mem.u8(block + 1), e.mem.u8(block + 2)),
+            (3, 3, 1)
+        );
+        assert_eq!((e.mem.u16(block + 4), e.mem.u16(block + 6)), (0x50, 0xffff));
+        assert_eq!(e.mem.u32(block + 0x14), counter);
+        assert_eq!(
+            take(&mut e, &[COPY_RESULT_00DF7D00]),
+            vec![(COPY_RESULT_00DF7D00, vec![job, block])]
+        );
+        // 7: the kind-1 header from the job's words.
+        let target = e.mem.alloc(4);
+        for (offset, word) in [
+            (0x44u32, 0x44u32),
+            (0x48, 0x81),
+            (0x4c, 0x4c),
+            (0x50, 0x50),
+            (0x54, 0x54),
+            (0x58, target),
+            (0x5c, 0x5c),
+            (0x60, 0x60),
+            (0x64, 0x64),
+            (0x68, 0x68),
+            (0x6c, 0x6c),
+        ] {
+            e.mem.set_u32(job + offset, word);
+        }
+        assert_eq!(run(&mut e, 7, 0), (0, 0));
+        assert_eq!(e.mem.u8(block), 1);
+        assert_eq!(e.mem.u32(target), 3);
+        let words: Vec<u32> = (0x10..0x44u32)
+            .step_by(4)
+            .map(|offset| e.mem.u32(block + offset))
+            .collect();
+        assert_eq!(
+            words,
+            vec![0x5c, target, 0, 0x54, 0x40, 0x44, 0x81, 0x4c, 0x50, 0x60, 0x64, 0x68, 0x6c]
+        );
+        assert_eq!((e.mem.u32(out), e.mem.u8(out + 0x12)), (1, 1));
+        e.mem.set_u32(job + 0x48, 0);
+        run(&mut e, 7, 0);
+        assert_eq!(e.mem.u32(target), 1);
+        e.mem.set_u32(job + 0x48, 0x40);
+        run(&mut e, 7, 0);
+        assert_eq!(e.mem.u32(target), 1);
+        e.mem.set_u32(job + 0x48, 0xffff_ff00);
+        run(&mut e, 7, 0);
+        assert_eq!(e.mem.u32(target), 0xffff_fffd);
     }
 }

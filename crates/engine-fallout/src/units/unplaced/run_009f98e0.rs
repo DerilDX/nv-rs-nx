@@ -1657,6 +1657,28 @@ pub fn fn_009fd080(e: &mut Engine, text: Ptr) -> u32 {
     length
 }
 
+// Translated from 009fd0a0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function; 009fd0a0 to the `RET 8` at 009fd0ea, inside the body Ghidra
+/// gives `009fc450`): the wide-string duplicate the thunk [`fn_009fc450`] jumps to, `stdcall`
+/// with two words (the text and `out`). A null `out` answers `E_POINTER` (0x80004003).
+/// Otherwise the length ([`fn_009fd080`]) gives `2 * length + 2` bytes, `CoTaskMemAlloc` makes
+/// the block and `*out` takes it (null included); a null block answers `E_OUTOFMEMORY`
+/// (0x8007000e), else the text with its terminator is copied in (`memcpy`) and the answer is 0.
+pub fn fn_009fd0a0(e: &mut Engine, text: Ptr, out: Ptr) -> u32 {
+    if out.addr() == 0 {
+        return 0x8000_4003;
+    }
+    let length = e.call(0x009f_d080, &args![text]).u32();
+    let bytes = length.wrapping_mul(2).wrapping_add(2);
+    let block = e.call(CO_TASK_MEM_ALLOC, &args![bytes]).u32();
+    e.mem.set_u32(out.addr(), block);
+    if block == 0 {
+        return 0x8007_000e;
+    }
+    e.call(MEMCPY, &args![block, text, bytes]);
+    0
+}
+
 // Translated from 009fd120 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Generic list constructor shape (thiscall, `RET 4`; the stack word is not
 /// read): head, tail and count cleared, +0xc = 10 (the spare-node limit),
@@ -5277,6 +5299,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x009f_cfe0, fn_009fcfe0(Ptr)),
         entry!(0x009f_cff0, fn_009fcff0(Ptr, Ptr, u32) -> Ptr),
         entry!(0x009f_d080, fn_009fd080(Ptr) -> u32),
+        entry!(0x009f_d0a0, fn_009fd0a0(Ptr, Ptr) -> u32),
         entry!(0x009f_d120, fn_009fd120(Ptr, u32) -> Ptr),
         entry!(0x009f_d140, fn_009fd140(Ptr)),
         entry!(0x009f_d1c0, fn_009fd1c0(Ptr, Ptr) -> Ptr),
@@ -10132,5 +10155,39 @@ mod n078_tests {
         e.map(0x011a_6000, 0x1000);
         e.set_global(LIBRARY_FIRST_CELL, 0xffff_fffdu32);
         assert_eq!(e.call(0x009f_ea24, &args![]).u32(), 0xffff_fffd);
+    }
+}
+
+#[cfg(test)]
+mod gap1_tests {
+    use super::*;
+
+    #[test]
+    fn fn_009fd0a0_duplicates_the_wide_text() {
+        let mut e = Engine::new();
+        e.register(CO_TASK_MEM_ALLOC, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(MEMCPY, |e, a| {
+            for i in 0..a[2] {
+                let byte = e.mem.u8(a[1] + i);
+                e.mem.set_u8(a[0] + i, byte);
+            }
+            a[0].into_ret()
+        });
+        let text = e.mem.alloc(8);
+        for (i, c) in [0x41u16, 0x42, 0x43].iter().enumerate() {
+            e.mem.set_u16(text + 2 * i as u32, *c);
+        }
+        assert_eq!(e.call(0x009f_d0a0, &args![text, 0u32]).u32(), 0x8000_4003);
+        let out = e.mem.alloc(4);
+        assert_eq!(e.call(0x009f_d0a0, &args![text, out]).u32(), 0);
+        let copy = e.mem.u32(out);
+        assert_ne!(copy, text);
+        let chars: Vec<u16> = (0..4).map(|i| e.mem.u16(copy + 2 * i)).collect();
+        assert_eq!(chars, vec![0x41, 0x42, 0x43, 0]);
+        // A failed allocation leaves the null block in `out`.
+        e.register(CO_TASK_MEM_ALLOC, |_, _| 0u32.into_ret());
+        e.mem.set_u32(out, 0x99);
+        assert_eq!(e.call(0x009f_d0a0, &args![text, out]).u32(), 0x8007_000e);
+        assert_eq!(e.mem.u32(out), 0);
     }
 }

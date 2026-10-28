@@ -428,6 +428,24 @@ pub fn fn_00d9a260(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
     base
 }
 
+// Translated from 00d9a270 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function; 00d9a270 to the `RET 4` at 00d9a29c, inside the extent the
+/// map gives `00d9a260`): the deleting destructor body [`fn_00d9a260`] reaches after its
+/// `SUB ECX, 4`, entered directly from its own vtable slot. `thiscall` with one stack word: stores
+/// `010ccfac` at `+4` and `010ccfa0` at `+0` and, with bit 0 of the word set, frees the 0x20-byte
+/// block through the memory router's allocator (slot `+8`). Answers `this`.
+pub fn fn_00d9a270(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
+    let base = this.addr();
+    e.mem.set_u32(base + 4, VTABLE_FIRST_BASE);
+    e.mem.set_u32(base, DESTROYED_VTABLE);
+    if flags & 1 != 0 {
+        let router = e.call(MEMORY_ROUTER, &args![]).u32();
+        let allocator = e.mem.u32(router + 0x10);
+        e.vcall(allocator, 8, &args![base, 0x20u32]);
+    }
+    base
+}
+
 // Translated from 00d9a410 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Thiscall, one stack word (`RET 4`): `arg` points to a word `shape` (null ends it); with
 /// `[this + 0x18]` set and different from `arg`, the object at `[this + 0xc]` slot `+4` (called
@@ -4213,6 +4231,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00d9_a220, fn_00d9a220(Ptr, u32) -> f32),
         entry!(0x00d9_a240, fn_00d9a240(Ptr, u32) -> f32),
         entry!(0x00d9_a260, fn_00d9a260(Ptr, u32) -> u32),
+        entry!(0x00d9_a270, fn_00d9a270(Ptr, u32) -> u32),
         entry!(0x00d9_a2a0, fn_00d9a2a0(Ptr, u32, u32, u32, u32, u32, u32, u32, u32) -> u32),
         entry!(0x00d9_a410, fn_00d9a410(Ptr, u32)),
         entry!(0x00d9_a480, fn_00d9a480(Ptr, u32) -> f32),
@@ -5616,5 +5635,39 @@ mod a09_tests_c {
                 assert_eq!(a, b, "{ray:?} {fill:#x}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod gap1_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00d9a270_stores_the_vtables_and_frees_0x20_bytes() {
+        let mut e = Engine::new();
+        let mut slots = [0u32; 4];
+        slots[2] = 0x0f00_0008;
+        e.put_vtable(0x0f00_1000, &slots);
+        e.register(0x0f00_0008, |_, _| Ret::default());
+        let allocator = e.mem.alloc(4);
+        e.mem.set_u32(allocator, 0x0f00_1000);
+        let router = e.mem.alloc(0x14);
+        e.mem.set_u32(router + 0x10, allocator);
+        e.register_double(MEMORY_ROUTER, move |_, _| router.into_ret());
+        e.call_log = Some(vec![]);
+        let this = e.mem.alloc(0x20);
+        assert_eq!(e.call(0x00d9_a270, &args![this, 2u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), DESTROYED_VTABLE);
+        assert_eq!(e.mem.u32(this + 4), VTABLE_FIRST_BASE);
+        assert_eq!(e.call(0x00d9_a270, &args![this, 1u32]).u32(), this);
+        let freed: Vec<Vec<u32>> = e
+            .call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| *a == 0x0f00_0008)
+            .map(|(_, w)| w)
+            .collect();
+        assert_eq!(freed, vec![vec![allocator, this, 0x20]]);
     }
 }

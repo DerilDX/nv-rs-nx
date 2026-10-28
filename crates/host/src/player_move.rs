@@ -333,6 +333,8 @@ pub struct PlayerMovement {
     main_thread: Option<engine::thread_host::MainThread>,
     pub main_frames: u64,
     main_stage: Stage<()>,
+    /// When the status line ([`PlayerMovement::summary`]) was last printed from [`PlayerMovement::main_frame`].
+    main_reported: Option<std::time::Instant>,
     /// Frames the AI threads (and the world step on thread 2) ran, and
     /// frames they didn't ([`PlayerMovement::run_ai_threads`]).
     pub world_frames: u64,
@@ -365,6 +367,7 @@ impl Default for PlayerMovement {
             main_thread: None,
             main_frames: 0,
             main_stage: Stage::NotTried,
+            main_reported: None,
             world_frames: 0,
             world_fallback_frames: 0,
             world_failed: None,
@@ -416,10 +419,17 @@ impl PlayerMovement {
         let trace_file = std::env::var_os("NV_MOVE_TRACE");
         if trace_file.is_some() {
             e.trace = Some(Default::default());
-            // `NV_MOVE_CALL_BUDGET=N`: stop after N more calls (finds where a run loops).
+            // `NV_MOVE_CALL_BUDGET=N`: stop after N more calls (finds where a run loops); with
+            // `NV_MOVE_BUDGET_FROM=F`, only in main's frames from F on (start-up is frame 0).
+            let from: u64 = std::env::var("NV_MOVE_BUDGET_FROM")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0);
+            let budgeted = from == 0 || (stage == "main" && self.main_frames >= from);
             if let Some(n) = std::env::var("NV_MOVE_CALL_BUDGET")
                 .ok()
                 .and_then(|v| v.parse().ok())
+                .filter(|_| budgeted)
             {
                 e.call_budget = Some(n);
             }
@@ -486,8 +496,21 @@ impl PlayerMovement {
             }
         }
         let trace = e.trace.take();
-        if let (Some(path), Some(trace), Err(why)) = (trace_file, trace, &out) {
-            let mut text = format!("== {stage}: {why}\n");
+        // `NV_MOVE_TRACE_FRAMES=A-B`: main's frames A to B (counted from 0) have their traces
+        // written too, not only a stop's (what the game did on those frames).
+        let traced_frame = stage == "main"
+            && std::env::var("NV_MOVE_TRACE_FRAMES").ok().is_some_and(|v| {
+                let mut ends = v.split('-').filter_map(|n| n.trim().parse::<u64>().ok());
+                let from = ends.next().unwrap_or(u64::MAX);
+                let to = ends.next().unwrap_or(from);
+                (from..=to).contains(&self.main_frames)
+            });
+        let header = match &out {
+            Err(why) => Some(format!("== {stage}: {why}\n")),
+            Ok(_) if traced_frame => Some(format!("== main frame {}\n", self.main_frames)),
+            Ok(_) => None,
+        };
+        if let (Some(path), Some(trace), Some(mut text)) = (trace_file, trace, header) {
             for (addr, args, eax) in trace {
                 let words: Vec<String> = args.iter().map(|w| format!("{w:08x}")).collect();
                 let _ = writeln!(text, "{addr:08x}({}) -> {eax:08x}", words.join(","));
@@ -1058,6 +1081,42 @@ impl PlayerMovement {
             Ok(()) => {
                 self.main_frames += 1;
                 self.main_stage = Stage::Done(());
+                // The status line every 5 s of the run while main's frames go on (the viewer's own
+                // print stops when its walking stops).
+                if self
+                    .main_reported
+                    .map_or(true, |t| t.elapsed().as_secs() >= 5)
+                {
+                    self.main_reported = Some(std::time::Instant::now());
+                    println!("{}", self.summary());
+                    // `NV_MOVE_WATCH=addr,addr..`: the words at those exe addresses with it (a
+                    // diagnostic of the game's state: which menus exist, flags).
+                    if let Ok(list) = std::env::var("NV_MOVE_WATCH") {
+                        let words: Vec<String> = list
+                            .split(',')
+                            // `A>O>O..`: the word at A, then the word at that plus O, and on.
+                            .filter_map(|item| {
+                                let mut parts = item.trim().split('>');
+                                let mut word =
+                                    e.mem.u32(u32::from_str_radix(parts.next()?, 16).ok()?);
+                                for offset in parts {
+                                    let offset = u32::from_str_radix(offset, 16).ok()?;
+                                    if word == 0 {
+                                        break;
+                                    }
+                                    word = e.mem.u32(word.wrapping_add(offset));
+                                }
+                                Some(format!("{}={word:08x}", item.trim()))
+                            })
+                            .collect();
+                        println!("watch: {}", words.join(" "));
+                    }
+                    // `NV_MOVE_THREADS`: the game threads' states with it (a diagnostic: which
+                    // thread sleeps, waits or has turns, `thread_host::describe`).
+                    if std::env::var_os("NV_MOVE_THREADS").is_some() {
+                        println!("threads: {}", engine::thread_host::describe(e));
+                    }
+                }
                 true
             }
             Err(why) => {
@@ -1161,6 +1220,26 @@ impl PlayerMovement {
     }
 }
 
+/// `NV_MOVE_KEYS=FRAME:DIK:HOLD,..` (hex DIK key codes): keys held down from main's frame FRAME
+/// for HOLD frames, on top of the viewer's (a diagnostic: drives the game's menus with exact
+/// frame timing).
+fn key_script() -> &'static [(u64, u8, u64)] {
+    static SCRIPT: std::sync::OnceLock<Vec<(u64, u8, u64)>> = std::sync::OnceLock::new();
+    SCRIPT.get_or_init(|| {
+        std::env::var("NV_MOVE_KEYS")
+            .unwrap_or_default()
+            .split(',')
+            .filter_map(|item| {
+                let mut part = item.trim().split(':');
+                let frame = part.next()?.parse().ok()?;
+                let code = u8::from_str_radix(part.next()?, 16).ok()?;
+                let hold = part.next().map_or(Some(1), |h| h.parse().ok())?;
+                Some((frame, code, hold))
+            })
+            .collect()
+    })
+}
+
 impl crate::Host {
     /// One frame of the game's own main loop when its `main` runs as the main thread
     /// ([`PlayerMovement::main_frame`]); false when it doesn't run or stopped.
@@ -1183,14 +1262,55 @@ impl crate::Host {
     /// (`engine::units::platform::dinput::key`): `down` holds every DirectInput key code (the
     /// scan code) down this frame; each change becomes a key event.
     pub fn set_keys_down(&mut self, down: &[u8]) {
+        let script = key_script();
+        let frame = self.movement.main_frames;
+        // The real game window's keyboard (`NV_D3D9=real`, Windows) holds keys too.
+        #[cfg(windows)]
+        let window_keys = engine::units::platform::d3d9real::held_keys();
+        #[cfg(not(windows))]
+        let window_keys = [false; 256];
         for code in 0..=255u8 {
-            engine::units::platform::dinput::key(&mut self.engine, code, down.contains(&code));
+            let scripted = script
+                .iter()
+                .any(|&(at, c, hold)| c == code && frame >= at && frame < at + hold);
+            let held = down.contains(&code) || scripted || window_keys[code as usize];
+            engine::units::platform::dinput::key(&mut self.engine, code, held);
         }
     }
 
     /// The viewer's mouse for the game's DirectInput mouse: motion since the last frame
     /// (`dinput::mouse_move`) and the buttons down (`dinput::mouse_button`).
     pub fn mouse(&mut self, motion: [i32; 3], buttons: [bool; 8]) {
+        // The real game window's mouse (`NV_D3D9=real`, Windows) moves and clicks too.
+        #[cfg(windows)]
+        let (motion, buttons) = {
+            let w = engine::units::platform::d3d9real::take_input();
+            let mut b = buttons;
+            for (held, window) in b.iter_mut().zip(w.buttons) {
+                *held |= window;
+            }
+            (
+                [
+                    motion[0] + w.motion[0],
+                    motion[1] + w.motion[1],
+                    motion[2] + w.motion[2],
+                ],
+                b,
+            )
+        };
+        // A scripted run (`NV_MOVE_KEYS`) drives the menus with keys; the real mouse moving over
+        // the window would switch the game's interface to its mouse path and the keys would miss.
+        // Once the last scripted key is released the mouse is the player's again.
+        let scripted_until = key_script()
+            .iter()
+            .map(|&(at, _, hold)| at + hold)
+            .max()
+            .unwrap_or(0);
+        let (motion, buttons) = if self.movement.main_frames < scripted_until {
+            ([0; 3], [false; 8])
+        } else {
+            (motion, buttons)
+        };
         let e = &mut self.engine;
         engine::units::platform::dinput::mouse_move(e, motion[0], motion[1], motion[2]);
         for (button, down) in buttons.into_iter().enumerate() {

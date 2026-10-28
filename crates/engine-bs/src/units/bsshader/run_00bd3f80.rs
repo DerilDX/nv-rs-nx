@@ -925,12 +925,141 @@ pub fn fn_00bd4000(e: &mut Engine, this: Ptr) {
         }
     }
 }
+const TARGETS_00BD4254: [u32; 24] = [
+    0x00bd_413d,
+    0x00bd_4148,
+    0x00bd_4159,
+    0x00bd_4168,
+    0x00bd_40e7,
+    0x00bd_40f2,
+    0x00bd_4103,
+    0x00bd_4112,
+    0x00bd_4071,
+    0x00bd_4082,
+    0x00bd_4091,
+    0x00bd_409c,
+    0x00bd_40ad,
+    0x00bd_40bc,
+    0x00bd_40c7,
+    0x00bd_40d8,
+    0x00bd_4173,
+    0x00bd_4184,
+    0x00bd_411d,
+    0x00bd_412e,
+    0x00bd_4066,
+    0x00bd_4193,
+    0x00bd_419b,
+    0x00bd_4217,
+];
+const BYTES_00BD42B4: [u8; 250] = [
+    0, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23,
+    23, 23, 1, 2, 23, 23, 3, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23,
+    23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 4, 23, 23, 23, 23, 23, 23, 23, 23,
+    23, 23, 5, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 6, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23,
+    7, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23,
+    23, 23, 23, 23, 23, 23, 23, 8, 23, 23, 23, 23, 23, 23, 23, 23, 9, 23, 23, 23, 23, 23, 23, 23,
+    23, 10, 23, 23, 23, 23, 23, 23, 23, 23, 11, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23,
+    12, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 13, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 14,
+    23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 15, 23, 23, 23, 23, 23, 16, 17, 23, 23, 23, 23, 23, 18,
+    23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 19, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23,
+    23, 20, 23, 23, 23, 23, 23, 23, 21, 22,
+];
+const TARGETS_00BD43B0: [u32; 7] = [
+    0x00bd_41dd,
+    0x00bd_41e9,
+    0x00bd_41f1,
+    0x00bd_41ff,
+    0x00bd_420b,
+    0x00bd_41cf,
+    0x00bd_4217,
+];
+const BYTES_00BD43CC: [u8; 242] = [
+    0, 6, 6, 6, 6, 6, 1, 6, 6, 6, 6, 6, 2, 6, 6, 6, 6, 6, 3, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,
+    6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,
+    6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,
+    6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,
+    6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,
+    6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,
+    6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 4, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,
+    6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 5,
+];
+const CASES_00BD4030: [(u32, u32); 30] = [
+    (0x00bd_4066, 0x0120_2368),
+    (0x00bd_4071, 0x0120_2378),
+    (0x00bd_4082, 0x0120_237c),
+    (0x00bd_4091, 0x0120_2380),
+    (0x00bd_409c, 0x0120_2384),
+    (0x00bd_40ad, 0x0120_2388),
+    (0x00bd_40bc, 0x0120_238c),
+    (0x00bd_40c7, 0x0120_2390),
+    (0x00bd_40d8, 0x0120_2394),
+    (0x00bd_40e7, 0x0120_2398),
+    (0x00bd_40f2, 0x0120_239c),
+    (0x00bd_4103, 0x0120_23a0),
+    (0x00bd_4112, 0x0120_23a4),
+    (0x00bd_411d, 0x0120_23a8),
+    (0x00bd_412e, 0x0120_23ac),
+    (0x00bd_413d, 0x0120_2350),
+    (0x00bd_4148, 0x0120_2354),
+    (0x00bd_4159, 0x0120_2358),
+    (0x00bd_4168, 0x0120_235c),
+    (0x00bd_4173, 0x0120_2360),
+    (0x00bd_4184, 0x0120_2364),
+    (0x00bd_4193, 0x0120_236c),
+    (0x00bd_419b, 0x0120_2370),
+    (0x00bd_41a9, 0x0120_23b0),
+    (0x00bd_41cf, 0x0120_2374),
+    (0x00bd_41dd, 0x0120_23b4),
+    (0x00bd_41e9, 0x0120_23b8),
+    (0x00bd_41f1, 0x0120_23bc),
+    (0x00bd_41ff, 0x0120_23c0),
+    (0x00bd_420b, 0x0120_23c4),
+];
+
+// Translated from 00bd4030 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function; 00bd4030 to the `RET 4` at 00bd4250, its jump tables after
+/// it): slot 60 (+0xf0) of the vtable `010bc070`, `thiscall` with one stack word: the pass. The
+/// pass 0x15f and the passes 0x60 to 0x159 and 0x165 to 0x256 with a case in the jump tables
+/// (read from the exe) put their pass word (`01202350` to `012023c4`) in `0126f74c`; then for
+/// every pass the `NiPointer` at +0x28 takes the shader's +0x6c (inlined assignment).
+pub fn fn_00bd4030(e: &mut Engine, this: Ptr, pass: u32) {
+    let base = this.addr();
+    let target = if pass > 0x15f {
+        let case = pass.wrapping_sub(0x165);
+        if case > 0xf1 {
+            0x00bd_4217
+        } else {
+            TARGETS_00BD43B0[usize::from(BYTES_00BD43CC[case as usize])]
+        }
+    } else if pass == 0x15f {
+        0x00bd_41a9
+    } else {
+        let case = pass.wrapping_sub(0x60);
+        if case > 0xf9 {
+            0x00bd_4217
+        } else {
+            TARGETS_00BD4254[usize::from(BYTES_00BD42B4[case as usize])]
+        }
+    };
+    // 00bd4217 (the default) goes straight to the assignment.
+    if let Some(global) = CASES_00BD4030
+        .iter()
+        .find(|(address, _)| *address == target)
+        .map(|(_, global)| *global)
+    {
+        let word = e.global::<u32>(global);
+        e.set_global::<u32>(PASS_STATE_0126F74C, word);
+    }
+    let shader = e.mem.u32(base + 0x6c);
+    ni_pointer_assign(e, base + 0x28, shader);
+}
 
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00bd_3f80, fn_00bd3f80(Ptr)),
         entry!(0x00bd_4000, fn_00bd4000(Ptr)),
+        entry!(0x00bd_4030, fn_00bd4030(Ptr, u32)),
         entry!(0x00bd_44c0, fn_00bd44c0(Ptr, Ptr) -> Ptr),
         entry!(0x00bd_4750, fn_00bd4750() -> Ptr),
         entry!(0x00bd_3270, fn_00bd3270(Ptr, u32) -> u32),
@@ -1364,5 +1493,80 @@ mod n071_tests {
         let seen = calls(&e, slot_target(&e, this, 0x128));
         assert_eq!(seen.len(), 0x1e);
         assert_eq!((seen[0][1], seen[0x1d][1]), (5, 6));
+    }
+}
+
+#[cfg(test)]
+mod gap1_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00bd4030_sets_the_pass_word_and_the_shader_pointer() {
+        let mut e = Engine::new();
+        for (import, step) in [(0x00fd_f1c0u32, 1u32), (0x00fd_f1c4, u32::MAX)] {
+            e.register_double(import, move |e, a| {
+                let v = e.mem.u32(a[0]).wrapping_add(step);
+                e.mem.set_u32(a[0], v);
+                v.into_ret()
+            });
+        }
+        e.map(0x0120_2000, 0x1000);
+        e.map(0x0126_f000, 0x1000);
+        for global in (0x0120_2350u32..=0x0120_23c4).step_by(4) {
+            e.set_global::<u32>(global, global & 0xfff);
+        }
+        let shader = e.mem.alloc(8);
+        e.mem.set_u32(shader + 4, 1);
+        let this = e.mem.alloc(0x70);
+        e.mem.set_u32(this + 0x6c, shader);
+        let cases: [(u32, u32); 30] = [
+            (0x60, 0x350),
+            (0x7a, 0x354),
+            (0x7b, 0x358),
+            (0x7e, 0x35c),
+            (0x9f, 0x398),
+            (0xaa, 0x39c),
+            (0xb5, 0x3a0),
+            (0xc0, 0x3a4),
+            (0xdf, 0x378),
+            (0xe8, 0x37c),
+            (0xf1, 0x380),
+            (0xfa, 0x384),
+            (0x108, 0x388),
+            (0x114, 0x38c),
+            (0x11f, 0x390),
+            (0x12a, 0x394),
+            (0x130, 0x360),
+            (0x131, 0x364),
+            (0x137, 0x3a8),
+            (0x143, 0x3ac),
+            (0x151, 0x368),
+            (0x158, 0x36c),
+            (0x159, 0x370),
+            (0x15f, 0x3b0),
+            (0x165, 0x3b4),
+            (0x16b, 0x3b8),
+            (0x171, 0x3bc),
+            (0x177, 0x3c0),
+            (0x234, 0x3c4),
+            (0x256, 0x374),
+        ];
+        for (pass, word) in cases {
+            e.set_global::<u32>(PASS_STATE_0126F74C, 0);
+            e.call(0x00bd_4030, &args![this, pass]);
+            assert_eq!(e.global::<u32>(PASS_STATE_0126F74C), word, "{pass:#x}");
+        }
+        // The pointer took the shader once (one reference added).
+        assert_eq!(e.mem.u32(this + 0x28), shader);
+        assert_eq!(e.mem.u32(shader + 4), 2);
+        // Passes with no case still assign the pointer.
+        e.mem.set_u32(this + 0x28, 0);
+        for pass in [0x5fu32, 0x61, 0x15a, 0x160, 0x166, 0x257, 0xffff_ffff] {
+            e.set_global::<u32>(PASS_STATE_0126F74C, 7);
+            e.call(0x00bd_4030, &args![this, pass]);
+            assert_eq!(e.global::<u32>(PASS_STATE_0126F74C), 7, "{pass:#x}");
+        }
+        assert_eq!(e.mem.u32(this + 0x28), shader);
+        assert_eq!(e.mem.u32(shader + 4), 3);
     }
 }

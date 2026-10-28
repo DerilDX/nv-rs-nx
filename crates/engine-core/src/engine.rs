@@ -86,6 +86,9 @@ impl Hasher for AddrHasher {
 /// A map keyed by exe address (or a caller/address pair) with [`AddrHasher`].
 pub type AddrMap<K, V> = HashMap<K, V, BuildHasherDefault<AddrHasher>>;
 
+/// A set of exe addresses with [`AddrHasher`].
+pub type AddrSet<K> = std::collections::HashSet<K, BuildHasherDefault<AddrHasher>>;
+
 /// How many entries [`Engine::call`]'s direct-mapped cache of plain functions has (a power of
 /// two).
 const CALL_CACHE_LEN: usize = 1 << 14;
@@ -148,6 +151,25 @@ pub struct Engine {
     /// the call stack, 0 at a stage's top): where a long run spends its calls (the host's
     /// `NV_MOVE_CALL_PROFILE`).
     pub call_counts: Option<AddrMap<u64, u64>>,
+    /// The thread host's time slice: calls left in the running thread's turn, the length a
+    /// turn starts with, and what runs at each call once a turn is used up, given the called
+    /// address (`thread_host::preempt`: game threads run beside each other on Windows, so a
+    /// thread that never waits must not keep the others from running). The hook starts the
+    /// next turn itself (sets `slice_left` again) when it switches; until then it is asked
+    /// again at every call. `None`: no slicing (tests, start-up without the host).
+    pub slice_left: u64,
+    pub slice_len: u64,
+    pub slice_hook: Option<fn(&mut Engine, u32)>,
+    /// Diagnostic only (not exe behaviour): runs at every call through [`Engine::call`] that
+    /// reaches a translated function, given the called address, once as it is entered (`false`,
+    /// before it goes on the call stack) and once as it returns (`true`, after it came off).
+    /// Lets a check look at memory between any two calls (`NV_HKMEM_CHECK=calls`, engine-havok's
+    /// `hkthreadmemory.rs`). `None` in normal runs.
+    pub call_hook: Option<fn(&mut Engine, u32, bool)>,
+    /// The import slots [`Engine::register_imports`] gave a platform function: the calls at
+    /// which the thread host's default scheme may end a used-up turn
+    /// (`thread_host::Scheme::platform_switch`, `thread_host::request_wake`).
+    pub platform_calls: AddrSet<u32>,
 }
 
 /// How many returned calls [`Engine::trace`] keeps.
@@ -214,6 +236,11 @@ impl Engine {
             trace_keep: TRACE_KEEP,
             call_budget: None,
             call_counts: None,
+            slice_left: 0,
+            slice_len: 0,
+            slice_hook: None,
+            call_hook: None,
+            platform_calls: AddrSet::default(),
         }
     }
 
@@ -254,6 +281,7 @@ impl Engine {
                 .find(|(d, name, _)| d.eq_ignore_ascii_case(&i.dll) && *name == i.name)
             {
                 self.register(i.slot, *f);
+                self.platform_calls.insert(i.slot);
                 n += 1;
             }
         }
@@ -322,6 +350,22 @@ impl Engine {
         let total = u64::from(self.clock_us) + us;
         self.clock_ms = self.clock_ms.wrapping_add((total / 1000) as u32);
         self.clock_us = (total % 1000) as u32;
+    }
+
+    /// Waits until the clock reads `until` (microseconds): with the real clock on, the host
+    /// really sleeps until then, so the clock never runs ahead of the real time; with it off
+    /// (the tests) the clock moves on to `until` at once. A time already passed returns at once.
+    pub fn wait_clock_until_us(&mut self, until: u64) {
+        let now = self.clock_now_us();
+        if until <= now {
+            return;
+        }
+        if self.real_clock.is_some() {
+            std::thread::sleep(std::time::Duration::from_micros(until - now));
+            self.catch_up_clock();
+        } else {
+            self.advance_clock_us(until - now);
+        }
     }
 
     /// The clock in milliseconds now (what `GetTickCount` and `timeGetTime` answer).
@@ -414,6 +458,13 @@ impl Engine {
     /// call stack, the call itself and the trace.
     #[inline(always)]
     fn run(&mut self, addr: u32, args: &[u32], f: Callable) -> Ret {
+        if let Some(hook) = self.slice_hook {
+            if self.slice_left == 0 {
+                hook(self, addr);
+            } else {
+                self.slice_left -= 1;
+            }
+        }
         if let Some(budget) = &mut self.call_budget {
             if *budget == 0 {
                 panic!("call budget spent (at {addr:08x})");
@@ -426,12 +477,18 @@ impl Engine {
                 .entry(u64::from(caller) << 32 | u64::from(addr))
                 .or_default() += 1;
         }
+        if let Some(hook) = self.call_hook {
+            hook(self, addr, false);
+        }
         self.call_stack.push(addr);
         let ret = match f {
             Callable::Abi(f) => f(self, args),
             Callable::Double(d) => (d.borrow_mut())(self, args),
         };
         self.call_stack.pop();
+        if let Some(hook) = self.call_hook {
+            hook(self, addr, true);
+        }
         if let Some(trace) = &mut self.trace {
             // A full ring hands its oldest entry's word buffer to the newest: no allocation
             // per call once full.
@@ -458,8 +515,18 @@ impl Engine {
     pub fn vcall(&mut self, this: u32, slot: u32, args: &[u32]) -> Ret {
         let vtable = self.mem.u32(this);
         let target = self.mem.u32(vtable.wrapping_add(slot));
-        // `this` and the arguments on the stack when they fit (no allocation per call).
+        // `this` and the arguments on the stack when they fit (no allocation per call). The
+        // short lists, most virtual calls, are fixed-size arrays: a variable-length copy is a
+        // call to `memcpy`, which cost more than the rest of the call (a15's benchmark).
         const INLINE: usize = 15;
+        match *args {
+            [] => return self.call(target, &[this]),
+            [a] => return self.call(target, &[this, a]),
+            [a, b] => return self.call(target, &[this, a, b]),
+            [a, b, c] => return self.call(target, &[this, a, b, c]),
+            [a, b, c, d] => return self.call(target, &[this, a, b, c, d]),
+            _ => {}
+        }
         if args.len() <= INLINE {
             let mut words = [0u32; INLINE + 1];
             words[0] = this;
@@ -646,6 +713,29 @@ mod tests {
                 n as f64 / secs / 1e6,
                 secs * 1e9 / n as f64
             );
+        }
+    }
+
+    /// A virtual call passes `this` and then the arguments, for every list length (the short
+    /// ones are built as fixed arrays, the longer ones on the stack or the heap).
+    #[test]
+    fn virtual_calls_pass_this_and_every_argument() {
+        let mut e = Engine::new();
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let record = seen.clone();
+        e.register_double(0x0040_4000, move |_, a| {
+            record.borrow_mut().push(a.to_vec());
+            Ret::default()
+        });
+        e.put_vtable(0x0100_0000, &[0, 0, 0x0040_4000]);
+        let this = e.mem.alloc(4);
+        e.mem.set_u32(this, 0x0100_0000);
+        for n in 0..20u32 {
+            let args: Vec<u32> = (1..=n).collect();
+            e.vcall(this, 8, &args);
+            let mut want = vec![this];
+            want.extend_from_slice(&args);
+            assert_eq!(seen.borrow().last(), Some(&want));
         }
     }
 

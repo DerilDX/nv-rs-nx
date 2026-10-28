@@ -790,6 +790,130 @@ const FOG_01202148: u32 = 0x0120_2148;
 const FOG_FAR_010AD6E0: u32 = 0x010a_d6e0;
 const FOG_COLOR_011A9BD0: u32 = 0x011a_9bd0;
 
+/// `NiPointer` assignment `00a5f860` (`thiscall` on the slot, one word) and the state word the
+/// pass set-up leaves (`0126f74c`).
+const NI_POINTER_ASSIGN_00A5F860: u32 = 0x00a5_f860;
+const PASS_STATE_0126F74C: u32 = 0x0126_f74c;
+/// The jump table of `00bc6970` for the passes 0x42 to 0x57 (`00bc6d50`, 22 code addresses) and
+/// the one for 0x2dd to 0x2ef (the byte table at `00bc6dc8` into the 8 addresses at `00bc6da8`),
+/// read from the exe.
+const PASSES_00BC6D50: [u32; 22] = [
+    0x00bc_699c,
+    0x00bc_69d5,
+    0x00bc_69b8,
+    0x00bc_69f2,
+    0x00bc_6a72,
+    0x00bc_6ab1,
+    0x00bc_6a92,
+    0x00bc_6ad1,
+    0x00bc_6a0e,
+    0x00bc_6a4b,
+    0x00bc_6a2b,
+    0x00bc_6a6a,
+    0x00bc_6af1,
+    0x00bc_6b30,
+    0x00bc_6b10,
+    0x00bc_6b50,
+    0x00bc_6b6f,
+    0x00bc_6b8b,
+    0x00bc_6bc1,
+    0x00bc_6bf6,
+    0x00bc_6bfe,
+    0x00bc_6c33,
+];
+const TARGETS_00BC6DA8: [u32; 8] = [
+    0x00bc_6cd4,
+    0x00bc_6c78,
+    0x00bc_6cf2,
+    0x00bc_6c96,
+    0x00bc_6d11,
+    0x00bc_6cb5,
+    0x00bc_6d30,
+    0x00bc_6bbd,
+];
+const BYTES_00BC6DC8: [u8; 19] = [0, 7, 7, 7, 7, 1, 2, 7, 7, 7, 7, 3, 4, 7, 7, 7, 7, 5, 6];
+
+/// What each case of `00bc6970` does: the shader word put in `0126f74c`, then either the word
+/// assigned to the `NiPointer` at +0x28 or (`None`) that pointer released and cleared.
+fn case_00bc6970(target: u32) -> Option<(u32, Option<u32>)> {
+    let case = match target {
+        0x00bc_699c => (0x6c, Some(0x184)),
+        0x00bc_69b8 => (0x70, Some(0x18c)),
+        0x00bc_69d5 => (0x74, Some(0x188)),
+        0x00bc_69f2 => (0x78, Some(0x184)),
+        0x00bc_6a0e => (0x7c, Some(0x190)),
+        0x00bc_6a2b => (0x80, Some(0x198)),
+        0x00bc_6a4b => (0x84, Some(0x194)),
+        // 00bc6a6a: +0x88, then the store and assignment at 00bc6a11 (+0x190).
+        0x00bc_6a6a => (0x88, Some(0x190)),
+        0x00bc_6a72 => (0x8c, Some(0x19c)),
+        0x00bc_6a92 => (0x90, Some(0x1a4)),
+        0x00bc_6ab1 => (0x94, Some(0x1a0)),
+        0x00bc_6ad1 => (0x98, Some(0x19c)),
+        0x00bc_6af1 => (0x9c, Some(0x1a8)),
+        0x00bc_6b10 => (0xa0, Some(0x1b0)),
+        0x00bc_6b30 => (0xa4, Some(0x1ac)),
+        0x00bc_6b50 => (0xa8, Some(0x1a8)),
+        0x00bc_6b6f => (0xac, None),
+        0x00bc_6b8b => (0xb0, None),
+        0x00bc_6bc1 => (0xb4, None),
+        // 00bc6bf6 and 00bc6c33 jump into 00bc6b8b's release after their own word.
+        0x00bc_6bf6 => (0xb8, None),
+        0x00bc_6bfe => (0xbc, None),
+        0x00bc_6c33 => (0xc0, None),
+        0x00bc_6c3e => (0xc4, Some(0x184)),
+        0x00bc_6c78 => (0xc8, Some(0x184)),
+        0x00bc_6c96 => (0xcc, Some(0x188)),
+        0x00bc_6cb5 => (0xd0, Some(0x18c)),
+        0x00bc_6cd4 => (0xd4, Some(0x19c)),
+        0x00bc_6cf2 => (0xd8, Some(0x19c)),
+        0x00bc_6d11 => (0xdc, Some(0x1a0)),
+        0x00bc_6d30 => (0xe0, Some(0x1a4)),
+        // 00bc6bbd: the default, nothing.
+        _ => return None,
+    };
+    Some(case)
+}
+
+// Translated from 00bc6970 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function; 00bc6970 to the `RET 4` at 00bc6d4b, its jump tables
+/// after it): slot 60 (+0xf0) of the no-lighting shader's vtable `010bb230`, `thiscall` with one
+/// stack word: the pass. For the passes 0x42 to 0x57, 0x2dc and 0x2dd/0x2e2/0x2e3/0x2e8/0x2e9/
+/// 0x2ee/0x2ef (the compiler's jump tables, read from the exe) puts the pass's state word (+0x6c
+/// to +0xe0) in `0126f74c`, then assigns the pass's shader word (+0x184 to +0x1b0) to the
+/// `NiPointer` at +0x28 (`00a5f860`), or for 0x52 to 0x57 releases that pointer and clears it.
+/// Other passes: nothing.
+pub fn fn_00bc6970(e: &mut Engine, this: Ptr, pass: u32) {
+    let base = this.addr();
+    let target = if pass > 0x2dc {
+        let case = pass.wrapping_sub(0x2dd);
+        if case > 0x12 {
+            return;
+        }
+        TARGETS_00BC6DA8[usize::from(BYTES_00BC6DC8[case as usize])]
+    } else if pass == 0x2dc {
+        0x00bc_6c3e
+    } else {
+        let case = pass.wrapping_sub(0x42);
+        if case > 0x15 {
+            return;
+        }
+        PASSES_00BC6D50[case as usize]
+    };
+    let Some((state, pointer)) = case_00bc6970(target) else {
+        return;
+    };
+    let word = e.mem.u32(base + state);
+    e.set_global::<u32>(PASS_STATE_0126F74C, word);
+    match pointer {
+        Some(offset) => {
+            let value = e.mem.u32(base + offset);
+            e.call(NI_POINTER_ASSIGN_00A5F860, &args![base + 0x28, value]);
+        }
+        None => ni_pointer_clear(e, base + 0x28),
+    }
+}
+
 // Translated from 00bc6de0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed (Ghidra made no function; the no-lighting shader's vtable `010bb230`, slot +0xfc),
 /// `thiscall` with one stack word: the pass number. Sets the byte +0x8 of the object at +0x170
@@ -1590,6 +1714,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00bc_93c0,
             bs_shader_no_lighting_create_shader() -> Ptr
         ),
+        entry!(0x00bc_6970, fn_00bc6970(Ptr, u32)),
         entry!(0x00bc_6de0, fn_00bc6de0(Ptr, u32)),
         entry!(0x00bc_6fa0, fn_00bc6fa0(Ptr, Ptr, u32)),
         entry!(0x00bc_6fe0, fn_00bc6fe0(Ptr, Ptr, Ptr)),
@@ -1954,6 +2079,80 @@ mod b056_tests {
         (0..8)
             .map(|i| e.global::<u32>(FOG_01202148 + 4 * i))
             .collect()
+    }
+
+    #[test]
+    fn fn_00bc6970_sets_the_state_and_the_shader_pointer() {
+        let mut e = engine();
+        e.register(NI_POINTER_ASSIGN_00A5F860, |_, _| Ret::default());
+        let this = with_vtable(&mut e, 0x1b4);
+        for offset in (0x6cu32..=0xe0).step_by(4) {
+            e.mem.set_u32(this + offset, 0x1000 + offset);
+        }
+        for offset in (0x184u32..=0x1b0).step_by(4) {
+            e.mem.set_u32(this + offset, 0x2000 + offset);
+        }
+        let cases: [(u32, u32, u32); 31] = [
+            (0x42, 0x6c, 0x184),
+            (0x43, 0x74, 0x188),
+            (0x44, 0x70, 0x18c),
+            (0x45, 0x78, 0x184),
+            (0x46, 0x8c, 0x19c),
+            (0x47, 0x94, 0x1a0),
+            (0x48, 0x90, 0x1a4),
+            (0x49, 0x98, 0x19c),
+            (0x4a, 0x7c, 0x190),
+            (0x4b, 0x84, 0x194),
+            (0x4c, 0x80, 0x198),
+            (0x4d, 0x88, 0x190),
+            (0x4e, 0x9c, 0x1a8),
+            (0x4f, 0xa4, 0x1ac),
+            (0x50, 0xa0, 0x1b0),
+            (0x51, 0xa8, 0x1a8),
+            (0x2dc, 0xc4, 0x184),
+            (0x2dd, 0xd4, 0x19c),
+            (0x2e2, 0xc8, 0x184),
+            (0x2e3, 0xd8, 0x19c),
+            (0x2e8, 0xcc, 0x188),
+            (0x2e9, 0xdc, 0x1a0),
+            (0x2ee, 0xd0, 0x18c),
+            (0x2ef, 0xe0, 0x1a4),
+            // The release cases (pointer word 0 below).
+            (0x52, 0xac, 0),
+            (0x53, 0xb0, 0),
+            (0x54, 0xb4, 0),
+            (0x55, 0xb8, 0),
+            (0x56, 0xbc, 0),
+            (0x57, 0xc0, 0),
+            (0x58, 0, 0),
+        ];
+        for (pass, state, pointer) in cases {
+            e.set_global::<u32>(PASS_STATE_0126F74C, 0);
+            let before = calls(&e, NI_POINTER_ASSIGN_00A5F860).len();
+            e.call(0x00bc_6970, &args![this, pass]);
+            let expected = if state == 0 { 0 } else { 0x1000 + state };
+            assert_eq!(e.global::<u32>(PASS_STATE_0126F74C), expected, "{pass:#x}");
+            let assigned = calls(&e, NI_POINTER_ASSIGN_00A5F860);
+            if pointer == 0 {
+                assert_eq!(assigned.len(), before, "{pass:#x}");
+            } else {
+                assert_eq!(assigned[before], vec![this + 0x28, 0x2000 + pointer]);
+            }
+        }
+        // Passes with no case: nothing.
+        for pass in [0x41u32, 0x2db, 0x2de, 0x2f0, 0xffff_ffff] {
+            e.set_global::<u32>(PASS_STATE_0126F74C, 7);
+            e.call(0x00bc_6970, &args![this, pass]);
+            assert_eq!(e.global::<u32>(PASS_STATE_0126F74C), 7, "{pass:#x}");
+        }
+        // A release with a held pointer: its count drops, at 0 slot +4, and +0x28 is cleared.
+        let held = with_vtable(&mut e, 8);
+        e.mem.set_u32(held + 4, 1);
+        e.mem.set_u32(this + 0x28, held);
+        e.call(0x00bc_6970, &args![this, 0x55u32]);
+        assert_eq!(e.mem.u32(this + 0x28), 0);
+        assert_eq!(e.mem.u32(held + 4), 0);
+        assert_eq!(calls(&e, SLOTS + 4), vec![vec![held]]);
     }
 
     #[test]

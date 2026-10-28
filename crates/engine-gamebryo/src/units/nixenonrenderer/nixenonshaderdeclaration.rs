@@ -524,6 +524,25 @@ pub fn fn_00e76770(
                 ],
             );
         }
+        // Diagnostic only (`NV_HEAD_CHECK`, not exe behaviour): reads what was packed.
+        if stream_entry != 0
+            && super::run_00e6fbb0::head_check_enabled()
+            && super::run_00e6fbb0::head_check_is_head_data(data)
+        {
+            super::run_00e6fbb0::head_pack_check(
+                e,
+                data,
+                partition,
+                stream,
+                e.mem.u32(stream_entry.wrapping_add(8)),
+                e.mem.u32(base.wrapping_add(0x1c)),
+                e.mem.u32(stream_entry.wrapping_add(0xc)),
+                address,
+                count,
+                result,
+                flags,
+            );
+        }
         if unlock {
             let manager = e.mem.u32(base.wrapping_add(0xc));
             let buffer = e.mem.u32(result.wrapping_add(8));

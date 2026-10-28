@@ -591,6 +591,22 @@ pub fn fn_00e8c820(
                 column = column.wrapping_add(8);
             }
         }
+        // Diagnostic only (`NV_HEAD_CHECK`, not exe behaviour): reads what was packed.
+        if positions != 0
+            && mask & 1 != 0
+            && super::run_00e6fbb0::head_check_enabled()
+            && super::run_00e6fbb0::head_check_is_head_data(data)
+        {
+            super::run_00e6fbb0::head_plain_pack_check(
+                e,
+                data,
+                partition,
+                vertices.wrapping_add(offset(e, 0)),
+                size,
+                vertex_count,
+                mask,
+            );
+        }
         if unlock {
             let buffer = e.mem.u32(used.wrapping_add(8));
             if unlock_staging(e, base, buffer) < 0 {

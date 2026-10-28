@@ -465,6 +465,8 @@ pub fn hkp_simple_constraint_contact_mgr_process_contact_impl(
     let mut cursor = result.addr() + 0x10;
     while cursor < end {
         let id = e.mem.u32(cursor + 0x20);
+        // `NV_HKMEM_CHECK` (diagnostic only, reads memory): the id must name a point in use.
+        super::hkthreadmemory::hkmem_check::check_contact_id(e, base, id, cursor);
         let table = e.mem.u32(base + 0x20);
         let slot = u32::from(e.mem.u8(id.wrapping_add(table)));
         let atom = e.mem.u32(base + 0x3c);
@@ -990,6 +992,8 @@ pub fn hkp_simple_constraint_contact_mgr_remove_contact_point_impl(
     owner: Ptr,
 ) {
     let mgr = this.addr();
+    // `NV_HKMEM_CHECK` (diagnostic only): who freed which id, for `check_contact_id`.
+    super::hkthreadmemory::hkmem_check::note_contact_removed(e, mgr, u32::from(id));
     let properties = contact_point_properties(e, mgr, u32::from(id));
     let body_b = e.mem.u32(mgr + 0x5c);
     let body_a = e.mem.u32(mgr + 0x58);

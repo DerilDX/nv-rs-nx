@@ -91,6 +91,34 @@ pub fn hkp_binary_action_set_entity_b(e: &mut Engine, this: Ptr, entity: u32) {
     }
 }
 
+// Translated from 00cf4ce0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function; 00cf4ce0 to the `RET 4` at 00cf4d26, inside the body Ghidra
+/// gives `SetRigidBodyA`); `hkpBinaryAction::setEntityA` by its place before `setEntityB` and
+/// its shape (unconfirmed name). `thiscall`, one stack word: as [`hkp_binary_action_set_entity_b`]
+/// for entity A (`+0x18`): takes a reference on `entity`; when entity A is set, detaches it from
+/// the world (when the action is in one; `00c976a0`), drops its reference and clears it; then
+/// stores `entity` and, when the action is in a world, attaches it (`00c92bd0`).
+pub fn hkp_binary_action_set_entity_a(e: &mut Engine, this: Ptr, entity: u32) {
+    let action = this.addr();
+    e.call(ADD_REFERENCE, &args![entity]);
+    let old = e.mem.u32(action + ENTITY_A);
+    if old != 0 {
+        let world = e.mem.u32(action + WORLD);
+        if world != 0 {
+            // 00cf4cff: `00c976a0` is stdcall (RET 8) and does not read ECX.
+            e.call(DETACH_ENTITY, &args![action, old]);
+        }
+        let old = e.mem.u32(action + ENTITY_A);
+        e.call(REMOVE_REFERENCE, &args![old]);
+        e.mem.set_u32(action + ENTITY_A, 0);
+    }
+    let world = e.mem.u32(action + WORLD);
+    e.mem.set_u32(action + ENTITY_A, entity);
+    if world != 0 {
+        e.call(ATTACH_ENTITY, &args![world, action, entity]);
+    }
+}
+
 // Translated from 00cf4d80 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkpBinaryAction::hkpBinaryAction` (engine map): user data `user_data` at `+0x10`,
 /// reference count 1 (`+6`), world and `+0x0C` cleared, the string pointer at `+0x14`
@@ -176,6 +204,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00cf_4cc0,
             hkp_binary_action_entity_removed_callback(Ptr, u32)
         ),
+        entry!(0x00cf_4ce0, hkp_binary_action_set_entity_a(Ptr, u32)),
         entry!(0x00cf_4d30, hkp_binary_action_set_entity_b(Ptr, u32)),
         entry!(0x00cf_4d80, hkp_binary_action_construct(Ptr, u32, u32, u32) -> Ptr),
         entry!(0x00cf_4de0, hkp_binary_action_destruct(Ptr)),
@@ -256,6 +285,28 @@ mod movement_tests {
         assert_eq!(
             calls(&log),
             vec![(REMOVE_ACTION_IMMEDIATELY, vec![0x7000, action])]
+        );
+    }
+
+    #[test]
+    fn set_entity_a_replaces_an_old_entity_in_a_world() {
+        let (mut e, log, _) = setup();
+        let action = e.mem.alloc(0x40);
+        e.call(0x00cf_4ce0, &args![action, 0x2000u32]);
+        assert_eq!(e.mem.u32(action + ENTITY_A), 0x2000);
+        assert_eq!(calls(&log), vec![(ADD_REFERENCE, vec![0x2000])]);
+        e.mem.set_u32(action + WORLD, 0x7000);
+        e.call(0x00cf_4ce0, &args![action, 0x3000u32]);
+        assert_eq!(e.mem.u32(action + ENTITY_A), 0x3000);
+        assert_eq!(e.mem.u32(action + ENTITY_B), 0);
+        assert_eq!(
+            calls(&log)[1..],
+            [
+                (ADD_REFERENCE, vec![0x3000]),
+                (DETACH_ENTITY, vec![action, 0x2000]),
+                (REMOVE_REFERENCE, vec![0x2000]),
+                (ATTACH_ENTITY, vec![0x7000, action, 0x3000]),
+            ]
         );
     }
 

@@ -1892,6 +1892,175 @@ pub fn fn_00bd0540(e: &mut Engine, this: Ptr) {
     });
 }
 
+/// The pass being drawn (`011f91e4`) and the texture setters of the slot +0x78 functions (unit
+/// `shadowlightshader.cpp`, `stdcall`): `00b7c0a0` (object, stage, texture), `00b7c0e0` (object,
+/// stage, word), `00b7c120` (stage), `00b7c1f0` and `00b7c230` (object, stage, index, flag), the
+/// base `SetupGeometryTextures` `00b7d200` (`thiscall`, the block) and the empty `00d3dd00`
+/// (`thiscall`, four words).
+const PASS_011F91E4: u32 = 0x011f_91e4;
+const STAGE_TEXTURE_00B7C0A0: u32 = 0x00b7_c0a0;
+const STAGE_TEXTURE_00B7C0E0: u32 = 0x00b7_c0e0;
+const STAGE_TEXTURE_00B7C120: u32 = 0x00b7_c120;
+const STAGE_TEXTURE_00B7C1F0: u32 = 0x00b7_c1f0;
+const STAGE_TEXTURE_00B7C230: u32 = 0x00b7_c230;
+const SETUP_GEOMETRY_TEXTURES_00B7D200: u32 = 0x00b7_d200;
+const EMPTY_00D3DD00: u32 = 0x00d3_dd00;
+
+/// One texture setter call of the slot +0x78 functions, on the block's property.
+#[derive(Clone, Copy)]
+enum StageCall {
+    /// `00b7c0a0(property, stage, texture)`.
+    A(u32, u32),
+    /// `00b7c0e0(property, stage, word)`.
+    B(u32, u32),
+    /// `00b7c1f0(property, stage, index, flag)`.
+    F(u32, u32, u32),
+    /// `00b7c230(property, stage, word, flag)`.
+    T(u32, u32, u32),
+    /// `00d3dd00` on the shader with (property, a, b, c).
+    N(u32, u32, u32),
+    /// `00b7c120(stage)`.
+    R(u32),
+}
+
+/// Runs the setter calls in order, then the shader's slot +0x108.
+fn stage_calls(e: &mut Engine, this: u32, property: u32, calls: &[StageCall]) {
+    for call in calls {
+        match *call {
+            StageCall::A(stage, texture) => {
+                e.call(STAGE_TEXTURE_00B7C0A0, &args![property, stage, texture]);
+            }
+            StageCall::B(stage, word) => {
+                e.call(STAGE_TEXTURE_00B7C0E0, &args![property, stage, word]);
+            }
+            StageCall::F(stage, index, flag) => {
+                e.call(STAGE_TEXTURE_00B7C1F0, &args![property, stage, index, flag]);
+            }
+            StageCall::T(stage, word, flag) => {
+                e.call(STAGE_TEXTURE_00B7C230, &args![property, stage, word, flag]);
+            }
+            StageCall::N(a, b, c) => {
+                e.call(EMPTY_00D3DD00, &args![this, property, a, b, c]);
+            }
+            StageCall::R(stage) => {
+                e.call(STAGE_TEXTURE_00B7C120, &args![stage]);
+            }
+        }
+    }
+    e.vcall(this, 0x108, &args![]);
+}
+
+/// The jump table of `00bce500` for the passes 0x99 to 0x174 (the byte table at `00bce6e8` into
+/// the 10 code addresses at `00bce6c0`), read from the exe.
+const TARGETS_00BCE6C0: [u32; 10] = [
+    0x00bc_e5dc,
+    0x00bc_e5ce,
+    0x00bc_e552,
+    0x00bc_e544,
+    0x00bc_e597,
+    0x00bc_e589,
+    0x00bc_e621,
+    0x00bc_e636,
+    0x00bc_e647,
+    0x00bc_e6b2,
+];
+const BYTES_00BCE6E8: [u8; 220] = [
+    0, 1, 9, 9, 9, 9, 9, 9, 9, 9, 9, 0, 1, 9, 9, 9, 9, 9, 9, 9, 9, 9, 0, 1, 9, 9, 9, 9, 9, 9, 9, 9,
+    9, 0, 1, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
+    2, 3, 9, 9, 9, 9, 9, 9, 9, 2, 3, 9, 9, 9, 9, 9, 9, 9, 2, 3, 9, 9, 9, 9, 9, 9, 9, 2, 3, 9, 9, 9,
+    9, 9, 9, 9, 9, 9, 9, 9, 4, 9, 5, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 4, 5, 9, 9, 9, 9, 9, 9, 9, 9, 9,
+    4, 5, 9, 9, 9, 9, 9, 9, 9, 9, 9, 4, 5, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 6, 9, 9, 9, 9,
+    9, 9, 9, 9, 9, 9, 9, 6, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 7, 9, 9, 9, 9, 9,
+    9, 9, 9, 8, 9, 9, 9, 9, 9, 8, 9, 9, 9, 9, 9, 8, 9, 9, 9, 9, 9, 8, 9, 9, 9, 9, 9, 8,
+];
+
+// Translated from 00bce500 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function; 00bce500 to the `RET 4` at 00bce6bc, its jump tables after
+/// it): slot 30 (+0x78, `SetupGeometryTextures`) of the vtable `010bb7a8`, `thiscall` with one
+/// stack word: a block whose +0xc is the shader property. By the pass `011f91e4`: 0x231 to 0x233
+/// put texture 0 on stage 0 (`00b7c0a0`) and the rendered texture on stage 6 (`00b7c120`);
+/// 0x99 to 0x174 through the jump table one of nine fixed lists of `00b7c0a0`, `00b7c0e0`,
+/// `00b7c1f0`, `00b7c230` and `00d3dd00` calls; after any of these the shader's slot +0x108.
+/// Every other pass (and the table's default) runs the base `00b7d200` with the block.
+pub fn fn_00bce500(e: &mut Engine, this: Ptr, block: Ptr) {
+    use StageCall::{A, B, F, N, R, T};
+    let base = this.addr();
+    let pass = e.global::<u32>(PASS_011F91E4);
+    let property = e.mem.u32(block.addr() + 0xc);
+    let target = if pass > 0x233 {
+        0x00bc_e6b2
+    } else if pass >= 0x231 {
+        0x00bc_e68c
+    } else {
+        let case = pass.wrapping_sub(0x99);
+        if case > 0xdb {
+            0x00bc_e6b2
+        } else {
+            TARGETS_00BCE6C0[usize::from(BYTES_00BCE6E8[case as usize])]
+        }
+    };
+    let calls: &[StageCall] = match target {
+        0x00bc_e544 => &[F(3, 0, 1), A(0, 0), B(1, 0), T(2, 0, 1)],
+        0x00bc_e552 => &[A(0, 0), B(1, 0), T(2, 0, 1)],
+        0x00bc_e589 => &[F(4, 0, 1), A(0, 0), B(1, 0), T(3, 0, 1)],
+        0x00bc_e597 => &[A(0, 0), B(1, 0), T(3, 0, 1)],
+        0x00bc_e5ce => &[F(4, 0, 1), A(0, 0), B(1, 0), T(3, 0, 1), N(2, 0, 1)],
+        0x00bc_e5dc => &[A(0, 0), B(1, 0), T(3, 0, 1), N(2, 0, 1)],
+        // 00bce621 joins 00bce562 (the `00b7c0e0` call) with stage 0.
+        0x00bc_e621 => &[A(1, 0), B(0, 0), T(2, 0, 1)],
+        // 00bce636 joins 00bce56a (the `00b7c230` call).
+        0x00bc_e636 => &[A(0, 0), T(2, 0, 1)],
+        0x00bc_e647 => &[A(1, 0), B(0, 0), T(2, 0, 1), N(6, 0, 1)],
+        0x00bc_e68c => &[A(0, 0), R(6)],
+        _ => {
+            e.call(SETUP_GEOMETRY_TEXTURES_00B7D200, &args![base, block]);
+            return;
+        }
+    };
+    stage_calls(e, base, property, calls);
+}
+
+/// The jump table of `00bd02e0` for the passes 0xc5 to 0x142 (the byte table at `00bd03a0` into
+/// the 4 code addresses at `00bd0390`), read from the exe.
+const TARGETS_00BD0390: [u32; 4] = [0x00bd_032c, 0x00bd_030c, 0x00bd_0356, 0x00bd_0381];
+const BYTES_00BD03A0: [u8; 126] = [
+    0, 3, 3, 0, 3, 3, 3, 0, 3, 3, 0, 3, 3, 3, 0, 3, 3, 0, 3, 3, 3, 3, 1, 3, 3, 1, 3, 3, 3, 3, 3, 1,
+    3, 3, 1, 3, 3, 3, 3, 3, 1, 3, 3, 1, 3, 3, 3, 3, 3, 1, 3, 3, 1, 3, 3, 3, 3, 3, 3, 0, 3, 3, 3, 3,
+    3, 3, 0, 3, 3, 3, 3, 3, 0, 3, 3, 3, 3, 3, 0, 3, 3, 3, 3, 0, 3, 3, 3, 3, 3, 0, 3, 3, 3, 3, 0, 3,
+    3, 3, 3, 3, 0, 3, 3, 3, 3, 3, 3, 3, 3, 3, 2, 3, 3, 2, 3, 3, 3, 3, 3, 3, 3, 3, 2, 3, 3, 2,
+];
+
+// Translated from 00bd02e0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function; 00bd02e0 to the `RET 4` at 00bd038b, its jump tables after
+/// it): slot 30 (+0x78, `SetupGeometryTextures`) of the vtable `010bb980`, `thiscall` with one
+/// stack word: a block whose +0xc is the shader property. By the pass `011f91e4` (0xc5 to 0x142
+/// through the jump table) one of three fixed lists of `00b7c0a0`, `00b7c0e0` and `00b7c1f0`
+/// calls, then the shader's slot +0x108; every other pass runs the base `00b7d200`.
+pub fn fn_00bd02e0(e: &mut Engine, this: Ptr, block: Ptr) {
+    use StageCall::{A, B, F};
+    let base = this.addr();
+    let pass = e.global::<u32>(PASS_011F91E4);
+    let property = e.mem.u32(block.addr() + 0xc);
+    let case = pass.wrapping_sub(0xc5);
+    let target = if case > 0x7d {
+        0x00bd_0381
+    } else {
+        TARGETS_00BD0390[usize::from(BYTES_00BD03A0[case as usize])]
+    };
+    let calls: &[StageCall] = match target {
+        // 00bd032c joins 00bd035a (`00b7c0e0` with 3, 1) and 00bd0362.
+        0x00bd_032c => &[A(0, 0), B(1, 0), A(2, 1), B(3, 1), F(4, 0, 1)],
+        // 00bd030c joins 00bd0368 (`00b7c1f0` with 3).
+        0x00bd_030c => &[A(0, 0), B(1, 0), F(3, 0, 1)],
+        0x00bd_0356 => &[B(0, 0), F(4, 0, 1)],
+        _ => {
+            e.call(SETUP_GEOMETRY_TEXTURES_00B7D200, &args![base, block]);
+            return;
+        }
+    };
+    stage_calls(e, base, property, calls);
+}
+
 // Translated from 00bcc590 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map (`run_00bcc570`; `thiscall`, one stack word: a pass number; the
 /// texture setup of the `fn_00bcd390` shader). By the exe's jump table (`00bcc600`, byte map
@@ -2599,6 +2768,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00bc_d7c0, fn_00bcd7c0(Ptr)),
         entry!(0x00bc_e7d0, fn_00bce7d0(Ptr, u32) -> Ptr),
         entry!(0x00bc_e800, fn_00bce800(Ptr, u32)),
+        entry!(0x00bc_e500, fn_00bce500(Ptr, Ptr)),
+        entry!(0x00bd_02e0, fn_00bd02e0(Ptr, Ptr)),
         entry!(0x00bc_e950, fn_00bce950(Ptr)),
         entry!(0x00bc_f320, fn_00bcf320(Ptr)),
         entry!(0x00bc_f910, fn_00bcf910() -> u32),
@@ -3325,5 +3496,124 @@ mod n014_tests {
             log.iter().filter(|c| c.0 == JUMP_TARGET_00BD16D0).count(),
             1
         );
+    }
+}
+
+#[cfg(test)]
+mod gap1_tests {
+    use super::*;
+
+    type Calls = Vec<(u32, Vec<u32>)>;
+
+    const SLOT_108: u32 = 0x0f00_0108;
+    const SETTERS: [u32; 8] = [
+        STAGE_TEXTURE_00B7C0A0,
+        STAGE_TEXTURE_00B7C0E0,
+        STAGE_TEXTURE_00B7C120,
+        STAGE_TEXTURE_00B7C1F0,
+        STAGE_TEXTURE_00B7C230,
+        SETUP_GEOMETRY_TEXTURES_00B7D200,
+        EMPTY_00D3DD00,
+        SLOT_108,
+    ];
+
+    /// A shader whose slot +0x108 is recorded, a block whose +0xc is the property, and the
+    /// setters doubled.
+    fn rig() -> (Engine, u32, u32, u32) {
+        let mut e = Engine::new();
+        e.map(0x011f_9000, 0x1000);
+        let mut slots = [0u32; 0x43];
+        slots[0x108 / 4] = SLOT_108;
+        e.put_vtable(0x0f00_1000, &slots);
+        for setter in SETTERS {
+            e.register(setter, |_, _| Ret::default());
+        }
+        let this = e.mem.alloc(0x40);
+        e.mem.set_u32(this, 0x0f00_1000);
+        let block = e.mem.alloc(0x10);
+        let property = e.mem.alloc(0x40);
+        e.mem.set_u32(block + 0xc, property);
+        e.call_log = Some(vec![]);
+        (e, this, block, property)
+    }
+
+    fn run(e: &mut Engine, function: u32, this: u32, block: u32, pass: u32) -> Calls {
+        e.set_global::<u32>(PASS_011F91E4, pass);
+        e.call_log = Some(vec![]);
+        e.call(function, &args![this, block]);
+        e.call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| SETTERS.contains(a))
+            .collect()
+    }
+
+    #[test]
+    fn fn_00bce500_sets_the_stage_textures_by_pass() {
+        let (mut e, this, block, p) = rig();
+        let a = |s: u32, t: u32| (STAGE_TEXTURE_00B7C0A0, vec![p, s, t]);
+        let b = |s: u32, w: u32| (STAGE_TEXTURE_00B7C0E0, vec![p, s, w]);
+        let f = |s: u32| (STAGE_TEXTURE_00B7C1F0, vec![p, s, 0, 1]);
+        let t = |s: u32| (STAGE_TEXTURE_00B7C230, vec![p, s, 0, 1]);
+        let n = |s: u32| (EMPTY_00D3DD00, vec![this, p, s, 0, 1]);
+        let v = (SLOT_108, vec![this]);
+        let base = vec![(SETUP_GEOMETRY_TEXTURES_00B7D200, vec![this, block])];
+        let cases: Vec<(u32, Calls)> = vec![
+            (0x99, vec![a(0, 0), b(1, 0), t(3), n(2), v.clone()]),
+            (0x9a, vec![f(4), a(0, 0), b(1, 0), t(3), n(2), v.clone()]),
+            (0xd9, vec![a(0, 0), b(1, 0), t(2), v.clone()]),
+            (0xda, vec![f(3), a(0, 0), b(1, 0), t(2), v.clone()]),
+            (0x101, vec![a(0, 0), b(1, 0), t(3), v.clone()]),
+            (0x103, vec![f(4), a(0, 0), b(1, 0), t(3), v.clone()]),
+            (0x134, vec![a(1, 0), b(0, 0), t(2), v.clone()]),
+            (0x153, vec![a(0, 0), t(2), v.clone()]),
+            (0x15c, vec![a(1, 0), b(0, 0), t(2), n(6), v.clone()]),
+            (0x174, vec![a(1, 0), b(0, 0), t(2), n(6), v.clone()]),
+            (
+                0x232,
+                vec![a(0, 0), (STAGE_TEXTURE_00B7C120, vec![6]), v.clone()],
+            ),
+            (0x9b, base.clone()),
+            (0x98, base.clone()),
+            (0x175, base.clone()),
+            (0x230, base.clone()),
+            (0x234, base),
+        ];
+        for (pass, expected) in cases {
+            assert_eq!(
+                run(&mut e, 0x00bc_e500, this, block, pass),
+                expected,
+                "{pass:#x}"
+            );
+        }
+    }
+
+    #[test]
+    fn fn_00bd02e0_sets_the_stage_textures_by_pass() {
+        let (mut e, this, block, p) = rig();
+        let a = |s: u32, t: u32| (STAGE_TEXTURE_00B7C0A0, vec![p, s, t]);
+        let b = |s: u32, w: u32| (STAGE_TEXTURE_00B7C0E0, vec![p, s, w]);
+        let f = |s: u32| (STAGE_TEXTURE_00B7C1F0, vec![p, s, 0, 1]);
+        let v = (SLOT_108, vec![this]);
+        let base = vec![(SETUP_GEOMETRY_TEXTURES_00B7D200, vec![this, block])];
+        let cases: Vec<(u32, Calls)> = vec![
+            (
+                0xc5,
+                vec![a(0, 0), b(1, 0), a(2, 1), b(3, 1), f(4), v.clone()],
+            ),
+            (0xdb, vec![a(0, 0), b(1, 0), f(3), v.clone()]),
+            (0x133, vec![b(0, 0), f(4), v.clone()]),
+            (0xc6, base.clone()),
+            (0xc4, base.clone()),
+            (0x143, base),
+        ];
+        for (pass, expected) in cases {
+            assert_eq!(
+                run(&mut e, 0x00bd_02e0, this, block, pass),
+                expected,
+                "{pass:#x}"
+            );
+        }
     }
 }

@@ -130,6 +130,24 @@ impl Mem {
         Ok(())
     }
 
+    /// Zeroes `[addr, addr + len)` page by page (what writing `len` zero bytes does, without
+    /// a buffer of them). Panics as [`Mem::write`] does on the first unmapped byte, with the
+    /// bytes before it zeroed.
+    pub fn zero(&mut self, addr: u32, len: u32) {
+        let mut a = addr;
+        let mut left = len as usize;
+        while left > 0 {
+            let off = (a as usize) & (PAGE - 1);
+            let n = (PAGE - off).min(left);
+            match self.page_mut(a) {
+                Ok(p) => p[off..off + n].fill(0),
+                Err(Fault(at)) => panic!("write to unmapped memory at {at:08x}"),
+            }
+            left -= n;
+            a = a.wrapping_add(n as u32);
+        }
+    }
+
     /// Reads bytes. Panics with the address on a fault: a translated
     /// function touched memory that was never provided.
     pub fn read(&self, addr: u32, buf: &mut [u8]) {
@@ -150,66 +168,120 @@ impl Mem {
         v
     }
 
+    /// The `N` bytes at `a`: a fixed-size copy out of the page when they lie in one page (no
+    /// call to `memcpy`, which a variable-length copy costs; the translated code reads memory
+    /// hundreds of millions of times a second), else [`Mem::read`] across the page boundary.
+    /// Faults (panics) exactly as [`Mem::read`] does.
+    #[inline(always)]
+    fn load<const N: usize>(&self, a: u32) -> [u8; N] {
+        let off = (a as usize) & (PAGE - 1);
+        if off <= PAGE - N {
+            if let Some(p) = self.pages[(a >> PAGE_BITS) as usize].as_deref() {
+                let mut b = [0; N];
+                b.copy_from_slice(&p[off..off + N]);
+                return b;
+            }
+        }
+        self.load_slow(a)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn load_slow<const N: usize>(&self, a: u32) -> [u8; N] {
+        let mut b = [0; N];
+        self.read(a, &mut b);
+        b
+    }
+
+    /// Writes the `N` bytes `b` at `a`, as [`Mem::load`] reads them.
+    #[inline(always)]
+    fn store<const N: usize>(&mut self, a: u32, b: [u8; N]) {
+        let off = (a as usize) & (PAGE - 1);
+        if off <= PAGE - N {
+            if let Some(p) = self.pages[(a >> PAGE_BITS) as usize].as_deref_mut() {
+                p[off..off + N].copy_from_slice(&b);
+                return;
+            }
+        }
+        self.store_slow(a, b)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn store_slow<const N: usize>(&mut self, a: u32, b: [u8; N]) {
+        self.write(a, &b);
+    }
+
+    #[inline]
     pub fn u8(&self, a: u32) -> u8 {
-        let mut b = [0; 1];
-        self.read(a, &mut b);
-        b[0]
+        self.load::<1>(a)[0]
     }
+    #[inline]
     pub fn u16(&self, a: u32) -> u16 {
-        let mut b = [0; 2];
-        self.read(a, &mut b);
-        u16::from_le_bytes(b)
+        u16::from_le_bytes(self.load(a))
     }
+    #[inline]
     pub fn u32(&self, a: u32) -> u32 {
-        let mut b = [0; 4];
-        self.read(a, &mut b);
-        u32::from_le_bytes(b)
+        u32::from_le_bytes(self.load(a))
     }
+    #[inline]
     pub fn u64(&self, a: u32) -> u64 {
-        let mut b = [0; 8];
-        self.read(a, &mut b);
-        u64::from_le_bytes(b)
+        u64::from_le_bytes(self.load(a))
     }
+    #[inline]
     pub fn i8(&self, a: u32) -> i8 {
         self.u8(a) as i8
     }
+    #[inline]
     pub fn i16(&self, a: u32) -> i16 {
         self.u16(a) as i16
     }
+    #[inline]
     pub fn i32(&self, a: u32) -> i32 {
         self.u32(a) as i32
     }
+    #[inline]
     pub fn f32(&self, a: u32) -> f32 {
         f32::from_bits(self.u32(a))
     }
+    #[inline]
     pub fn f64(&self, a: u32) -> f64 {
         f64::from_bits(self.u64(a))
     }
 
+    #[inline]
     pub fn set_u8(&mut self, a: u32, v: u8) {
-        self.write(a, &[v]);
+        self.store(a, [v]);
     }
+    #[inline]
     pub fn set_u16(&mut self, a: u32, v: u16) {
-        self.write(a, &v.to_le_bytes());
+        self.store(a, v.to_le_bytes());
     }
+    #[inline]
     pub fn set_u32(&mut self, a: u32, v: u32) {
-        self.write(a, &v.to_le_bytes());
+        self.store(a, v.to_le_bytes());
     }
+    #[inline]
     pub fn set_u64(&mut self, a: u32, v: u64) {
-        self.write(a, &v.to_le_bytes());
+        self.store(a, v.to_le_bytes());
     }
+    #[inline]
     pub fn set_i8(&mut self, a: u32, v: i8) {
         self.set_u8(a, v as u8);
     }
+    #[inline]
     pub fn set_i16(&mut self, a: u32, v: i16) {
         self.set_u16(a, v as u16);
     }
+    #[inline]
     pub fn set_i32(&mut self, a: u32, v: i32) {
         self.set_u32(a, v as u32);
     }
+    #[inline]
     pub fn set_f32(&mut self, a: u32, v: f32) {
         self.set_u32(a, v.to_bits());
     }
+    #[inline]
     pub fn set_f64(&mut self, a: u32, v: f64) {
         self.set_u64(a, v.to_bits());
     }
@@ -259,7 +331,7 @@ impl Mem {
             }
         };
         self.map(addr, size);
-        self.write(addr, &vec![0; size as usize]);
+        self.zero(addr, size);
         self.live.insert(addr, size);
         addr
     }
@@ -303,6 +375,80 @@ mod tests {
         assert_eq!(m.u32(0x1ffe), 0xdead_beef);
         m.set_f64(0x1ffc, 1.25);
         assert_eq!(m.f64(0x1ffc), 1.25);
+    }
+
+    /// The fixed-size accessors read and write every width at every offset of a page, and at
+    /// the page's end (where they go through the general path) as bytes would.
+    #[test]
+    fn scalar_accessors_match_byte_reads_at_every_offset() {
+        let mut m = Mem::new();
+        m.map(0x1000, 0x2000);
+        for (i, a) in (0x1ff0..0x2010u32).enumerate() {
+            m.set_u8(a, i as u8 ^ 0x5a);
+        }
+        for a in 0x1ff0..0x2008u32 {
+            let b = m.bytes(a, 8);
+            assert_eq!(m.u8(a), b[0]);
+            assert_eq!(m.u16(a), u16::from_le_bytes(b[..2].try_into().unwrap()));
+            assert_eq!(m.u32(a), u32::from_le_bytes(b[..4].try_into().unwrap()));
+            assert_eq!(m.u64(a), u64::from_le_bytes(b.try_into().unwrap()));
+        }
+        for a in 0x1ff8..0x2001u32 {
+            m.set_u64(a, 0x0102_0304_0506_0708);
+            assert_eq!(m.bytes(a, 8), [8, 7, 6, 5, 4, 3, 2, 1]);
+            m.set_u16(a, 0xa1b2);
+            assert_eq!(m.bytes(a, 2), [0xb2, 0xa1]);
+        }
+    }
+
+    /// A read of an unmapped page faults with the address, from the fast path and from a
+    /// read that crosses into the unmapped page (with the first unmapped byte's address).
+    #[test]
+    #[should_panic(expected = "read of unmapped memory at 00005000")]
+    fn unmapped_scalar_reads_name_the_address() {
+        Mem::new().u32(0x5000);
+    }
+
+    #[test]
+    #[should_panic(expected = "read of unmapped memory at 00002000")]
+    fn reads_into_an_unmapped_page_name_its_first_byte() {
+        let mut m = Mem::new();
+        m.map(0x1000, 0x1000);
+        m.u32(0x1ffe);
+    }
+
+    /// A write that crosses into an unmapped page writes the mapped part, then faults there.
+    #[test]
+    fn writes_into_an_unmapped_page_fault_after_the_mapped_part() {
+        let mut m = Mem::new();
+        m.map(0x1000, 0x1000);
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            m.set_u32(0x1ffe, 0xaabb_ccdd)
+        }));
+        assert!(r.is_err());
+        assert_eq!(m.bytes(0x1ffe, 2), [0xdd, 0xcc]);
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut m = Mem::new();
+            m.set_u8(0x7000, 1)
+        }));
+        let why = r.unwrap_err();
+        assert_eq!(
+            why.downcast_ref::<String>().map(String::as_str),
+            Some("write to unmapped memory at 00007000")
+        );
+    }
+
+    /// `zero` clears a range across pages.
+    #[test]
+    fn zero_clears_across_pages() {
+        let mut m = Mem::new();
+        m.map(0x1000, 0x2000);
+        m.write(0x1ff0, &[0xff; 0x20]);
+        m.zero(0x1ff4, 0x18);
+        let b = m.bytes(0x1ff0, 0x20);
+        assert_eq!(&b[..4], &[0xff; 4]);
+        assert!(b[4..0x1c].iter().all(|&x| x == 0));
+        assert_eq!(&b[0x1c..], &[0xff; 4]);
     }
 
     #[test]

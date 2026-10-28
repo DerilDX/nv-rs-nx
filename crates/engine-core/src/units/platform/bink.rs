@@ -329,6 +329,10 @@ pub fn do_frame(e: &mut Engine, bink: u32) -> i32 {
         movie.start = Some(e.clock_now_ms());
         movie.base = index;
         if let Some((pcm, channels, rate)) = movie.track.take() {
+            super::dsound::note(
+                e,
+                &format!("movie {bink:08x}: sound track, {rate} Hz, {channels} ch"),
+            );
             super::dsound::play_stream(e, bink, pcm, channels, 16, rate);
         }
     }
@@ -928,6 +932,23 @@ mod tests {
         next_frame(&mut e, bink);
         assert_eq!(pause(&mut e, bink, 1), 1);
         assert_eq!(pause(&mut e, bink, 0), 0);
+        close(&mut e, bink);
+    }
+
+    /// The frames of a movie with a sound track come due on the platform clock alone, as
+    /// without sound, whether or not the output plays: nothing waits on an audio position
+    /// (the DLL's frames with sound keep the clock schedule too, docs/SOUND.md).
+    #[test]
+    fn a_movie_with_a_sound_track_keeps_the_clock_schedule_without_output() {
+        let (mut e, name) = engine(movie_with_track(2, 48000, 0x7000));
+        set_sound_system(&mut e, OPEN_DIRECT_SOUND_SLOT, 0);
+        let bink = open(&mut e, name, 0);
+        intro_rate(&mut e, bink);
+        e.clock_ms = 5000;
+        assert_eq!(wait(&mut e, bink), 0);
+        frame(&mut e, bink);
+        assert_eq!(wait(&mut e, bink), 1);
+        assert_eq!(due_at(&mut e, bink) - 5000, 33);
         close(&mut e, bink);
     }
 

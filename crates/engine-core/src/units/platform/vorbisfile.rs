@@ -125,6 +125,13 @@ pub fn ov_open_callbacks(
                 "ov_open_callbacks on an open OggVorbis_File is not provided"
             );
             sound.open.insert(vf.addr(), (file, info));
+            let what = format!(
+                "ogg {:08x}: {size} bytes, {} Hz, {} ch",
+                vf.addr(),
+                words[2],
+                words[1]
+            );
+            super::dsound::note(e, &what);
             0
         }
         Err(code) => code,

@@ -161,6 +161,8 @@ pub struct Input {
     devices: std::collections::BTreeMap<u32, Device>,
     /// Keys down, by DirectInput key code (`DIK_*`, the scan code).
     keys: Vec<bool>,
+    /// Keys that went down since `GetAsyncKeyState` last asked about them, by key code.
+    async_pressed: Vec<bool>,
     /// Mouse motion since the last read (relative axes) and the buttons down.
     mouse_motion: [i32; 3],
     mouse_buttons: [bool; 8],
@@ -637,6 +639,12 @@ pub fn key(e: &mut Engine, code: u8, down: bool) {
         return;
     }
     input.keys[code as usize] = down;
+    if down {
+        if input.async_pressed.len() < KEYBOARD_KEYS as usize {
+            input.async_pressed.resize(KEYBOARD_KEYS as usize, false);
+        }
+        input.async_pressed[code as usize] = true;
+    }
     let time = super::tick_count(e);
     let input = &mut e.kernel.input;
     input.sequence = input.sequence.wrapping_add(1);
@@ -657,6 +665,42 @@ pub fn key(e: &mut Engine, code: u8, down: bool) {
     }
 }
 
+/// `VK_TAB`, `VK_MENU` (either Alt) and the keyboard's key codes for them (`DIK_TAB`,
+/// `DIK_LMENU`, `DIK_RMENU`), as Windows defines them.
+const VK_TAB: u32 = 0x09;
+const VK_MENU: u32 = 0x12;
+const DIK_TAB: usize = 0x0f;
+const DIK_LMENU: usize = 0x38;
+const DIK_RMENU: usize = 0xb8;
+
+// Platform: replaces USER32.dll GetAsyncKeyState (import)
+/// `GetAsyncKeyState(virtual key)`: the 16-bit state in `AX`, bit 15 set while the key is down
+/// and bit 0 when it went down since the last call that asked about it (Windows documents bit 0
+/// as unreliable; the exe reads only bit 15). The exe's only caller is 0086e650 (the main loop's
+/// Alt+Tab test), asking for `VK_TAB` and `VK_MENU`, which read the keyboard's `DIK_TAB` and either
+/// Alt key. Any other virtual key is not provided (stops the run).
+pub fn get_async_key_state(e: &mut Engine, virtual_key: u32) -> u32 {
+    let codes: &[usize] = match virtual_key {
+        VK_TAB => &[DIK_TAB],
+        VK_MENU => &[DIK_LMENU, DIK_RMENU],
+        _ => panic!("GetAsyncKeyState({virtual_key:#x}): only VK_TAB and VK_MENU are provided"),
+    };
+    let input = &mut e.kernel.input;
+    let mut state = 0u32;
+    for &code in codes {
+        if input.key_down(code) {
+            state |= 0x8000;
+        }
+        if let Some(pressed) = input.async_pressed.get_mut(code) {
+            if *pressed {
+                state |= 1;
+                *pressed = false;
+            }
+        }
+    }
+    state
+}
+
 /// Mouse motion (mickeys) for the next read: x, y and the wheel.
 pub fn mouse_move(e: &mut Engine, dx: i32, dy: i32, wheel: i32) {
     let m = &mut e.kernel.input.mouse_motion;
@@ -673,6 +717,34 @@ pub fn mouse_button(e: &mut Engine, button: usize, down: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn async_key_state_reads_tab_and_either_alt() {
+        let mut e = Engine::new();
+        assert_eq!(get_async_key_state(&mut e, VK_TAB), 0);
+        key(&mut e, DIK_TAB as u8, true);
+        assert_eq!(
+            get_async_key_state(&mut e, VK_TAB),
+            0x8001,
+            "down, and pressed since"
+        );
+        assert_eq!(
+            get_async_key_state(&mut e, VK_TAB),
+            0x8000,
+            "bit 0 once per press"
+        );
+        key(&mut e, DIK_TAB as u8, false);
+        assert_eq!(get_async_key_state(&mut e, VK_TAB), 0);
+        key(&mut e, DIK_RMENU as u8, true);
+        key(&mut e, DIK_RMENU as u8, false);
+        assert_eq!(
+            get_async_key_state(&mut e, VK_MENU),
+            1,
+            "went down and up since"
+        );
+        key(&mut e, DIK_LMENU as u8, true);
+        assert_eq!(get_async_key_state(&mut e, VK_MENU), 0x8001);
+    }
 
     fn engine() -> (Engine, u32) {
         let mut e = Engine::new();

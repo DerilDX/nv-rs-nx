@@ -174,6 +174,7 @@ fn push_block(e: &mut Engine, this: u32, class: i32, block: u32) {
         .set_i32(row_field(this, class, ROW_COUNT), count.wrapping_add(1));
     e.mem.set_u32(block, head);
     e.mem.set_u32(row_field(this, class, ROW_HEAD), block);
+    hkmem_check::note_freed(e, block);
 }
 
 // Translated from 00d2c000 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -387,6 +388,15 @@ pub fn fn_00d2c520(e: &mut Engine, this: Ptr, class: i32) {
 /// the head moves to the block's first word); an empty list is refilled
 /// (`block_alloc_refill`, the exe's code at `00d2c3c0`).
 pub fn hk_thread_memory_block_alloc(e: &mut Engine, this: Ptr, size: i32) -> u32 {
+    // `NV_HKMEM_CHECK` (diagnostic only, reads memory): the lists before and after.
+    hkmem_check::at_op(e, "blockAlloc", false, this.addr(), size as u32, 0);
+    let block = block_alloc(e, this, size);
+    hkmem_check::at_op(e, "blockAlloc", true, this.addr(), size as u32, block);
+    block
+}
+
+/// The body of `blockAlloc` (`00d2c5a0`).
+fn block_alloc(e: &mut Engine, this: Ptr, size: i32) -> u32 {
     let base = this.addr();
     if size > LARGEST_ROW_SIZE {
         let allocator = e.mem.u32(base + ALLOCATOR);
@@ -405,6 +415,14 @@ pub fn hk_thread_memory_block_alloc(e: &mut Engine, this: Ptr, size: i32) -> u32
 /// the size class's count is below the row limit (signed) the block is pushed on the class's
 /// list, and when it is not the block goes to `onRowFull` (`00d2c450`).
 pub fn hk_thread_memory_block_free(e: &mut Engine, this: Ptr, block: u32, size: i32) {
+    // `NV_HKMEM_CHECK` (diagnostic only, reads memory): the lists before and after.
+    hkmem_check::at_op(e, "blockFree", false, this.addr(), block, size as u32);
+    block_free(e, this, block, size);
+    hkmem_check::at_op(e, "blockFree", true, this.addr(), block, size as u32);
+}
+
+/// The body of `blockFree` (`00d2c600`).
+fn block_free(e: &mut Engine, this: Ptr, block: u32, size: i32) {
     if block == 0 {
         return;
     }
@@ -479,12 +497,517 @@ pub fn hk_thread_memory_buf_realloc(
 /// `hkThreadMemory::releaseCachedMemory` (Xbox PDB), `thiscall`, no stack words: empties every
 /// row whose count is not zero (`00d2c520`), from size class 16 down to 0.
 pub fn hk_thread_memory_release_cached_memory(e: &mut Engine, this: Ptr) {
+    // `NV_HKMEM_CHECK` (diagnostic only, reads memory): the lists before and after.
+    hkmem_check::at_op(e, "releaseCachedMemory", false, this.addr(), 0, 0);
+    release_cached_memory(e, this);
+    hkmem_check::at_op(e, "releaseCachedMemory", true, this.addr(), 0, 0);
+}
+
+/// The body of `releaseCachedMemory` (`00d2c7a0`).
+fn release_cached_memory(e: &mut Engine, this: Ptr) {
     let mut class = 0x10i32;
     while class >= 0 {
         if e.mem.u32(row_field(this.addr(), class, ROW_COUNT)) != 0 {
             fn_00d2c520(e, this, class);
         }
         class -= 1;
+    }
+}
+
+/// `NV_HKMEM_CHECK`: diagnostic only, not exe behaviour. Reads, never writes, game memory.
+///
+/// Walks every size-class list of every thread memory seen so far and stops the run (a panic
+/// whose message starts `hkmem check:`, after `hkmem:` lines with the details) at the first
+/// bad link: a link that is not a 16-byte aligned, mapped address, a list longer or shorter
+/// than its count, or a free block whose first word (its link) changed since the last clean
+/// check while its list's head and count did not (nothing of the game's may write a block on
+/// a free list). Between checks it keeps each list as it found it.
+///
+/// - Any value (except `0`): a check as `blockAlloc` (`00d2c5a0`), `blockFree` (`00d2c600`)
+///   and `releaseCachedMemory` (`00d2c7a0`) start and end. The window is between two of those.
+/// - `calls`: also at every call through `Engine::call` (entered and returned), which names
+///   the function that was running when a block changed (slow).
+pub mod hkmem_check {
+    use super::{row_field, ROW_COUNT, ROW_HEAD};
+    use crate::prelude::*;
+    use std::cell::{Cell, RefCell};
+    use std::collections::HashMap;
+    use std::fmt::Write as _;
+
+    /// How the check runs.
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    pub enum Mode {
+        Off,
+        /// At the starts and ends of the allocator's own functions.
+        Allocs,
+        /// Also between any two calls.
+        Calls,
+    }
+
+    /// The size classes a thread memory has rows for (`releaseCachedMemory` goes over 0 to 16).
+    const CLASSES: i32 = 17;
+    /// Where a walk gives up (a cycle) when the count is no guide.
+    const MAX_WALK: usize = 1 << 16;
+
+    /// A point the check ran at.
+    #[derive(Clone, Copy, Debug)]
+    enum Event {
+        /// Start or end of an allocator function: its name, `this` and its first two words.
+        Op(&'static str, bool, u32, u32, u32),
+        /// A call through `Engine::call` entered (`false`) or returned (`true`).
+        Call(u32, bool),
+    }
+
+    impl std::fmt::Display for Event {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match *self {
+                Event::Op(name, end, this, a, b) => write!(
+                    f,
+                    "{} of {name}({this:08x},{a:08x},{b:08x})",
+                    if end { "end" } else { "start" }
+                ),
+                Event::Call(addr, true) => write!(f, "return from {addr:08x}"),
+                Event::Call(addr, false) => write!(f, "entry to {addr:08x}"),
+            }
+        }
+    }
+
+    /// One list as the last clean check left it: head, count and each block with its link.
+    #[derive(Default, Clone)]
+    struct Row {
+        head: u32,
+        count: i32,
+        links: Vec<(u32, u32)>,
+    }
+
+    #[derive(Default)]
+    struct State {
+        /// The thread memories seen, each with its 17 lists.
+        memories: Vec<(u32, Vec<Row>)>,
+        /// Who freed each block now on a list (the call stack when `push_block` put it there).
+        freed_by: HashMap<u32, Vec<u32>>,
+        /// The clean checks so far, the last one's event and the function then running.
+        checks: u64,
+        last: Option<(Event, u32)>,
+    }
+
+    thread_local! {
+        static STATE: RefCell<State> = RefCell::new(State::default());
+        static FORCED: Cell<Option<Mode>> = const { Cell::new(None) };
+    }
+
+    /// The mode from `NV_HKMEM_CHECK` (read once), unless a test forced one on this thread.
+    pub fn mode() -> Mode {
+        if let Some(mode) = FORCED.with(Cell::get) {
+            return mode;
+        }
+        static MODE: std::sync::OnceLock<Mode> = std::sync::OnceLock::new();
+        *MODE.get_or_init(|| match std::env::var("NV_HKMEM_CHECK") {
+            Err(_) => Mode::Off,
+            Ok(v) if v.is_empty() || v == "0" => Mode::Off,
+            Ok(v) if v.eq_ignore_ascii_case("calls") => Mode::Calls,
+            Ok(_) => Mode::Allocs,
+        })
+    }
+
+    /// Sets the mode for this thread and forgets what was seen (tests).
+    pub fn force(mode: Mode) {
+        FORCED.with(|forced| forced.set(Some(mode)));
+        STATE.with(|state| *state.borrow_mut() = State::default());
+    }
+
+    /// Notes who freed `block` (called as `push_block` puts it on a list).
+    pub(super) fn note_freed(e: &Engine, block: u32) {
+        if mode() == Mode::Off {
+            return;
+        }
+        STATE.with(|state| {
+            state
+                .borrow_mut()
+                .freed_by
+                .insert(block, e.call_stack.clone())
+        });
+    }
+
+    thread_local! {
+        /// The last contact points freed (`removeContactPointImpl`, 00cfd320): manager, id and
+        /// the call stack then, newest last.
+        static REMOVED: RefCell<std::collections::VecDeque<(u32, u32, Vec<u32>)>> =
+            const { RefCell::new(std::collections::VecDeque::new()) };
+    }
+    /// How many removals [`note_contact_removed`] keeps.
+    const REMOVED_KEEP: usize = 512;
+
+    /// Notes that the contact manager `mgr` freed its contact point `id` (called as
+    /// `removeContactPointImpl` starts).
+    pub fn note_contact_removed(e: &Engine, mgr: u32, id: u32) {
+        if mode() == Mode::Off {
+            return;
+        }
+        REMOVED.with(|removed| {
+            let mut removed = removed.borrow_mut();
+            if removed.len() >= REMOVED_KEEP {
+                removed.pop_front();
+            }
+            removed.push_back((mgr, id, e.call_stack.clone()));
+        });
+    }
+
+    /// Checks the id of a process-output entry before `processContactImpl` (00cfd470) copies
+    /// the entry's contact point into the atom at `atom + 0x30 + 0x20 * table[id]`: the id must
+    /// be inside the manager's id table (data `+0x20`, size `+0x24`) and its slot must be a
+    /// point in use (not `0xff`, below the atom's point count). Otherwise the copy lands outside
+    /// the points (with `0xff`, 0x2010 bytes past the atom), so the run stops here instead.
+    pub fn check_contact_id(e: &mut Engine, mgr: u32, id: u32, entry: u32) {
+        if mode() == Mode::Off {
+            return;
+        }
+        let table = e.mem.u32(mgr + 0x20);
+        let size = e.mem.u32(mgr + 0x24);
+        let atom = e.mem.u32(mgr + 0x3c);
+        let count = u32::from(e.mem.u16(atom + 4));
+        let reserved = u32::from(e.mem.u16(atom + 6));
+        let slot = if id < size {
+            Some(u32::from(e.mem.u8(table.wrapping_add(id))))
+        } else {
+            None
+        };
+        let why = match slot {
+            None => format!("id {id:#x} is past the id table (size {size:#x})"),
+            Some(0xff) => format!("id {id:#x} was freed (its slot is 0xff)"),
+            Some(slot) if slot >= count => {
+                format!("id {id:#x} maps to point {slot:#x}, past the atom's {count:#x} points")
+            }
+            Some(_) => return,
+        };
+        e.call_hook = None;
+        let target = (slot.unwrap_or(0xff) << 5)
+            .wrapping_add(atom)
+            .wrapping_add(0x30);
+        let mut out = String::new();
+        let _ = writeln!(
+            out,
+            "hkmem: contact manager {mgr:08x}: output entry {entry:08x}: {why}; atom {atom:08x} \
+             ({count:#x} points, {reserved:#x} reserved), the copy would write {target:08x}"
+        );
+        let _ = writeln!(
+            out,
+            "hkmem: call stack (innermost first): {}",
+            stack_text(&e.call_stack)
+        );
+        let words: Vec<String> = (0..0xc)
+            .map(|w| format!("{:08x}", e.mem.u32(entry + 4 * w)))
+            .collect();
+        let _ = writeln!(out, "hkmem: the entry's words: {}", words.join(" "));
+        REMOVED.with(|removed| {
+            let removed = removed.borrow();
+            let mut any = false;
+            for (m, i, stack) in removed.iter().filter(|r| r.0 == mgr && r.1 == id) {
+                any = true;
+                let _ = writeln!(
+                    out,
+                    "hkmem: {m:08x} freed id {i:#x} from: {}",
+                    stack_text(stack)
+                );
+            }
+            if !any {
+                let _ = writeln!(
+                    out,
+                    "hkmem: no removal of id {id:#x} by {mgr:08x} in the last {REMOVED_KEEP}"
+                );
+            }
+        });
+        print!("{out}");
+        panic!(
+            "hkmem check: contact manager {mgr:08x}: {why}; the copy would write {target:08x} \
+             (NV_HKMEM_CHECK; more on the hkmem: lines)"
+        );
+    }
+
+    /// Checks at the start or end (`end`) of the allocator function `name` on `this`.
+    pub(super) fn at_op(e: &mut Engine, name: &'static str, end: bool, this: u32, a: u32, b: u32) {
+        let mode = mode();
+        if mode == Mode::Off {
+            return;
+        }
+        let known = STATE.with(|state| state.borrow().memories.iter().any(|(m, _)| *m == this));
+        if !known {
+            STATE.with(|state| {
+                state
+                    .borrow_mut()
+                    .memories
+                    .push((this, vec![Row::default(); CLASSES as usize]))
+            });
+            if mode == Mode::Calls && e.call_hook.is_none() {
+                e.call_hook = Some(on_call);
+            }
+        }
+        check(e, Event::Op(name, end, this, a, b));
+    }
+
+    /// `Engine::call_hook` in `calls` mode.
+    fn on_call(e: &mut Engine, addr: u32, returning: bool) {
+        check(e, Event::Call(addr, returning));
+    }
+
+    /// The function running after `event`: the callee once entered, the caller once returned.
+    fn running_after(e: &Engine, event: Event) -> u32 {
+        match event {
+            Event::Call(addr, false) => addr,
+            _ => e.call_stack.last().copied().unwrap_or(0),
+        }
+    }
+
+    /// A word and its float, for the report.
+    fn word_text(word: u32) -> String {
+        format!("{word:08x} (f32 {:e})", f32::from_bits(word))
+    }
+
+    /// The words of `[at, at + len)` that are mapped, four to a line.
+    fn dump(e: &Engine, out: &mut String, label: &str, at: u32, len: u32) {
+        let _ = writeln!(out, "hkmem:   {label} {at:08x}:");
+        for line in (0..len).step_by(16) {
+            let mut text = String::new();
+            for word in 0..4 {
+                let addr = at.wrapping_add(line + 4 * word);
+                if e.mem.is_mapped(addr) {
+                    let value = e.mem.u32(addr);
+                    let _ = write!(text, " {value:08x}({:+.4e})", f32::from_bits(value));
+                } else {
+                    text.push_str(" unmapped");
+                }
+            }
+            let _ = writeln!(out, "hkmem:     +{line:03x}{text}");
+        }
+    }
+
+    /// Walks every list; stops the run at the first bad link, else keeps the lists as found.
+    fn check(e: &mut Engine, event: Event) {
+        let mut memories: Vec<(u32, Vec<Row>)> =
+            STATE.with(|state| std::mem::take(&mut state.borrow_mut().memories));
+        for (this, rows) in &mut memories {
+            let this = *this;
+            for (class, old) in (0..CLASSES).zip(rows.iter_mut()) {
+                let head = e.mem.u32(row_field(this, class, ROW_HEAD));
+                let count = e.mem.i32(row_field(this, class, ROW_COUNT));
+                if old.head == head && old.count == count {
+                    // Unchanged row: the same blocks, each link as it was (no allocation).
+                    for (index, &(block, next)) in old.links.iter().enumerate() {
+                        let links = &old.links[..index];
+                        if !e.mem.is_mapped(block) || !e.mem.is_mapped(block.wrapping_add(3)) {
+                            stop(
+                                e,
+                                event,
+                                this,
+                                class,
+                                count,
+                                old,
+                                links,
+                                block,
+                                "is not mapped",
+                            );
+                        }
+                        if e.mem.u32(block) != next {
+                            stop(e, event, this, class, count, old, links, block, "");
+                        }
+                    }
+                    continue;
+                }
+                // The head or the count moved (a block was taken or given back): walk it anew.
+                let mut links = Vec::new();
+                let mut block = head;
+                while block != 0 {
+                    let index = links.len();
+                    let bad = if block & 0xf != 0 {
+                        Some("is not 16-byte aligned")
+                    } else if !e.mem.is_mapped(block) || !e.mem.is_mapped(block.wrapping_add(3)) {
+                        Some("is not mapped")
+                    } else if index >= MAX_WALK || index as i64 >= i64::from(count) {
+                        Some("is past the list's count (a cycle or a lost count)")
+                    } else {
+                        None
+                    };
+                    if let Some(why) = bad {
+                        stop(e, event, this, class, count, old, &links, block, why);
+                    }
+                    let next = e.mem.u32(block);
+                    links.push((block, next));
+                    block = next;
+                }
+                if links.len() as i64 != i64::from(count) {
+                    stop(
+                        e,
+                        event,
+                        this,
+                        class,
+                        count,
+                        old,
+                        &links,
+                        0,
+                        "ends before the list's count",
+                    );
+                }
+                *old = Row { head, count, links };
+            }
+        }
+        let running = running_after(e, event);
+        STATE.with(|state| {
+            let mut state = state.borrow_mut();
+            state.memories = memories;
+            state.checks += 1;
+            state.last = Some((event, running));
+            // Blocks no longer on any list were taken again: forget who freed them.
+            if state.freed_by.len() > 4096 {
+                let listed: std::collections::HashSet<u32> = state
+                    .memories
+                    .iter()
+                    .flat_map(|(_, rows)| rows.iter().flat_map(|r| r.links.iter().map(|l| l.0)))
+                    .collect();
+                state.freed_by.retain(|block, _| listed.contains(block));
+            }
+        });
+    }
+
+    /// Prints what was found and stops the run. `why` empty: `block`'s link changed.
+    #[allow(clippy::too_many_arguments)]
+    fn stop(
+        e: &mut Engine,
+        event: Event,
+        this: u32,
+        class: i32,
+        count: i32,
+        old: &Row,
+        links: &[(u32, u32)],
+        block: u32,
+        why: &str,
+    ) -> ! {
+        // The check must not run again while the run unwinds.
+        e.call_hook = None;
+        let size = e.mem.u32(super::class_size_field(this, class));
+        let (checks, last, freed_by) = STATE.with(|state| {
+            let state = state.borrow();
+            let freed_by = |b: u32| state.freed_by.get(&b).cloned();
+            let blocks: Vec<(u32, Option<Vec<u32>>)> = links
+                .iter()
+                .map(|l| l.0)
+                .chain(std::iter::once(block))
+                .filter(|b| *b != 0)
+                .map(|b| (b, freed_by(b)))
+                .collect();
+            (state.checks, state.last, blocks)
+        });
+        let mut out = String::new();
+        let summary = if why.is_empty() {
+            let was = old
+                .links
+                .iter()
+                .find(|l| l.0 == block)
+                .map(|l| l.1)
+                .unwrap_or(0);
+            let now = e.mem.u32(block);
+            format!(
+                "thread memory {this:08x} class {class} ({size:#x}-byte blocks): free block \
+                 {block:08x} (link {} of {count}) was written: its link was {}, now {}",
+                links.len(),
+                word_text(was),
+                word_text(now)
+            )
+        } else if block == 0 {
+            format!(
+                "thread memory {this:08x} class {class} ({size:#x}-byte blocks): the list {why} \
+                 ({} links, count {count})",
+                links.len()
+            )
+        } else {
+            let from = links
+                .last()
+                .map(|l| format!("the link in block {:08x}", l.0))
+                .unwrap_or_else(|| format!("the head (+{:#x})", ROW_HEAD + 8 * class as u32));
+            format!(
+                "thread memory {this:08x} class {class} ({size:#x}-byte blocks): {from} \
+                 (link {} of {count}) is {}, which {why}",
+                links.len(),
+                word_text(block)
+            )
+        };
+        let _ = writeln!(out, "hkmem: {summary}");
+        let _ = writeln!(
+            out,
+            "hkmem: found at {event}; call stack (innermost first): {}",
+            stack_text(&e.call_stack)
+        );
+        match last {
+            Some((last, running)) => {
+                let _ = writeln!(
+                    out,
+                    "hkmem: last clean check (#{checks}) at {last}; between the two, \
+                     {running:08x} was running{}",
+                    if matches!(event, Event::Call(..)) && matches!(last, Event::Call(..)) {
+                        " (in `calls` mode: it, or a function it calls directly, wrote)"
+                    } else {
+                        ""
+                    }
+                );
+            }
+            None => {
+                let _ = writeln!(out, "hkmem: no clean check before this one");
+            }
+        }
+        let _ = writeln!(
+            out,
+            "hkmem: the list at the last clean check: head {:08x}, count {}: {}",
+            old.head,
+            old.count,
+            old.links
+                .iter()
+                .map(|(b, n)| format!("{b:08x}->{n:08x}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        for (b, stack) in &freed_by {
+            let _ = writeln!(
+                out,
+                "hkmem: block {b:08x} was put on the list by: {}",
+                stack.as_ref().map(|s| stack_text(s)).unwrap_or_else(|| {
+                    "(not seen: a refill, or freed before the check began)".into()
+                })
+            );
+        }
+        let bad_block = if why.is_empty() {
+            Some(block)
+        } else {
+            links.last().map(|l| l.0)
+        };
+        if let Some(b) = bad_block {
+            if e.mem.is_mapped(b) {
+                dump(e, &mut out, "the block's first bytes", b, 0x40);
+                dump(
+                    e,
+                    &mut out,
+                    "the bytes before it (the end of the block below)",
+                    b.wrapping_sub(0x40),
+                    0x40,
+                );
+            }
+        }
+        print!("{out}");
+        let window = match last {
+            Some((last, running)) => {
+                format!("found at {event}, clean at {last}; {running:08x} ran between")
+            }
+            None => format!("found at {event}, first check"),
+        };
+        panic!("hkmem check: {summary}; {window} (NV_HKMEM_CHECK; more on the hkmem: lines)");
+    }
+
+    /// A call stack, innermost first (`inner < ... < outer`, as the run's stop line has it).
+    fn stack_text(stack: &[u32]) -> String {
+        stack
+            .iter()
+            .rev()
+            .map(|a| format!("{a:08x}"))
+            .collect::<Vec<_>>()
+            .join(" < ")
     }
 }
 
@@ -963,5 +1486,162 @@ mod tests {
         assert_eq!(sizes, vec![0x2000, 0x20]);
         assert_eq!(row(&e, this, 2), (0, 0));
         assert_eq!(row(&e, this, 16), (0, 0));
+    }
+
+    /// What a run stopped with: the panic's message.
+    fn stop_message(run: impl FnOnce()) -> String {
+        let stop = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run))
+            .expect_err("the check should have stopped the run");
+        stop.downcast_ref::<String>().cloned().unwrap_or_default()
+    }
+
+    /// A thread memory with the check on, the row limit 8 and two 0x400-byte blocks (class 13)
+    /// on its list: `BLOCKS + 0x500` at the head, linking to `BLOCKS + 0x100`.
+    fn checked(e: &mut Engine, mode: hkmem_check::Mode) -> u32 {
+        hkmem_check::force(mode);
+        let (this, _, _) = fixture(e);
+        e.mem.set_u32(this + 8, 8);
+        e.call(0x00d2_c600, &args![this, BLOCKS + 0x100, 0x400i32]);
+        e.call(0x00d2_c600, &args![this, BLOCKS + 0x500, 0x400i32]);
+        assert_eq!(row(e, this, 13), (BLOCKS + 0x500, 2));
+        this
+    }
+
+    #[test]
+    fn the_hkmem_check_lets_clean_frees_and_allocations_run() {
+        let mut e = Engine::new();
+        let this = checked(&mut e, hkmem_check::Mode::Calls);
+        assert_eq!(
+            e.call(0x00d2_c5a0, &args![this, 0x400i32]).u32(),
+            BLOCKS + 0x500
+        );
+        // The taken block is the caller's now: writing it is no fault.
+        e.mem.set_u32(BLOCKS + 0x500, 0x3a03_3c7b);
+        e.call(0x00d2_c600, &args![this, BLOCKS + 0x500, 0x400i32]);
+        assert_eq!(
+            e.call(0x00d2_c5a0, &args![this, 0x380i32]).u32(),
+            BLOCKS + 0x500
+        );
+        assert_eq!(
+            e.call(0x00d2_c5a0, &args![this, 0x400i32]).u32(),
+            BLOCKS + 0x100
+        );
+        assert_eq!(row(&e, this, 13), (0, 0));
+    }
+
+    /// The p178 stop: a free block's link overwritten with float data. The check names the
+    /// block, the old and new link and stops at the next allocator call, not at the bad read.
+    #[test]
+    fn the_hkmem_check_stops_at_a_free_block_that_was_written() {
+        let mut e = Engine::new();
+        let this = checked(&mut e, hkmem_check::Mode::Allocs);
+        e.mem.set_u32(BLOCKS + 0x100, 0x3a03_3c7b);
+        let message = stop_message(|| {
+            e.call(0x00d2_c5a0, &args![this, 0x20i32]);
+        });
+        assert!(
+            message.starts_with("hkmem check: thread memory"),
+            "{message}"
+        );
+        assert!(
+            message.contains("class 13 (0x400-byte blocks): free block 00900100 (link 1 of 2) was written: its link was 00000000"),
+            "{message}"
+        );
+        assert!(message.contains("now 3a033c7b"), "{message}");
+        assert!(
+            message.contains("found at start of blockAlloc"),
+            "{message}"
+        );
+        assert!(
+            message.contains("clean at end of blockFree(")
+                && message.contains(",00900500,00000400)"),
+            "{message}"
+        );
+    }
+
+    /// In `calls` mode the check runs between any two calls, so it names the function that
+    /// was running when the block changed.
+    #[test]
+    fn the_hkmem_check_in_calls_mode_names_the_writer() {
+        let mut e = Engine::new();
+        let this = checked(&mut e, hkmem_check::Mode::Calls);
+        e.register_double(0x00ab_c000, |e, _| {
+            e.mem.set_u32(BLOCKS + 0x500, 0x3a03_3c7b);
+            Ret::default()
+        });
+        e.register_double(0x00ab_d000, |_, _| Ret::default());
+        e.call(0x00ab_d000, &args![]);
+        let message = stop_message(|| {
+            e.call(0x00ab_c000, &args![]);
+        });
+        assert!(
+            message.contains("free block 00900500 (link 0 of 2) was written"),
+            "{message}"
+        );
+        assert!(
+            message.contains("found at return from 00abc000"),
+            "{message}"
+        );
+        assert!(
+            message.contains("clean at entry to 00abc000; 00abc000 ran between"),
+            "{message}"
+        );
+        let _ = this;
+    }
+
+    /// A bad head word (not a block address) stops the run as the list is walked anew.
+    #[test]
+    fn the_hkmem_check_stops_at_a_link_that_is_not_a_block() {
+        let mut e = Engine::new();
+        let this = checked(&mut e, hkmem_check::Mode::Allocs);
+        e.mem.set_u32(this + 0xc + 8 * 13, 0x3a03_3c7b);
+        e.mem.set_u32(this + 0x10 + 8 * 13, 3);
+        let message = stop_message(|| {
+            e.call(0x00d2_c5a0, &args![this, 0x400i32]);
+        });
+        assert!(
+            message.contains("the head (+0x74) (link 0 of 3) is 3a033c7b (f32 5.0"),
+            "{message}"
+        );
+        assert!(
+            message.contains("which is not 16-byte aligned"),
+            "{message}"
+        );
+    }
+
+    /// The p180w write: an output entry whose id was freed (slot 0xff) would be copied 0x2010
+    /// bytes past the atom; the check stops first and names the remover.
+    #[test]
+    fn the_hkmem_check_stops_at_a_freed_contact_id() {
+        let mut e = Engine::new();
+        hkmem_check::force(hkmem_check::Mode::Allocs);
+        let mgr = e.mem.alloc(0x60);
+        let table = e.mem.alloc(8);
+        let atom = e.mem.alloc(0x100);
+        e.mem.write(table, &[1, 0xff, 0, 0, 0, 0, 0, 0]);
+        e.mem.set_u32(mgr + 0x20, table);
+        e.mem.set_u32(mgr + 0x24, 3);
+        e.mem.set_u32(mgr + 0x3c, atom);
+        e.mem.set_u16(atom + 4, 2);
+        e.mem.set_u16(atom + 6, 4);
+        let entry = e.mem.alloc(0x30);
+        // Ids in use pass.
+        hkmem_check::check_contact_id(&mut e, mgr, 0, entry);
+        hkmem_check::check_contact_id(&mut e, mgr, 2, entry);
+        hkmem_check::note_contact_removed(&e, mgr, 1);
+        let message = stop_message(|| hkmem_check::check_contact_id(&mut e, mgr, 1, entry));
+        assert!(
+            message.contains("id 0x1 was freed (its slot is 0xff)"),
+            "{message}"
+        );
+        assert!(
+            message.contains(&format!("would write {:08x}", atom + 0x2010)),
+            "{message}"
+        );
+        let message = stop_message(|| hkmem_check::check_contact_id(&mut e, mgr, 3, entry));
+        assert!(
+            message.contains("past the id table (size 0x3)"),
+            "{message}"
+        );
     }
 }

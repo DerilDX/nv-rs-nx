@@ -55,9 +55,12 @@ Experimental, but already playable in places:
   the Saddle* and *Ghost Town Gunfight*.
 - **Systems in play:** combat, NPC AI and navigation, dialogue, barter, the
   Pip-Boy, the radio, physics and ragdolls, terminals and hacking.
-- **The engine port:** about half of the original game's code has been
-  carefully ported so far. Since Build 42 it runs inside the game, starting
-  with quests, which now load and run on the original's own logic.
+- **The engine port:** nearly all of the original program's functions are
+  translated (see the bar below). Since Build 42 the translation runs inside
+  the game, starting with quests. In the separate play build, the game's own
+  code now starts a new game in Doc Mitchell's house, plays the opening
+  (Doc's speech, the name box) and reaches the race menu. It is not yet the
+  default way to play.
 
 <table>
   <tr>
@@ -85,10 +88,10 @@ playable build:
 | | System | Status |
 | :---: | --- | --- |
 | ✅ | **Foundations:** the map of the original program, the frame order, the engine running in play | Done (Build 42) |
-| 🔨 | **Movement and physics:** how walking, jumping and collisions feel | In progress: every physics function translated (all 9,011 Havok functions; 739 still have a marked untranslated part, mostly C++ exception frames). In the play build the game's own code now runs its whole start-up, its main loop and main menu at about 60 frames a second, starts a new game and plays the intro; next: Doc Mitchell's house and the movement checks |
+| 🔨 | **Movement and physics:** how walking, jumping and collisions feel | In progress: every physics function translated (all 9,015 Havok functions; 739 still have a marked untranslated part, mostly C++ exception frames). In the play build the game's own code starts a new game, loads Doc Mitchell's house, plays the opening (Doc's speech, the name box) and reaches the race menu, taking its input from the game window; next: the movement checks against the original |
 | 🔨 | **Animation and faces** | In progress: every function translated (some still lack their C++ exception frames), not yet switched on |
-| 🔨 | **Audio:** sounds, music and the radio | Every function translated; DirectSound, the music graph (DirectShow and MP3), Vorbis and the 2D mixer run on our own layer, sound output through Windows audio is being switched on in the play build |
-| 🔨 | **Graphics:** lighting, weather and effects matching the original | In progress: trees (SpeedTree) translated; the game's own renderer is translated to run on our own Direct3D 9 layer ([ADR-0007](docs/adr/0007-renderer-translated-on-own-d3d9-layer.md)); every function translated, being brought up in the play build |
+| 🔨 | **Audio:** sounds, music and the radio | Every function translated; DirectSound, the music graph (DirectShow and MP3), Vorbis and the mixer run on our own layer. In the play build, `NV_SOUND=out` plays the game's own sound on the real audio device; the resampling, 3D sound and distortion are approximate for now ([docs/SOUND.md](docs/SOUND.md)) |
+| 🔨 | **Graphics:** lighting, weather and effects matching the original | In progress: every function translated. In the play build on Windows, `NV_D3D9=real` sends the game's own renderer to the real Direct3D 9 in its own window ([ADR-0008](docs/adr/0008-d3d9-layer-forwarded-to-the-real-runtime.md)); the cross-platform layer on wgpu ([ADR-0007](docs/adr/0007-renderer-translated-on-own-d3d9-layer.md)) is not built yet. Not yet compared against the original |
 | ⬜ | **Gameplay:** combat, AI, quests, dialogue, menus, V.A.T.S., perks, crafting and minigames | Every function translated, not yet switched on |
 | ⬜ | **Saves and the open world:** original saves, world streaming | Planned |
 

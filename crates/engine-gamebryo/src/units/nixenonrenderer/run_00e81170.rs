@@ -58,6 +58,10 @@ pub fn fn_00e812f0(
 ) -> u32 {
     let base = this.addr();
     let mut result = buffer_data;
+    // Diagnostic only (`NV_HEAD_CHECK`, not exe behaviour): notes the geometry's skin and data.
+    if super::run_00e6fbb0::head_check_enabled() {
+        super::run_00e6fbb0::head_check_note_geometry(e, geometry);
+    }
     if geometry != 0 && e.mem.u32(base.wrapping_add(0x38)) == 0 {
         let data = e.mem.u32(geometry.wrapping_add(0xb8));
         let second = e.mem.u32(geometry.wrapping_add(0xbc));

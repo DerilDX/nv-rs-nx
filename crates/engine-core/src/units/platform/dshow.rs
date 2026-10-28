@@ -7,9 +7,10 @@
 //! pin; Windows then builds the rest of the graph (measured: "MPEG-I Stream Splitter", "MP3
 //! Decoder DMO", "Default DirectSound Device"). Here `Render` connects the game's pin to this
 //! layer's own input pin through the game's own pin code, reads the whole stream through the
-//! pin's `IAsyncReader` (`Length`, `SyncRead`) and decodes it with `crates/mp3`. Nothing is heard
-//! yet (the mixer and the device output come next): the graph keeps time on the platform clock
-//! (`Engine::clock_now_us`).
+//! pin's `IAsyncReader` (`Length`, `SyncRead`) and decodes it with `crates/mp3`. The graph keeps
+//! time on the platform clock (`Engine::clock_now_us`); with the host's output on
+//! (`super::dsound::want_output`) the decoded samples play as one mixer stream that follows the
+//! graph's `Run`, `Pause`, `Stop`, position and volume ([`sound_from`]).
 //!
 //! Measured on this machine (2026-10-24, `scripts/dshow-measure` on the player's `Data\Music`,
 //! read only, the graph muted; `build43-scratch/measure/dshow-*-2026-10-24.tsv`):
@@ -138,7 +139,7 @@ struct Graph {
     /// The stream's length and its duration (100 ns).
     stream_bytes: u64,
     duration: i64,
-    /// The decoded samples (interleaved 16-bit) and their format, for the output to come.
+    /// The decoded samples (interleaved 16-bit) and their format.
     samples: Vec<i16>,
     sample_rate: u32,
     channels: u16,
@@ -380,6 +381,7 @@ fn release(e: &mut Engine, this: Ptr) -> u32 {
     g.references -= 1;
     let left = g.references;
     if left == 0 {
+        super::dsound::stop_stream(e, at);
         let g = e.kernel.sound.show.graphs.remove(&at).expect("the graph");
         if g.pin != 0 {
             let connected = e
@@ -496,7 +498,36 @@ fn render(e: &mut Engine, this: Ptr, out_pin: Ptr) -> u32 {
     g.samples = samples;
     g.sample_rate = rate;
     g.channels = channels;
+    let what = format!(
+        "music {at:08x}: Render, {total} bytes, {rate} Hz, {channels} ch, {:.3} s",
+        g.duration as f64 / 1e7
+    );
+    super::dsound::note(e, &what);
     S_OK
+}
+
+/// The graph's sound on the device (`super::dsound`'s streams, keyed by the graph's address),
+/// when the host turned the output on: the decoded samples from the graph's position, at its
+/// volume. Windows' "Default DirectSound Device" renderer plays them through DirectSound; here
+/// they go to the same mixer as one stream, held while the graph is paused or stopped.
+fn sound_from(e: &mut Engine, at: u32, position: i64) {
+    let g = graph(e, at);
+    let frame = (position.max(0) as u128 * u128::from(g.sample_rate) / 10_000_000) as usize;
+    let volume = g.volume;
+    if super::dsound::has_stream(e, at) {
+        super::dsound::seek_stream(e, at, frame);
+        super::dsound::pause_stream(e, at, false);
+    } else {
+        let g = graph(e, at);
+        let pcm: Vec<u8> = g.samples.iter().flat_map(|s| s.to_le_bytes()).collect();
+        let (channels, rate) = (g.channels, g.sample_rate);
+        super::dsound::play_stream_from(e, at, pcm, channels, 16, rate, frame);
+    }
+    super::dsound::stream_volume(e, at, volume);
+    super::dsound::note(
+        e,
+        &format!("music {at:08x}: Run from {:.3} s", position as f64 / 1e7),
+    );
 }
 
 /// The samples Windows' graph gives for a stream (measured against the MP3 Decoder DMO's
@@ -523,6 +554,7 @@ fn windows_samples<B: AsRef<[u8]>>(decoder: &mut ::mp3::Decoder<B>) -> Vec<i16> 
 
 /// The stream position now (100 ns), queueing `EC_COMPLETE` when a run reached the end.
 fn position_now(e: &mut Engine, at: u32) -> i64 {
+    super::dsound::tick(e);
     let now = e.clock_now_us();
     let g = graph(e, at);
     match g.run {
@@ -547,8 +579,9 @@ fn control_run(e: &mut Engine, this: Ptr) -> u32 {
     let at = graph_of(e, this);
     let now = e.clock_now_us();
     let g = graph(e, at);
-    match g.run {
-        Run::Running { .. } => S_OK,
+    let base = g.base;
+    let r = match g.run {
+        Run::Running { .. } => return S_OK,
         Run::Paused => {
             g.run = Run::Running { start: now };
             S_OK
@@ -563,7 +596,9 @@ fn control_run(e: &mut Engine, this: Ptr) -> u32 {
             g.run = Run::Running { start: now };
             S_FALSE
         }
-    }
+    };
+    sound_from(e, at, base);
+    r
 }
 
 /// `Pause()`: see the module documentation. Pausing a stopped graph is not provided.
@@ -578,6 +613,7 @@ fn control_pause(e: &mut Engine, this: Ptr) -> u32 {
     g.base = p;
     g.run = Run::Paused;
     g.events.push_back((EC_PAUSED, 0, 0, 0));
+    super::dsound::pause_stream(e, at, true);
     S_OK
 }
 
@@ -588,6 +624,7 @@ fn control_stop(e: &mut Engine, this: Ptr) -> u32 {
     let g = graph(e, at);
     g.base = p;
     g.run = Run::Stopped;
+    super::dsound::pause_stream(e, at, true);
     S_OK
 }
 
@@ -623,8 +660,15 @@ fn put_current_position(e: &mut Engine, this: Ptr, seconds: f64) -> u32 {
     let units = ((seconds * 1e7) as i64).min(g.duration);
     g.base = units;
     g.completed = false;
-    if let Run::Running { .. } = g.run {
+    let running = matches!(g.run, Run::Running { .. });
+    if running {
         g.run = Run::Running { start: now };
+    }
+    let frame = (units.max(0) as u128 * u128::from(g.sample_rate) / 10_000_000) as usize;
+    super::dsound::seek_stream(e, at, frame);
+    if running {
+        // A stream that had played to its end goes on again.
+        super::dsound::pause_stream(e, at, false);
     }
     S_OK
 }
@@ -636,6 +680,7 @@ fn put_volume(e: &mut Engine, this: Ptr, v: i32) -> u32 {
         return E_INVALIDARG;
     }
     graph(e, at).volume = v;
+    super::dsound::stream_volume(e, at, v);
     S_OK
 }
 

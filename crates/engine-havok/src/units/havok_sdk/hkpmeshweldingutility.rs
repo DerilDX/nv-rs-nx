@@ -85,16 +85,22 @@ fn store(e: &mut Engine, at: u32, v: Lanes) {
     }
 }
 
+// The lane arithmetic keeps the SSE NaN rules (`crate::sse`): the first operand is the
+// instruction's destination (`ADDPS a, b` is `add(a, b)`), whose NaN wins over the source's.
+// Host `+`/`*` leave the choice of NaN to LLVM, which may swap the operands of a commutative
+// operation depending on how the surrounding code inlines (605bfeb5's inlined memory accessors
+// turned 00ddd5a0's NaN results around).
+
 fn add(a: Lanes, b: Lanes) -> Lanes {
-    std::array::from_fn(|lane| a[lane] + b[lane])
+    crate::sse::addps(a, b)
 }
 
 fn sub(a: Lanes, b: Lanes) -> Lanes {
-    std::array::from_fn(|lane| a[lane] - b[lane])
+    crate::sse::subps(a, b)
 }
 
 fn mul(a: Lanes, b: Lanes) -> Lanes {
-    std::array::from_fn(|lane| a[lane] * b[lane])
+    crate::sse::mulps(a, b)
 }
 
 fn splat(value: f32) -> Lanes {
@@ -123,7 +129,7 @@ fn cross(a: Lanes, b: Lanes) -> Lanes {
 /// The sum of the three lowest lanes of `v`, `v[2] + (v[1] + v[0])` as the SSE shuffles
 /// and `ADDSS` add them.
 fn sum3(v: Lanes) -> f32 {
-    v[2] + (v[1] + v[0])
+    crate::sse::add(v[2], crate::sse::add(v[1], v[0]))
 }
 
 fn dot3(a: Lanes, b: Lanes) -> f32 {
@@ -1136,6 +1142,47 @@ mod tests {
             *seen.borrow(),
             vec![vec![2.0f32.to_bits(), 1.0f32.to_bits()]]
         );
+    }
+
+    /// The dot products keep the SSE choice of NaN (00ddd5a0: `MULPS v, z`, `ADDSS l1, l0`,
+    /// `ADDSS l2, (l1 + l0)`): of two NaNs the destination's wins. The inputs are the oracle's
+    /// vectors 00ddd5a0_7 and _9, which went wrong when LLVM swapped the host additions.
+    #[test]
+    fn the_angle_helper_keeps_the_sse_choice_of_nan_in_the_dot_products() {
+        let bits = |v: [u32; 4]| v.map(f32::from_bits);
+        let cases = [
+            // _7: y . z is NaN(7fc00000) + (0.5 + NaN(7fffffff)), x . z is
+            // NaN(7fc00000) + (NaN(ffffffff) + tiny).
+            (
+                [0x0000_0003, 0xffff_ffff, 0x8000_0000, 0],
+                [0x7fff_ffff, 0x3f80_0000, 0xbf80_0000, 0],
+                [0x3fc0_0000, 0x3f00_0000, 0x7fc0_0000, 0],
+                [0x7fc0_0000, 0x7fc0_0000],
+            ),
+            // _9: y . z is tiny + (inf + NaN(7fc00000)), x . z is
+            // tiny + (NaN(7fffffff) + NaN(7fc00000)).
+            (
+                [0x8000_0000, 0x7fff_ffff, 0x3f80_0000, 0],
+                [0xbf80_0000, 0x3fc0_0000, 0x3f00_0000, 0],
+                [0x7fc0_0000, 0x7f80_0000, 0x0000_0001, 0],
+                [0x7fc0_0000, 0x7fff_ffff],
+            ),
+        ];
+        for (x_bits, y_bits, z_bits, want) in cases {
+            let mut e = Engine::new();
+            let seen: Log = Rc::default();
+            let sink = Rc::clone(&seen);
+            e.register_double(ATAN2_APPROXIMATION, move |_, a| {
+                sink.borrow_mut().push(a.to_vec());
+                Ret::default()
+            });
+            let (x, y, z) = (e.mem.alloc(16), e.mem.alloc(16), e.mem.alloc(16));
+            store(&mut e, x, bits(x_bits));
+            store(&mut e, y, bits(y_bits));
+            store(&mut e, z, bits(z_bits));
+            e.call(0x00ddd5a0, &args![x, y, z]);
+            assert_eq!(*seen.borrow(), vec![want.to_vec()], "{x_bits:x?}");
+        }
     }
 
     fn prism_rig() -> Engine {

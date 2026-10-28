@@ -275,10 +275,20 @@ pub fn fn_00d0a4f0(e: &mut Engine, this: Ptr) {
     e.mem.set_u32(base + 0x14, 0x0102_f13c);
 }
 
+// Translated from 00d0a270 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function; 00d0a270 to its `JMP` at 00d0a27e, inside the body Ghidra
+/// gives `00d0a340`): `thiscall`, one stack word. Moves the word up by 0x10 in its stack slot
+/// and jumps to `00d97710` on the object at `this + 0x10` with it (that function pops the word).
+pub fn fn_00d0a270(e: &mut Engine, this: Ptr, value: u32) {
+    let inner = e.mem.u32(this.addr().wrapping_add(0x10));
+    e.call(0x00d9_7710, &args![inner, value.wrapping_add(0x10)]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00d0_a240, deleting_destructor_00d0a240(Ptr, u8) -> Ptr),
+        entry!(0x00d0_a270, fn_00d0a270(Ptr, u32)),
         entry!(0x00d0_a1d0, fn_00d0a1d0(Ptr, u32) -> u32),
         entry!(0x00d0_a200, fn_00d0a200(Ptr, u32) -> u32),
         entry!(0x00d0_a210, fn_00d0a210(Ptr, u32) -> u32),
@@ -716,5 +726,29 @@ mod havok_a04_tests {
             assert_eq!(e.mem.u32(this + 0x14), 0x0102_f13c);
             assert_eq!(e.mem.u32(this + 0x18), 0x0104_e3d0);
         }
+    }
+}
+
+#[cfg(test)]
+mod gap1_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00d0a270_hands_the_raised_word_to_00d97710() {
+        let mut e = Engine::new();
+        e.register(0x00d9_7710, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        let this = e.mem.alloc(0x20);
+        e.mem.set_u32(this + 0x10, 0x4444);
+        e.call(0x00d0_a270, &args![this, 0x100u32]);
+        let seen: Vec<Vec<u32>> = e
+            .call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| *a == 0x00d9_7710)
+            .map(|(_, w)| w)
+            .collect();
+        assert_eq!(seen, vec![vec![0x4444, 0x110]]);
     }
 }

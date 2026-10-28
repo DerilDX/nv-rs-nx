@@ -248,6 +248,9 @@ pub fn fn_00e6fe30(
                 let result = e.call(TRANSFORM_MULTIPLY, &[root, scratch, product]).u32();
                 copy_transform(e, product, result);
             }
+            if skin_check_enabled() {
+                skin_check(e, skin, bone, node, product);
+            }
             if registers == 4 {
                 let scale = x87_quiet_bits(e.mem.u32(product + 0x30));
                 let builder = if layout != 0 {
@@ -264,9 +267,590 @@ pub fn fn_00e6fe30(
             matrix = matrix.wrapping_add(0x40);
             rows = rows.wrapping_add(0x30);
         }
+        if registers == 3 && head_check_enabled() {
+            head_skin_check(e, skin, buffer, bones);
+        }
         let state = e.mem.u32(renderer + RENDERER_STATE_OBJECT);
         e.vcall(state, 0xf8, &[u32::from(outside)]);
     });
+}
+
+/// Whether the bone-matrix check below runs (`NV_SKIN_CHECK` set; read once).
+fn skin_check_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("NV_SKIN_CHECK").is_some())
+}
+
+/// Lines the check has printed (it stops at [`SKIN_CHECK_LIMIT`]).
+static SKIN_CHECK_LINES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+const SKIN_CHECK_LIMIT: u32 = 400;
+
+/// What the check finds wrong with one bone's skinning transform (`bone.world * bind`, or
+/// with the world as well): `None` when the rotation's columns are unit length and
+/// perpendicular (within 2%) and the scale is between 0.5 and 2.
+fn skin_matrix_fault(rotation: [f32; 9], scale: f32) -> Option<String> {
+    let column = |c: usize| [rotation[c], rotation[3 + c], rotation[6 + c]];
+    let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let (c0, c1, c2) = (column(0), column(1), column(2));
+    let norms = [dot(c0, c0).sqrt(), dot(c1, c1).sqrt(), dot(c2, c2).sqrt()];
+    let skews = [dot(c0, c1), dot(c1, c2), dot(c0, c2)];
+    let stretched = norms.iter().any(|n| !((n - 1.0).abs() <= 0.02));
+    let sheared = skews.iter().any(|s| !(s.abs() <= 0.02));
+    let scaled = !(0.5..=2.0).contains(&scale);
+    if stretched || sheared || scaled {
+        Some(format!(
+            "norms {:.3} {:.3} {:.3} skews {:.3} {:.3} {:.3} scale {scale:.3}",
+            norms[0], norms[1], norms[2], skews[0], skews[1], skews[2]
+        ))
+    } else {
+        None
+    }
+}
+
+/// Diagnostic only (not exe behaviour; `NV_SKIN_CHECK`): reports a bone whose skinning
+/// transform at `product` is not a rotation times a sane scale, with the skin instance, the
+/// bone index, the bone node and its name, so a run can tell a bad bone palette (look IK,
+/// animation) from bad vertex data. With `NV_SKIN_CHECK=head` it also prints every
+/// `Bip01 Head` bone it sees (until the line limit).
+fn skin_check(e: &Engine, skin: u32, bone: u32, node: u32, product: u32) {
+    let rotation: [f32; 9] = std::array::from_fn(|i| e.mem.f32(product + 4 * i as u32));
+    let scale = e.mem.f32(product + 0x30);
+    let name_pointer = e.mem.u32(node.wrapping_add(8));
+    let name = if name_pointer == 0 {
+        String::new()
+    } else {
+        String::from_utf8_lossy(&e.mem.cstr(name_pointer)).into_owned()
+    };
+    let fault = skin_matrix_fault(rotation, scale);
+    let head = name == "Bip01 Head"
+        && std::env::var("NV_SKIN_CHECK").is_ok_and(|v| v.eq_ignore_ascii_case("head"));
+    if fault.is_none() && !head {
+        return;
+    }
+    let line = SKIN_CHECK_LINES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if line >= SKIN_CHECK_LIMIT {
+        return;
+    }
+    let translation = [0x24, 0x28, 0x2c].map(|o| e.mem.f32(product + o));
+    println!(
+        "skin check: skin {skin:08x} bone {bone} node {node:08x} '{name}' {} rot {:?} t {:?}",
+        fault.as_deref().unwrap_or("ok"),
+        rotation,
+        translation
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// `NV_HEAD_CHECK`: diagnostic only, not exe behaviour. Reads, never writes, game memory.
+//
+// Splits a stretched head between its layers in one run:
+// - `bone` lines (00e6fe30, 3-register skins with a `Bip01 Head` bone): every bone of the skin
+//   with its world position relative to `Bip01 Head` and whether the node still hangs under the
+//   skin's own root (`nif-local`: never rebound to the skeleton by `FixSkinInstances`).
+// - `skinned` lines (same place): the head geometry's data positions skinned on the CPU with the
+//   bone rows `00e6fe30` just wrote (partition weights, palettes, bone maps), as the vertex shader
+//   would; vertices far from `Bip01 Head` mean the CPU-side data (morphs, weights, palettes,
+//   bones) already stretch the head.
+// - `pack` lines (00e76770, the declaration packer): the layout of the head's vertex stream and
+//   whether the packed positions, weights and bone indices equal their sources.
+// When all three are clean while the head shows stretched, the fault is past the packed bytes:
+// the vertex declaration, the stream binding or the shader constants on the real device.
+// ---------------------------------------------------------------------------------------------
+
+/// Whether `NV_HEAD_CHECK` is set (read once).
+pub(crate) fn head_check_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("NV_HEAD_CHECK").is_some())
+}
+
+/// Lines the head check printed (it stops at [`HEAD_CHECK_LIMIT`]).
+static HEAD_CHECK_LINES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+const HEAD_CHECK_LIMIT: u32 = 1500;
+
+fn head_line(text: std::fmt::Arguments) {
+    let line = HEAD_CHECK_LINES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if line < HEAD_CHECK_LIMIT {
+        println!("head check: {text}");
+    }
+}
+
+/// What the head check has seen: each skin instance's geometry data (from the draws), the
+/// geometry data of skins with a `Bip01 Head` bone, and how often each key was reported.
+#[derive(Default)]
+struct HeadCheckState {
+    skin_data: std::collections::HashMap<u32, u32>,
+    head_data: std::collections::HashSet<u32>,
+    reports: std::collections::HashMap<(u32, u32, u32), u32>,
+}
+
+fn head_state() -> std::sync::MutexGuard<'static, HeadCheckState> {
+    static STATE: std::sync::OnceLock<std::sync::Mutex<HeadCheckState>> =
+        std::sync::OnceLock::new();
+    let state = STATE.get_or_init(Default::default);
+    state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Whether to report key `key` this time (and counts it): the first three times, then every
+/// 600th, and always when `urgent`.
+fn head_report_due(key: (u32, u32, u32), urgent: bool) -> bool {
+    let mut state = head_state();
+    let count = state.reports.entry(key).or_insert(0);
+    *count += 1;
+    urgent || *count <= 3 || *count % 600 == 0
+}
+
+/// Notes a drawn geometry's skin instance (+0xBC) and model data (+0xB8) for the head check.
+pub(crate) fn head_check_note_geometry(e: &Engine, geometry: u32) {
+    if geometry == 0 {
+        return;
+    }
+    let data = e.mem.u32(geometry.wrapping_add(0xb8));
+    let skin = e.mem.u32(geometry.wrapping_add(0xbc));
+    if data != 0 && skin != 0 {
+        head_state().skin_data.insert(skin, data);
+    }
+}
+
+/// Whether `data` is the geometry data of a skin with a `Bip01 Head` bone.
+pub(crate) fn head_check_is_head_data(data: u32) -> bool {
+    head_state().head_data.contains(&data)
+}
+
+/// The name of an `NiObjectNET` (+8), empty without one.
+fn object_name(e: &Engine, object: u32) -> String {
+    if object == 0 {
+        return String::new();
+    }
+    let name = e.mem.u32(object.wrapping_add(8));
+    if name == 0 {
+        return String::new();
+    }
+    String::from_utf8_lossy(&e.mem.cstr(name)).into_owned()
+}
+
+/// Three floats at `at`.
+fn point(e: &Engine, at: u32) -> [f32; 3] {
+    [
+        e.mem.f32(at),
+        e.mem.f32(at.wrapping_add(4)),
+        e.mem.f32(at.wrapping_add(8)),
+    ]
+}
+
+fn distance(a: [f32; 3], b: [f32; 3]) -> f32 {
+    ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
+}
+
+/// `v` through one bone's three rows as `00e6fe30` writes them (row r: three rotation-times-
+/// scale floats, then the translation), the way the vertex shader applies them.
+fn skin_point(rows: &[f32; 12], v: [f32; 3]) -> [f32; 3] {
+    std::array::from_fn(|r| {
+        rows[4 * r] * v[0] + rows[4 * r + 1] * v[1] + rows[4 * r + 2] * v[2] + rows[4 * r + 3]
+    })
+}
+
+/// Whether `ancestor` is `node` or one of its parents (`m_pkParent` +0x18, at most 256 up).
+fn hangs_under(e: &Engine, node: u32, ancestor: u32) -> bool {
+    let mut at = node;
+    for _ in 0..256 {
+        if at == 0 {
+            return false;
+        }
+        if at == ancestor {
+            return true;
+        }
+        at = e.mem.u32(at.wrapping_add(0x18));
+    }
+    false
+}
+
+/// A running box and the farthest point from the head.
+#[derive(Default)]
+struct Spread {
+    low: [f32; 3],
+    high: [f32; 3],
+    seen: bool,
+}
+
+impl Spread {
+    fn add(&mut self, p: [f32; 3]) {
+        if !self.seen {
+            self.low = p;
+            self.high = p;
+            self.seen = true;
+            return;
+        }
+        for i in 0..3 {
+            self.low[i] = self.low[i].min(p[i]);
+            self.high[i] = self.high[i].max(p[i]);
+        }
+    }
+
+    fn text(&self) -> String {
+        format!(
+            "x {:.1}..{:.1} y {:.1}..{:.1} z {:.1}..{:.1}",
+            self.low[0], self.high[0], self.low[1], self.high[1], self.low[2], self.high[2]
+        )
+    }
+}
+
+/// Head vertices skinned farther than this from `Bip01 Head` count as stretched (a human head
+/// with its neck reaches about 30 units from the head bone).
+const HEAD_REACH: f32 = 45.0;
+
+/// The `bone` and `skinned` reports for one skin (see the block comment above).
+fn head_skin_check(e: &Engine, skin: u32, buffer: u32, bones: u32) {
+    let bone_list = e.mem.u32(skin.wrapping_add(0x14));
+    if bone_list == 0 || buffer == 0 {
+        return;
+    }
+    let nodes: Vec<u32> = (0..bones)
+        .map(|b| e.mem.u32(bone_list.wrapping_add(4 * b)))
+        .collect();
+    let names: Vec<String> = nodes.iter().map(|&n| object_name(e, n)).collect();
+    let Some(head) = names.iter().position(|n| n == "Bip01 Head") else {
+        return;
+    };
+    let data = head_state().skin_data.get(&skin).copied();
+    if let Some(data) = data {
+        head_state().head_data.insert(data);
+    }
+    let origin = point(e, ORIGIN_X);
+    let head_world = point(e, nodes[head].wrapping_add(0x8c));
+    let head_at = [
+        head_world[0] - origin[0],
+        head_world[1] - origin[1],
+        head_world[2] - origin[2],
+    ];
+    let root = e.mem.u32(skin.wrapping_add(0x10));
+    let rows_of = |b: u32| -> [f32; 12] {
+        std::array::from_fn(|i| e.mem.f32(buffer.wrapping_add(b * 0x30 + 4 * i as u32)))
+    };
+
+    // The CPU skinning of the geometry data, partition by partition.
+    let mut lines = Vec::new();
+    let mut far_total = 0u32;
+    if let Some(data) = data {
+        let positions = e.mem.u32(data.wrapping_add(0x20));
+        let vertex_count = u32::from(e.mem.u16(data.wrapping_add(8)));
+        let mut source = Spread::default();
+        for v in 0..vertex_count {
+            source.add(point(e, positions.wrapping_add(v * 12)));
+        }
+        let mut partition_object = e.mem.u32(skin.wrapping_add(0xc));
+        if partition_object == 0 {
+            let skin_data = e.mem.u32(skin.wrapping_add(8));
+            partition_object = e.mem.u32(skin_data.wrapping_add(8));
+        }
+        let parts = if partition_object == 0 {
+            0
+        } else {
+            e.mem.u32(partition_object.wrapping_add(8))
+        };
+        let array = if partition_object == 0 {
+            0
+        } else {
+            e.mem.u32(partition_object.wrapping_add(0xc))
+        };
+        lines.push(format!(
+            "skinned skin {skin:08x} data {data:08x} verts {vertex_count} positions {positions:08x} \
+             data box {} partitions {parts}",
+            source.text()
+        ));
+        for p in 0..parts.min(16) {
+            let part = array.wrapping_add(p * 0x2c);
+            let part_bones = e.mem.u32(part.wrapping_add(4));
+            let weights = e.mem.u32(part.wrapping_add(8));
+            let map = e.mem.u32(part.wrapping_add(0xc));
+            let palette = e.mem.u32(part.wrapping_add(0x10));
+            let verts = u32::from(e.mem.u16(part.wrapping_add(0x1c)));
+            let bone_count = u32::from(e.mem.u16(part.wrapping_add(0x20)));
+            let per_vertex = u32::from(e.mem.u16(part.wrapping_add(0x24)));
+            let mut spread = Spread::default();
+            let mut far = 0u32;
+            let mut bad_weights = 0u32;
+            let mut bad_palette = 0u32;
+            let mut worst = (0.0f32, 0u32);
+            for i in 0..verts {
+                let index = if map == 0 {
+                    i
+                } else {
+                    u32::from(e.mem.u16(map.wrapping_add(2 * i)))
+                };
+                let v = point(e, positions.wrapping_add(index * 12));
+                let mut out = [0.0f32; 3];
+                let mut sum = 0.0f32;
+                for j in 0..per_vertex {
+                    let w = if weights == 0 {
+                        0.0
+                    } else {
+                        e.mem.f32(weights.wrapping_add(4 * (i * per_vertex + j)))
+                    };
+                    let local = if palette == 0 {
+                        j
+                    } else {
+                        u32::from(e.mem.u8(palette.wrapping_add(i * per_vertex + j)))
+                    };
+                    if local >= bone_count {
+                        bad_palette += 1;
+                        continue;
+                    }
+                    let b = u32::from(e.mem.u16(part_bones.wrapping_add(2 * local)));
+                    if b >= bones {
+                        bad_palette += 1;
+                        continue;
+                    }
+                    let s = skin_point(&rows_of(b), v);
+                    for k in 0..3 {
+                        out[k] += w * s[k];
+                    }
+                    sum += w;
+                }
+                if !((sum - 1.0).abs() <= 0.01) {
+                    bad_weights += 1;
+                }
+                let rel = [
+                    out[0] - head_at[0],
+                    out[1] - head_at[1],
+                    out[2] - head_at[2],
+                ];
+                spread.add(rel);
+                let d = distance(out, head_at);
+                if !(d <= HEAD_REACH) {
+                    far += 1;
+                }
+                if !(d <= worst.0) {
+                    worst = (d, i);
+                }
+            }
+            far_total += far;
+            lines.push(format!(
+                "skinned skin {skin:08x} partition {p}: verts {verts} bones {bone_count} per vertex \
+                 {per_vertex}; {far} farther than {HEAD_REACH} from Bip01 Head, worst {:.1} at {}; \
+                 weight sums off {bad_weights}, palette entries out of range {bad_palette}; \
+                 box around the head {}",
+                worst.0,
+                worst.1,
+                spread.text()
+            ));
+            if far > 0 {
+                let i = worst.1;
+                let index = if map == 0 {
+                    i
+                } else {
+                    u32::from(e.mem.u16(map.wrapping_add(2 * i)))
+                };
+                let mut influences = Vec::new();
+                for j in 0..per_vertex {
+                    let w = if weights == 0 {
+                        0.0
+                    } else {
+                        e.mem.f32(weights.wrapping_add(4 * (i * per_vertex + j)))
+                    };
+                    let local = if palette == 0 {
+                        j
+                    } else {
+                        u32::from(e.mem.u8(palette.wrapping_add(i * per_vertex + j)))
+                    };
+                    let b = if local < bone_count {
+                        u32::from(e.mem.u16(part_bones.wrapping_add(2 * local)))
+                    } else {
+                        u32::MAX
+                    };
+                    let name = names.get(b as usize).cloned().unwrap_or_default();
+                    influences.push(format!("{w:.3} x {local}->{b} '{name}'"));
+                }
+                lines.push(format!(
+                    "skinned skin {skin:08x} partition {p} worst vertex {i} (data {index}) at {:?}: {}",
+                    point(e, positions.wrapping_add(index * 12)),
+                    influences.join(", ")
+                ));
+            }
+        }
+    } else {
+        lines.push(format!(
+            "skinned skin {skin:08x}: no draw has shown this skin's geometry yet"
+        ));
+    }
+
+    if !head_report_due((skin, 0, 0), false)
+        && !(far_total > 0 && head_report_due((skin, 1, 0), false))
+    {
+        return;
+    }
+    head_line(format_args!(
+        "bone skin {skin:08x} root {root:08x} '{}' bones {bones}, Bip01 Head node {:08x} at {:?}",
+        object_name(e, root),
+        nodes[head],
+        head_world
+    ));
+    for (b, (&node, name)) in nodes.iter().zip(&names).enumerate() {
+        let at = point(e, node.wrapping_add(0x8c));
+        let offset = [
+            at[0] - head_world[0],
+            at[1] - head_world[1],
+            at[2] - head_world[2],
+        ];
+        let local = root != 0 && hangs_under(e, node, root);
+        head_line(format_args!(
+            "bone skin {skin:08x} {b} node {node:08x} '{name}' {:.1} from the head, offset {:?}{}",
+            distance(at, head_world),
+            offset,
+            if local {
+                " nif-local (under the skin's root: not rebound)"
+            } else {
+                ""
+            }
+        ));
+    }
+    for line in lines {
+        head_line(format_args!("{line}"));
+    }
+}
+
+/// The `pack` report of `00e76770` for one stream of a head's geometry data (see the block
+/// comment above): `entries` the stream's declaration entries (0x1c bytes each: offset +4,
+/// usage +8, type +0xc), `count` of them, `step` the vertex stride, `address` where the vertices
+/// were packed (the staging copy, before the unlock), `vertices` the vertex count and `chip` the
+/// buffer record (its buffer +8, offset +0xc, size +0x14, lock flags +0x10).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn head_pack_check(
+    e: &Engine,
+    data: u32,
+    partition: u32,
+    stream: u32,
+    entries: u32,
+    count: u32,
+    step: u32,
+    address: u32,
+    vertices: u32,
+    chip: u32,
+    flags: u32,
+) {
+    let positions = e.mem.u32(data.wrapping_add(0x20));
+    let (map, weights, palette, per_vertex) = if partition == 0 {
+        (0, 0, 0, 0)
+    } else {
+        (
+            e.mem.u32(partition.wrapping_add(0xc)),
+            e.mem.u32(partition.wrapping_add(8)),
+            e.mem.u32(partition.wrapping_add(0x10)),
+            u32::from(e.mem.u16(partition.wrapping_add(0x24))),
+        )
+    };
+    let mut layout = Vec::new();
+    let mut position_off = 0u32;
+    let mut weight_off = 0u32;
+    let mut index_off = 0u32;
+    for k in 0..count.min(32) {
+        let entry = entries.wrapping_add(k * 0x1c);
+        let offset = e.mem.u32(entry.wrapping_add(4));
+        let usage = e.mem.u32(entry.wrapping_add(8));
+        let kind = e.mem.u32(entry.wrapping_add(0xc));
+        layout.push(format!("u{usage}/t{kind}@{offset}"));
+        match (usage, kind) {
+            (0, 2) => position_off = offset + 1,
+            (1, 0..=3) => weight_off = (offset + 1) | ((kind + 1) << 24),
+            (2, 4 | 5) => index_off = offset + 1,
+            _ => {}
+        }
+    }
+    let mut position_bad = (0u32, 0.0f32, 0u32);
+    let mut weight_bad = 0u32;
+    let mut index_bad = 0u32;
+    for i in 0..vertices {
+        let index = if map == 0 {
+            i
+        } else {
+            u32::from(e.mem.u16(map.wrapping_add(2 * i)))
+        };
+        let vertex = address.wrapping_add(i * step);
+        if position_off != 0 && positions != 0 {
+            let packed = point(e, vertex.wrapping_add(position_off - 1));
+            let source = point(e, positions.wrapping_add(index * 12));
+            let d = distance(packed, source);
+            if !(d <= 1e-4) {
+                position_bad.0 += 1;
+                if !(d <= position_bad.1) {
+                    position_bad = (position_bad.0, d, i);
+                }
+            }
+        }
+        if weight_off != 0 && weights != 0 {
+            let floats = (weight_off >> 24).min(per_vertex.min(3));
+            let at = vertex.wrapping_add((weight_off & 0xff_ffff) - 1);
+            for j in 0..floats {
+                let packed = e.mem.u32(at.wrapping_add(4 * j));
+                let source = e.mem.u32(weights.wrapping_add(4 * (i * per_vertex + j)));
+                if packed != source {
+                    weight_bad += 1;
+                }
+            }
+        }
+        if index_off != 0 && palette != 0 {
+            let at = vertex.wrapping_add(index_off - 1);
+            for j in 0..per_vertex.min(4) {
+                if e.mem.u8(at.wrapping_add(j))
+                    != e.mem.u8(palette.wrapping_add(i * per_vertex + j))
+                {
+                    index_bad += 1;
+                }
+            }
+        }
+    }
+    let bad = position_bad.0 + weight_bad + index_bad;
+    if !head_report_due((data, partition, stream + 0x100), bad > 0) {
+        return;
+    }
+    let buffer = e.mem.u32(chip.wrapping_add(8));
+    head_line(format_args!(
+        "pack data {data:08x} partition {partition:08x} stream {stream} verts {vertices} stride \
+         {step} flags {flags:03x} chip {chip:08x} (buffer {buffer:08x} offset {} size {} lock {:x}) \
+         at {address:08x}; layout {}; positions differing {} (worst {:.4} at {}), weight words \
+         differing {weight_bad}, bone index bytes differing {index_bad}",
+        e.mem.u32(chip.wrapping_add(0xc)),
+        e.mem.u32(chip.wrapping_add(0x14)),
+        e.mem.u32(chip.wrapping_add(0x10)),
+        layout.join(" "),
+        position_bad.0,
+        position_bad.1,
+        position_bad.2
+    ));
+}
+
+/// The `pack` report of the fixed-layout packer `00e8c820` for a head's geometry data: whether
+/// the positions at `positions_at` (`size` bytes apart) equal the data's.
+pub(crate) fn head_plain_pack_check(
+    e: &Engine,
+    data: u32,
+    partition: u32,
+    positions_at: u32,
+    size: u32,
+    vertices: u32,
+    mask: u32,
+) {
+    let positions = e.mem.u32(data.wrapping_add(0x20));
+    let map = e.mem.u32(partition.wrapping_add(0xc));
+    let mut bad = 0u32;
+    for i in 0..vertices {
+        let index = if map == 0 {
+            i
+        } else {
+            u32::from(e.mem.u16(map.wrapping_add(2 * i)))
+        };
+        let packed = point(e, positions_at.wrapping_add(i * size));
+        if !(distance(packed, point(e, positions.wrapping_add(index * 12))) <= 1e-4) {
+            bad += 1;
+        }
+    }
+    if head_report_due((data, partition, 0x200), bad > 0) {
+        head_line(format_args!(
+            "pack (00e8c820) data {data:08x} partition {partition:08x} verts {vertices} stride \
+             {size} mask {mask:03x}; positions differing {bad}"
+        ));
+    }
 }
 
 /// The inline 3x4 rows of `00e6fe30` (`rows` is the row block + 0x20, as
@@ -406,6 +990,37 @@ mod n010_tests {
         e.call(0x00e6_fda0, &args![renderer, bones, partition, transform]);
         let log = e.call_log.take().unwrap();
         assert!(!log.iter().any(|c| c.0 == set_transform));
+    }
+}
+
+#[cfg(test)]
+mod head_check_tests {
+    use super::*;
+
+    #[test]
+    fn skin_point_applies_the_rows_as_the_shader_does() {
+        // Rows of a 90 degree turn about z, scale 2, translation (10, 20, 30).
+        let rows = [
+            0.0, -2.0, 0.0, 10.0, //
+            2.0, 0.0, 0.0, 20.0, //
+            0.0, 0.0, 2.0, 30.0,
+        ];
+        assert_eq!(skin_point(&rows, [1.0, 0.0, 0.5]), [10.0, 22.0, 31.0]);
+    }
+
+    #[test]
+    fn hangs_under_follows_the_parents() {
+        let mut e = Engine::new();
+        let root = e.mem.alloc(0x20);
+        let middle = e.mem.alloc(0x20);
+        let leaf = e.mem.alloc(0x20);
+        let other = e.mem.alloc(0x20);
+        e.mem.set_u32(middle + 0x18, root);
+        e.mem.set_u32(leaf + 0x18, middle);
+        assert!(hangs_under(&e, leaf, root));
+        assert!(hangs_under(&e, root, root));
+        assert!(!hangs_under(&e, leaf, other));
+        assert!(!hangs_under(&e, 0, root));
     }
 }
 
@@ -612,5 +1227,23 @@ mod tests {
         assert!(bone_scale_outside(&e, 0.75f32.to_bits()));
         assert!(!bone_scale_outside(&e, 0.4f32.to_bits()));
         assert!(!bone_scale_outside(&e, f32::NAN.to_bits()));
+    }
+
+    #[test]
+    fn skin_matrix_fault_passes_rotations_and_reports_stretch() {
+        let identity = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+        assert!(skin_matrix_fault(identity, 1.0).is_none());
+        // A quarter turn about Z is still a rotation.
+        let turn = [0.0, -1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0];
+        assert!(skin_matrix_fault(turn, 1.0).is_none());
+        // One column stretched by 1.5 (as a non-unit quaternion turned into a matrix gives).
+        let stretched = [1.5, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+        assert!(skin_matrix_fault(stretched, 1.0).is_some());
+        // Sheared columns.
+        let sheared = [1.0, 0.3, 0.0, 0.0, 0.954, 0.0, 0.0, 0.0, 1.0];
+        assert!(skin_matrix_fault(sheared, 1.0).is_some());
+        // A wild scale or a NaN.
+        assert!(skin_matrix_fault(identity, 3.0).is_some());
+        assert!(skin_matrix_fault([f32::NAN; 9], 1.0).is_some());
     }
 }

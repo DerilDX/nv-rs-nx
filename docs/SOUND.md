@@ -10,9 +10,57 @@ in `scripts/`.
 | Music | `platform/dshow.rs`, `crates/mp3` | DirectShow's filter graph and MP3 decoder | `scripts/dshow-measure` | Graph answers as measured. All 199 tracks are the same length, and 99.9748% of samples are identical |
 | Wave files | `platform/mmio.rs` | `mmio*` | `scripts/mmio-measure` | Edge cases as measured |
 | DirectSound | `platform/dsound.rs` | DirectSound 8 objects, cursors | `scripts/dsound-capture` | Answers and cursors as measured |
-| Mixer | `platform/mixer.rs`, `platform/sound_out.rs` | DirectSound's mixer, the device | `scripts/dsmix-measure` (WASAPI loopback) | 2D path bit-exact; resampler, 3D, distortion not provided |
+| Mixer | `platform/mixer.rs`, `platform/sound_out.rs` | DirectSound's mixer, the device | `scripts/dsmix-measure` (WASAPI loopback) | 2D path bit-exact; resampler and 3D approximate, distortion heard dry (open) |
 | Voices and sounds | `platform/vorbisfile.rs`, `crates/vorbis` | `libvorbisfile.dll`/`libvorbis.dll` (1.2.0) | `scripts/vorbis-record` | Bit-exact at 24-bit and 53-bit x87; 64-bit not provided |
 | Movie sound | `platform/bink.rs` | Bink's DirectSound sound system | `nv-bink --sound-system`, `--wait --sound` | `BinkSetSoundSystem` answers 1 as measured; the movie track plays as a mixer voice on the clock schedule (output off by default) |
+
+## Hearing the game (`NV_SOUND=out`)
+
+The output is off by default and in the tests. With `NV_SOUND=out` the host has `dsound` start
+it when the game makes its device (`DirectSoundCreate8` in `BSWin32Audio::Init`, `00aea230`).
+From then on these go through the mixer to the default device (WASAPI shared mode):
+- every secondary buffer the game plays (WAV through mmio, Vorbis voices);
+- the music graph's decoded MP3, one stream that follows `Run`, `Pause`, `Stop`, the
+  position and the volume;
+- the movie's Bink track.
+
+`NV_SOUND_RECORD=FILE.wav` records what goes to the device (32-bit float), and `FILE.log`
+lists what started when: real ms, frames recorded, game clock ms, then the event (`Play` of a
+buffer with its format, music `Render`/`Run`, the movie's track, sound file opens, `mmioOpen`
+names, Ogg opens, pace skips).
+
+**Pace.** The game reads its buffers' cursors and the music position from the platform clock,
+and the output follows that clock. Within 100 ms it keeps the device's pace. When the clock
+runs ahead it skips on: it mixes the frames and drops them. When the clock falls behind it
+gives silence. `NV_SOUND=device` keeps the device's pace instead, for listening.
+
+In the first play run (2026-10-27, `ng.sh`), every game thread's `Sleep` moved the platform
+clock on, so it ran ahead of real time while threads slept:
+
+| Phase | Game clock against real time |
+| --- | --- |
+| Start-up before the first main frame | x16 to x37 |
+| Main menu and the intro movie | x1.0 |
+| Loading Doc Mitchell's house | x19 |
+
+During start-up the title music was heard only in pieces: the game finished its 125 s track
+three times in 18 s of real time and started it again each time.
+
+The thread host now keeps the clock at real time (`thread_host.rs`). A game thread's `Sleep`
+waits for its wake time without moving the clock, and main's `Sleep`, or a wait while every
+thread sleeps, really waits. Later runs (s11, s13) show no pace skips: the title music plays
+whole, UI sounds play when the keys are pressed, and Doc Mitchell's voices start as the house
+loads.
+
+What a run plays (s11, `NV_D3D9=real`, the intro skipped with E):
+
+| Real time | What |
+| --- | --- |
+| 0.4 s | output on (48000 Hz stereo, the default device) |
+| 4.3 s | `Music\Special\MainTitle.mp3` (48 kHz stereo, 125.4 s, exact path) |
+| 51.3-51.5 s | `ui_menu_focus.wav`, `ui_menu_ok.wav` (32 kHz mono, resampled) |
+| 55.3 s | `FNVIntro.bik` track (48 kHz stereo, exact path) until the skip |
+| 60.6 s | 16 Vorbis voices (32 kHz mono, 3D, resampled), 5 WAV effects (32 and 44.1 kHz) |
 
 ## Mixer (DirectSound 8 to the device)
 
@@ -28,12 +76,36 @@ These were measured on a device without audio enhancements (Virtual Desktop Audi
   48,000 samples. The other 4 are the tail of a voice started 2 frames into a device
   period.
 
-**Not exact, so the platform stops with "not provided":**
-- **Resampling.** It is a long polyphase filter, not linear; least-squares fits only
-  reach -34 dB.
-- **3D.** Gains come in 0.1 dB steps, but the rule from position to gain is not derived
-  yet.
-- **Distortion.** Not analysed.
+**Not exact: heard by an approximate path, open for the maintainer** (exact or approximate
+is still the maintainer's question). Each kind is named once on stderr when it is first
+heard ("sound: approximate ..."):
+- **Resampling.** Windows uses a long polyphase filter, not linear interpolation; free
+  least-squares fits only reach -34 dB. The platform uses a Blackman-windowed sinc, 64
+  taps, cut off at 0.95 of the lower Nyquist rate (`mixer::resample_kernel`). It was chosen
+  against the `dsmix-vd` captures (residual after the best alignment, below the signal):
+
+  | Case | Linear | Cubic | Sinc 32 taps | Sinc 64, cut 0.95 |
+  | --- | --- | --- | --- | --- |
+  | 44100 on 48000 | -9.9 dB | -11.6 dB | -20.5 dB | -25.8 dB |
+  | 22050, 32000, 11025 on 48000 | about -10 dB | about -12 dB | about -20 dB | (similar to 44100) |
+  | 48000 played at 47000 or 60000 | -19 dB | -25 dB | -12 dB | -11 dB |
+
+  So for a frequency changed by `SetFrequency` near the format's rate, Windows looks more
+  like a short filter. The rate a sound plays at is right in every case. Only the filter's
+  shape differs.
+- **3D** (`mixer::spatial_millibels`). These parts are measured (the `dsmix-3d` grid, minimum
+  distance 1, within 0.1 dB at the measured points):
+  - the two channels' power adds up to a third, so straight ahead each side is at -7.8 dB;
+  - the near channel's share of that power by angle is a table, linear between the measured
+    angles;
+  - closer than 2.5 units, the share moves toward a half in proportion to the distance;
+  - past the minimum distance, the level falls by `min / (min + rolloff * (d - min))`, with `d`
+    held at the maximum distance.
+
+  Not measured, so these are open: whether the 2.5 units scale with the minimum distance,
+  height (it counts only in the distance), Doppler (not applied), and deferred settings (they
+  apply at once).
+- **Distortion.** Not analysed. A buffer with it is heard without it.
 
 ## Vorbis
 

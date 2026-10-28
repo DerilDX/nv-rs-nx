@@ -303,6 +303,7 @@ address	size	unit	subsystem	evidence
 00b60fc0	70		BSShader	vtable 010adef4 (010adea8 slot 19, no RTTI)
 00b63bd0	21	BSShader/bsshaderaccumulator.cpp	BSShader	vtable 010adfc8 +1 (010adfbc slot 3, no RTTI)
 00b63f10	123	BSShader/bsshaderaccumulator.cpp	BSShader	vtable 010ae090 (010adff8 slot 38, no RTTI)
+00b64020	985	BSShader/bsshaderaccumulator.cpp	BSShader	imm 00b5761b
 00b64440	69	BSShader/bsshaderaccumulator.cpp	BSShader	imm 00b576f4
 00b64490	22	BSShader/bsshaderaccumulator.cpp	BSShader	imm 00b57708
 00b644b0	128	BSShader/bsshaderaccumulator.cpp	BSShader	imm 00b576fe
@@ -350,10 +351,13 @@ address	size	unit	subsystem	evidence
 00b81110	20		BSShader	vtable 010af9b0 (010af8e8 slot 50, no RTTI)
 00b811e0	6		BSShader	vtable 010af8f0 (010af8e8 slot 2, no RTTI)
 00b811f0	10		BSShader	vtable 010af9b8 (010af8e8 slot 52, no RTTI)
+00b81760	1090		BSShader	vtable 010afad0 (010af9e0 slot 60, no RTTI)
+00b81d60	1421		BSShader	vtable 010afadc (010af9e0 slot 63, no RTTI)
 00b827b0	6	BSShader/watershader.cpp	BSShader	vtable 010af9e8 (010af9e0 slot 2, no RTTI)
 00b861d0	450	BSShader/watershader.cpp	BSShader	vtable 010afa2c (010af9e0 slot 19, no RTTI)
 00b863a0	294	BSShader/watershader.cpp	BSShader	vtable 010afa58 (010af9e0 slot 30, no RTTI)
 00b86b80	79	BSShader/watershader.cpp	BSShader	vtable 010afa6c (010af9e0 slot 35, no RTTI)
+00b884e0	198	BSShader/skyshader.cpp	BSShader	vtable 010aff08 (010afe18 slot 60, no RTTI)
 00b887b0	6	BSShader/skyshader.cpp	BSShader	vtable 010afe20 (010afe18 slot 2, no RTTI)
 00b89970	41	BSShader/skyshader.cpp	BSShader	vtable 010afe64 (010afe18 slot 19, no RTTI)
 00b89cc0	179	BSShader/skyshader.cpp	BSShader	vtable 010afe90 (010afe18 slot 30, no RTTI)
@@ -619,6 +623,7 @@ address	size	unit	subsystem	evidence
 00bbc5c0	69	BSShader/lighting30shader.cpp	BSShader	vtable 010ba178 (010ba0f8 slot 32, no RTTI)
 00bbc9b0	6	BSShader/lighting30shader.cpp	BSShader	vtable 010ba100 (010ba0f8 slot 2, no RTTI)
 00bbe020	244	BSShader/lighting30shader.cpp	BSShader	vtable 010ba1e8 (010ba0f8 slot 60, no RTTI)
+00bbe120	1234	BSShader/lighting30shader.cpp	BSShader	vtable 010ba1f4 (010ba0f8 slot 63, no RTTI)
 00bbe650	88	BSShader/lighting30shader.cpp	BSShader	vtable 010ba170 (010ba0f8 slot 30, no RTTI)
 00bbeef0	107	BSShader/lighting30shader.cpp	BSShader	vtable 010ba184 (010ba0f8 slot 35, no RTTI)
 00bc0500	78		BSShader	vtable 010ba364 (010ba350 slot 5, no RTTI)
@@ -658,6 +663,7 @@ address	size	unit	subsystem	evidence
 00bc51a0	326		BSShader	vtable 010bb0a4 (010baf60 slot 81, no RTTI)
 00bc5440	6		BSShader	vtable 010baf68 (010baf60 slot 2, no RTTI)
 00bc5450	181		BSShader	vtable 010bafac (010baf60 slot 19, no RTTI)
+00bc6970	990	BSShader/bsshadernolighting.cpp	BSShader	vtable 010bb320 (010bb230 slot 60, no RTTI)
 00bc6de0	434	BSShader/bsshadernolighting.cpp	BSShader	vtable 010bb32c (010bb230 slot 63, no RTTI)
 00bc7710	6	BSShader/bsshadernolighting.cpp	BSShader	vtable 010bb238 (010bb230 slot 2, no RTTI)
 00bc8d40	76	BSShader/bsshadernolighting.cpp	BSShader	vtable 010bb2a8 (010bb230 slot 30, no RTTI)
@@ -679,11 +685,13 @@ address	size	unit	subsystem	evidence
 00bcd380	6		BSShader	vtable 010bb8c0 (010bb7a8 slot 70, no RTTI)
 00bcd490	6		BSShader	vtable 010bb7b0 (010bb7a8 slot 2, no RTTI)
 00bcd7c0	3389		BSShader	vtable 010bb8f4 (010bb7a8 slot 83, no RTTI)
+00bce500	447		BSShader	vtable 010bb820 (010bb7a8 slot 30, no RTTI)
 00bce8f0	85		BSShader	vtable 010bba50 (010bb980 slot 52, no RTTI)
 00bce950	2499		BSShader	vtable 010bbac8 (010bb980 slot 82, no RTTI)
 00bcf320	1176		BSShader	vtable 010bbacc (010bb980 slot 83, no RTTI)
 00bcf910	6		BSShader	vtable 010bb988 (010bb980 slot 2, no RTTI)
 00bcfd20	1032		BSShader	vtable 010bba70 (010bb980 slot 60, no RTTI)
+00bd02e0	174		BSShader	vtable 010bb9f8 (010bb980 slot 30, no RTTI)
 00bd0420	25		BSShader	vtable 010bba98 (010bb980 slot 70, no RTTI)
 00bd0490	10		BSShader	vtable 010bbc70 (010bbb50 slot 72, no RTTI)
 00bd0540	1438		BSShader	vtable 010bbc98 (010bbb50 slot 82, no RTTI)
@@ -697,6 +705,7 @@ address	size	unit	subsystem	evidence
 00bd3270	5		BSShader	vtable 010bc16c (010bc070 slot 63, no RTTI)
 00bd3280	2525		BSShader	vtable 010bc1b8 (010bc070 slot 82, no RTTI)
 00bd3c60	791		BSShader	vtable 010bc1bc (010bc070 slot 83, no RTTI)
+00bd4030	547		BSShader	vtable 010bc160 (010bc070 slot 60, no RTTI)
 00bd4560	6		BSShader	vtable 010bc078 (010bc070 slot 2, no RTTI)
 00bd4890	296		BSShader	vtable 010bc0e8 (010bc070 slot 30, no RTTI)
 00bd4f30	1000		BSShader	vtable 010bc39c (010bc260 slot 79, no RTTI)
@@ -747,6 +756,7 @@ address	size	unit	subsystem	evidence
 00c05730	46			vtable 010bcb58 (010bcb3c slot 7, no RTTI)
 00c05870	3			vtable 010bcc6c +1 (010bcb60 slot 67, no RTTI)
 00c0cd80	398			vtable 010ba234 (010ba0f8 slot 79, no RTTI)
+00c0cf10	443			vtable 010ba238 (010ba0f8 slot 80, no RTTI)
 00c0d170	51			vtable 010bb8f8 (010bb7a8 slot 84, no RTTI)
 00c1a2f0	19			vtable 010bc1c8 (010bc070 slot 86, no RTTI)
 00c1a390	5			vtable 010bccd8 (010bcc90 slot 18, no RTTI)
@@ -853,6 +863,7 @@ address	size	unit	subsystem	evidence
 00cfb050	12		Havok SDK	imm 00cfb137
 00cfb060	1		Havok SDK	imm 00cfb141
 00cfb070	5		Havok SDK	imm 00cfb181
+00d01e50	295		Havok SDK	imm 00d2cca0
 00d02220	40	Havok SDK/hkpmultithreadedsimulation.cpp	Havok SDK	push 00d0332e
 00d043d0	3		Havok SDK	imm 00d05569
 00d043e0	6		Havok SDK	imm 00d0555f
@@ -1151,11 +1162,14 @@ address	size	unit	subsystem	evidence
 00df6f80	137		Havok SDK	imm 00da3447
 00df71d0	64		Havok SDK	jmp 00df7193 +1; vtable 010db9e4 (hkCpuWorldLinearCastCollector slot 0); Ghidra holds it in the body of 00df71b0
 00df79d0	137		Havok SDK	imm 00da3429
+00df7a90	38		Havok SDK	imm 00da3422
+00df7ad0	270		Havok SDK	imm 00da340e
 00df7c00	248		Havok SDK	imm 00da34ef
 00df7d60	190		Havok SDK	imm 00da34bd
 00df8800	263		Havok SDK	imm 00da34db
 00df9470	64		Havok SDK	jmp 00df8933 +2; vtable 010dbaf8 (hkCpuWorldRayCastCollector slot 0); Ghidra holds it in the body of 00df8950
 00df9880	159		Havok SDK	imm 00da348e
+00df9920	386		Havok SDK	imm 00da34a2
 00dfb250	1		Havok SDK	data 011b98e4
 00dfb270	13		Havok SDK	imm 00fc10d9
 00dfb290	19		Havok SDK	imm 00fc10cf
@@ -1660,6 +1674,7 @@ address	size	unit	subsystem	evidence
 00ea2190	6080	NiCollision/niboxbv.cpp	NiCollision	imm 00e991ce
 00ea3950	265	NiCollision/niboxbv.cpp	NiCollision	imm 00e99129
 00ea3c50	265	NiCollision/niboxbv.cpp	NiCollision	imm 00e99137
+00ea3d60	14067	NiCollision/niboxbv.cpp	NiCollision	imm 00e991f8
 00ea7490	87	NiCollision/niboxbv.cpp	NiCollision	imm 00e9901d
 00ea7d40	14888	NiCollision/niboxbv.cpp	NiCollision	imm 00e99130
 00eabb20	1608		NiCollision	imm 00e99114

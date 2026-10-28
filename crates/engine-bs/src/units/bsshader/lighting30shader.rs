@@ -420,6 +420,336 @@ pub fn fn_00bbe020(e: &mut Engine, this: Ptr, pass: u32) {
     }
 }
 
+/// What `00bbe120` reads and writes: the fog property getter (`00b55520`, `cdecl`, the byte
+/// kind at `011f91c4`), the objects whose byte +8 enables the fog (`012010bc`) and the eye
+/// constant (`012010c0`) (entries 15 and 16 of the 17 at `01201080`, their bytes just set), the `float` 500000.0 (`010ad6e0`), the four words at `011a9bd0`, the
+/// eye position (`011fa2a0`) and the world origin (`011f474c`), and the constants it fills
+/// (`012013b0` fog, `012013c0` fog colour, `012013d0` eye).
+const FOG_ENABLE_012010BC: u32 = 0x0120_10bc;
+const EYE_ENABLE_012010C0: u32 = 0x0120_10c0;
+const FAR_010AD6E0: u32 = 0x010a_d6e0;
+const DEFAULT_COLOUR_011A9BD0: u32 = 0x011a_9bd0;
+const EYE_011FA2A0: u32 = 0x011f_a2a0;
+const FOG_CONSTANT_012013B0: u32 = 0x0120_13b0;
+const FOG_COLOUR_012013C0: u32 = 0x0120_13c0;
+const EYE_CONSTANT_012013D0: u32 = 0x0120_13d0;
+/// The three jump tables of `00bbe120`'s pass switch (read from the exe): passes 10 to 15
+/// (`00bbe5f4`), 0x1d4 to 0x1da (`00bbe60c`), and 0x2db to 0x2ed through the byte table at
+/// `00bbe634` into the three targets at `00bbe628`.
+const PASSES_00BBE5F4: [u32; 6] = [
+    0x00bb_e15d,
+    0x00bb_e167,
+    0x00bb_e171,
+    0x00bb_e17b,
+    0x00bb_e185,
+    0x00bb_e18f,
+];
+const PASSES_00BBE60C: [u32; 7] = [
+    0x00bb_e1bb,
+    0x00bb_e1c2,
+    0x00bb_e1c9,
+    0x00bb_e1d0,
+    0x00bb_e1d7,
+    0x00bb_e1de,
+    0x00bb_e1e5,
+];
+const TARGETS_00BBE628: [u32; 3] = [0x00bb_e20c, 0x00bb_e1ec, 0x00bb_e213];
+const BYTES_00BBE634: [u8; 19] = [0, 2, 2, 2, 2, 1, 0, 2, 2, 2, 2, 1, 0, 2, 2, 2, 2, 1, 0];
+
+/// The pass index `00bbe120` picks for a pass (`ESI`), following its compares and jump tables.
+fn pass_index_00bbe120(pass: u32) -> u32 {
+    let target = if pass <= 0x1d3 {
+        if pass == 0x1d3 {
+            0x00bb_e199
+        } else {
+            let case = pass.wrapping_sub(10);
+            if case > 5 {
+                0x00bb_e213
+            } else {
+                PASSES_00BBE5F4[case as usize]
+            }
+        }
+    } else if pass <= 0x2da {
+        if pass == 0x2da {
+            0x00bb_e1ec
+        } else {
+            let case = pass.wrapping_sub(0x1d4);
+            if case > 6 {
+                0x00bb_e213
+            } else {
+                PASSES_00BBE60C[case as usize]
+            }
+        }
+    } else {
+        let case = pass.wrapping_sub(0x2db);
+        if case > 0x12 {
+            0x00bb_e213
+        } else {
+            TARGETS_00BBE628[usize::from(BYTES_00BBE634[case as usize])]
+        }
+    };
+    match target {
+        0x00bb_e15d => 1,
+        0x00bb_e167 => 2,
+        0x00bb_e171 => 3,
+        0x00bb_e17b => 4,
+        0x00bb_e185 => 5,
+        0x00bb_e18f => 6,
+        0x00bb_e199 => 0x59,
+        0x00bb_e1bb => 0x5a,
+        0x00bb_e1c2 => 0x5b,
+        0x00bb_e1c9 => 0x5c,
+        0x00bb_e1d0 => 0x5d,
+        0x00bb_e1d7 => 0x5e,
+        0x00bb_e1de => 0x5f,
+        0x00bb_e1e5 => 0x60,
+        0x00bb_e1ec => 0x68,
+        0x00bb_e20c => 0x69,
+        // 00bbe213: LEA ESI, [EAX - 0x178].
+        _ => pass.wrapping_sub(0x178),
+    }
+}
+
+// Translated from 00bbe120 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function; 00bbe120 to the `RET 4` at 00bbe5ef, jump tables after
+/// it): slot 63 (+0xfc) of the vtable `010ba0f8`, `thiscall` with one stack word: the pass.
+/// Nothing for the passes 0x1e0 and 0x1e1. Otherwise the pass picks an index (10..15: 1..6,
+/// 0x1d3..0x1da: 0x59..0x60, 0x2da/0x2e0/0x2e6/0x2ec: 0x68, 0x2db/0x2e1/0x2e7/0x2ed: 0x69, any
+/// other: pass - 0x178); for the 17 shaders at `01201080` the byte +8 (when set) and the bytes
+/// `01200854 + i` become bit `i + 1` of the index's mask at `01200a28`; for the 10 objects at
+/// `012010c4` and the bytes `01200848 + j` bit `j + 1` of the mask at `01200868`. Then slot +0x24
+/// of the shader's `+0x34` and `+0x30`. With the byte +8 of `012010bc`'s object set and a fog
+/// property of kind `011f91c4` (start +0x2c, end +0x30, colour +0x20 to +0x28, power +0x60):
+/// when end and start are both 0 (`FUCOM`; NaN counts as not 0) `012013b0` = (500000, 0, power,
+/// 0) and `012013c0` the words at `011a9bd0`; otherwise (end, end - start, power, 0) and (colour,
+/// 1.0). With the byte +8 of `012010c0`'s object set, `012013d0` = the eye `011fa2a0` less the
+/// origin `011f474c`, and 1.0.
+pub fn fn_00bbe120(e: &mut Engine, this: Ptr, pass: u32) {
+    if pass == 0x1e0 || pass == 0x1e1 {
+        return;
+    }
+    let index = pass_index_00bbe120(pass);
+    let mut bit = 1u32;
+    for i in 0..0x11u32 {
+        let object = e.global::<u32>(SHADERS_01201080 + 4 * i);
+        if object != 0 {
+            let mask = e.global::<u32>(MASKS_01200A28.wrapping_add(index.wrapping_mul(4)));
+            e.mem
+                .set_u8(object + 8, u8::from(mask & bit.rotate_left(1) != 0));
+        }
+        bit = bit.rotate_left(1);
+        let mask = e.global::<u32>(MASKS_01200A28.wrapping_add(index.wrapping_mul(4)));
+        e.set_global(FLAGS_01200854 + i, u8::from(mask & bit != 0));
+    }
+    let masks = MASKS_01200868.wrapping_add(index.wrapping_mul(4));
+    for j in 1..=10u32 {
+        let object = e.global::<u32>(FLAGS_012010C4 + 4 * (j - 1));
+        if object != 0 {
+            let mask = e.global::<u32>(masks);
+            e.mem.set_u8(object + 8, (mask >> j) as u8 & 1);
+        }
+        let mask = e.global::<u32>(masks);
+        e.set_global(FLAGS_01200848 + (j - 1), (mask >> j) as u8 & 1);
+    }
+    let base = this.addr();
+    let first = e.mem.u32(base + 0x34);
+    e.vcall(first, 0x24, &args![]);
+    let second = e.mem.u32(base + 0x30);
+    e.vcall(second, 0x24, &args![]);
+    let fog_enable = e.global::<u32>(FOG_ENABLE_012010BC);
+    if e.mem.u8(fog_enable + 8) != 0 {
+        let kind = u32::from(e.global::<u8>(FOG_KIND_011F91C4));
+        let fog = e.call(GET_FOG_PROPERTY_00B55520, &args![kind]).u32();
+        if fog != 0 {
+            let start_bits = x87_quiet_bits(e.mem.u32(fog + 0x2c));
+            let colour = [0x20u32, 0x24, 0x28].map(|offset| e.mem.u32(fog + offset));
+            let end_bits = x87_quiet_bits(e.mem.u32(fog + 0x30));
+            let power_bits = x87_quiet_bits(e.mem.u32(fog + 0x60));
+            let start = x87_load32(start_bits);
+            let end = x87_load32(end_bits);
+            if end == 0.0 && start == 0.0 {
+                let far = x87_quiet_bits(e.global::<u32>(FAR_010AD6E0));
+                e.set_global(FOG_CONSTANT_012013B0, far);
+                e.set_global(FOG_CONSTANT_012013B0 + 4, x87_store32(0.0));
+                e.set_global(FOG_CONSTANT_012013B0 + 8, power_bits);
+                e.set_global(FOG_CONSTANT_012013B0 + 0xc, x87_store32(0.0));
+                for i in 0..4u32 {
+                    let word = e.global::<u32>(DEFAULT_COLOUR_011A9BD0 + 4 * i);
+                    e.set_global(FOG_COLOUR_012013C0 + 4 * i, word);
+                }
+            } else {
+                e.set_global(FOG_CONSTANT_012013B0, x87_store32(end));
+                e.set_global(FOG_CONSTANT_012013B0 + 4, x87_store32(x87_sub(end, start)));
+                e.set_global(FOG_CONSTANT_012013B0 + 8, power_bits);
+                e.set_global(FOG_CONSTANT_012013B0 + 0xc, x87_store32(0.0));
+                for (i, word) in colour.iter().enumerate() {
+                    e.set_global(FOG_COLOUR_012013C0 + 4 * i as u32, x87_quiet_bits(*word));
+                }
+                e.set_global(FOG_COLOUR_012013C0 + 0xc, x87_store32(1.0));
+            }
+        }
+    }
+    let eye_enable = e.global::<u32>(EYE_ENABLE_012010C0);
+    if e.mem.u8(eye_enable + 8) != 0 {
+        for i in 0..3u32 {
+            let eye = x87_m32(e.global::<u32>(EYE_011FA2A0 + 4 * i));
+            let origin = x87_m32(e.global::<u32>(ORIGIN_011F474C + 4 * i));
+            let value = x87_quiet_bits(x87_store32(x87_sub(eye, origin)));
+            e.set_global(EYE_CONSTANT_012013D0 + 4 * i, value);
+        }
+        e.set_global(EYE_CONSTANT_012013D0 + 0xc, x87_store32(1.0));
+    }
+}
+
+/// The shader-constant setters `00c0cf10` calls (unit `run_00c048b0`, `thiscall` on the shader):
+/// `00c0bae0` (state, property, a count), `00c0bb20` (state, property), `00c0bb50` (state,
+/// property, a byte), `00c0bba0` (state, property), `00c0bbd0` (state), `00c0bc00` (state,
+/// property, pass), `00c0bc90` (state, property), `00c0bcf0` (state, property, a word), and the
+/// word `011f9530` it copies.
+const CONSTANTS_00C0BAE0: u32 = 0x00c0_bae0;
+const CONSTANTS_00C0BB20: u32 = 0x00c0_bb20;
+const CONSTANTS_00C0BB50: u32 = 0x00c0_bb50;
+const CONSTANTS_00C0BBA0: u32 = 0x00c0_bba0;
+const CONSTANTS_00C0BBD0: u32 = 0x00c0_bbd0;
+const CONSTANTS_00C0BC00: u32 = 0x00c0_bc00;
+const CONSTANTS_00C0BC90: u32 = 0x00c0_bc90;
+const CONSTANTS_00C0BCF0: u32 = 0x00c0_bcf0;
+const STATE_WORD_SOURCE_011F9530: u32 = 0x011f_9530;
+/// The pass switch of `00c0cf10` for 0x182 to 0x1e1: the byte table at `00c0d110` into the 17
+/// code addresses at `00c0d0cc` (read from the exe).
+const TARGETS_00C0D0CC: [u32; 17] = [
+    0x00c0_cf8e,
+    0x00c0_d035,
+    0x00c0_d06a,
+    0x00c0_cfa2,
+    0x00c0_d0c6,
+    0x00c0_cffa,
+    0x00c0_cfed,
+    0x00c0_d00c,
+    0x00c0_cfbc,
+    0x00c0_d02d,
+    0x00c0_d062,
+    0x00c0_cfd8,
+    0x00c0_d026,
+    0x00c0_d07e,
+    0x00c0_d0b9,
+    0x00c0_d0a7,
+    0x00c0_d0c6,
+];
+const BYTES_00C0D110: [u8; 96] = [
+    0x00, 0x00, 0x01, 0x02, 0x03, 0x03, 0x10, 0x10, 0x00, 0x00, 0x03, 0x03, 0x04, 0x04, 0x05, 0x00,
+    0x00, 0x01, 0x02, 0x03, 0x03, 0x04, 0x04, 0x00, 0x00, 0x03, 0x03, 0x06, 0x06, 0x07, 0x08, 0x08,
+    0x09, 0x0a, 0x0b, 0x0b, 0x06, 0x06, 0x08, 0x08, 0x0b, 0x0b, 0x06, 0x06, 0x0c, 0x08, 0x08, 0x09,
+    0x0a, 0x0b, 0x0b, 0x06, 0x06, 0x08, 0x08, 0x0b, 0x0b, 0x10, 0x10, 0x0d, 0x0d, 0x0d, 0x0d, 0x0d,
+    0x0d, 0x0d, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x0e, 0x10, 0x0e, 0x10, 0x0e, 0x10,
+    0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x0f, 0x0f,
+];
+
+/// The word at `[[state + 0x24] + slot] + 8` set to `value` (a pass state's constant entry).
+fn set_state_entry(e: &mut Engine, state: u32, slot: u32, value: u32) {
+    let entries = e.mem.u32(state + 0x24);
+    let entry = e.mem.u32(entries + slot);
+    e.mem.set_u32(entry + 8, value);
+}
+
+// Translated from 00c0cf10 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function; 00c0cf10 to the `RET 8` at 00c0d0c8, its jump tables
+/// after it): slot 80 (+0x140) of the vtable `010ba0f8`, `thiscall` with two stack words: the
+/// pass and the property. With the pass state `0126f74c` (read once, first) as `state`: passes
+/// 0xe and 0xf run `00bbdda0` (property, state); 0x181 sets the state's constant entries +0x10
+/// (the word `011f9530`) and +0x14 (the word at the property's +0xb4); 0x182 to 0x1e1 go through
+/// the jump table to the shader-constant setters `00c0bae0` .. `00c0bcf0`, `00bbdcd0` and the
+/// entries +0x10, +0x14 and +0x18 (the property's +0xac, +0xb0 and +0xb4 words); other passes:
+/// nothing.
+pub fn fn_00c0cf10(e: &mut Engine, this: Ptr, pass: u32, property: u32) {
+    let state = e.global::<u32>(RENDER_STATE_0126F74C);
+    if pass <= 0x181 {
+        if pass == 0x181 {
+            let word = e.global::<u32>(STATE_WORD_SOURCE_011F9530);
+            set_state_entry(e, state, 0x10, word);
+            let source = e.mem.u32(property + 0xb4);
+            let value = e.mem.u32(source);
+            set_state_entry(e, state, 0x14, value);
+        } else if (0xe..=0xf).contains(&pass) {
+            e.call(SET_UP_00BBDDA0, &args![this, property, state]);
+        }
+        return;
+    }
+    let case = pass.wrapping_sub(0x182);
+    if case > 0x5f {
+        return;
+    }
+    let target = TARGETS_00C0D0CC[usize::from(BYTES_00C0D110[case as usize])];
+    match target {
+        0x00c0_cf8e => {
+            e.call(CONSTANTS_00C0BAE0, &args![this, state, property, 4u32]);
+        }
+        0x00c0_d035 => mapped_entries(e, state, property),
+        0x00c0_d06a => {
+            e.call(CONSTANTS_00C0BB50, &args![this, state, property, 1u32]);
+        }
+        0x00c0_cfa2 => property_entry_18(e, state, property),
+        0x00c0_cffa => {
+            e.call(CONSTANTS_00C0BB20, &args![this, state, property]);
+        }
+        0x00c0_cfed => {
+            e.call(CONSTANTS_00C0BBD0, &args![this, state]);
+        }
+        // 00c0d026 pushes the property itself and joins 00c0d00c's calls.
+        0x00c0_d00c | 0x00c0_d026 => {
+            e.call(CONSTANTS_00C0BB20, &args![this, state, property]);
+            e.call(CONSTANTS_00C0BBD0, &args![this, state]);
+        }
+        0x00c0_cfbc => {
+            e.call(CONSTANTS_00C0BBD0, &args![this, state]);
+            e.call(CONSTANTS_00C0BAE0, &args![this, state, property, 4u32]);
+        }
+        0x00c0_d02d => {
+            e.call(CONSTANTS_00C0BBD0, &args![this, state]);
+            mapped_entries(e, state, property);
+        }
+        0x00c0_d062 => {
+            e.call(CONSTANTS_00C0BBD0, &args![this, state]);
+            e.call(CONSTANTS_00C0BB50, &args![this, state, property, 1u32]);
+        }
+        0x00c0_cfd8 => {
+            property_entry_18(e, state, property);
+            e.call(CONSTANTS_00C0BBD0, &args![this, state]);
+        }
+        0x00c0_d07e => {
+            e.call(CONSTANTS_00C0BC00, &args![this, state, property, pass]);
+            e.call(CONSTANTS_00C0BC90, &args![this, state, property]);
+            e.call(CONSTANTS_00C0BCF0, &args![this, state, property, 0u32]);
+        }
+        0x00c0_d0b9 => {
+            e.call(CONSTANTS_00C0BBA0, &args![this, state, property]);
+        }
+        0x00c0_d0a7 => {
+            e.call(SET_UP_00BBDCD0, &args![this, property, state]);
+        }
+        // 00c0d0c6: nothing.
+        _ => {}
+    }
+}
+
+/// `00c0cfa2`: the state's entry +0x18 takes the word at the property's +0xb4.
+fn property_entry_18(e: &mut Engine, state: u32, property: u32) {
+    let source = e.mem.u32(property + 0xb4);
+    let value = e.mem.u32(source);
+    set_state_entry(e, state, 0x18, value);
+}
+
+/// `00c0d035`: the state's entries +0x10 and +0x14 take the words +4 of the property's +0xac
+/// and +0xb0.
+fn mapped_entries(e: &mut Engine, state: u32, property: u32) {
+    let first = e.mem.u32(property + 0xac);
+    let value = e.mem.u32(first + 4);
+    set_state_entry(e, state, 0x10, value);
+    let second = e.mem.u32(property + 0xb0);
+    let value = e.mem.u32(second + 4);
+    set_state_entry(e, state, 0x14, value);
+}
+
 // Translated from 00bbe650 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed (Ghidra made no function; the vtable `010ba0f8`, slot +0x78), `thiscall` with one
 /// stack word: the geometry's set-up record (the property at +0xc). Except for the passes 0x1e0,
@@ -3516,6 +3846,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00bb_d820, fn_00bbd820(Ptr, Ptr, Ptr) -> u32),
         entry!(0x00bb_c5c0, fn_00bbc5c0(Ptr, Ptr) -> u32),
         entry!(0x00bb_e020, fn_00bbe020(Ptr, u32)),
+        entry!(0x00bb_e120, fn_00bbe120(Ptr, u32)),
+        entry!(0x00c0_cf10, fn_00c0cf10(Ptr, u32, u32)),
         entry!(0x00bb_e650, fn_00bbe650(Ptr, Ptr)),
         entry!(0x00bb_eef0, fn_00bbeef0(Ptr, Ptr)),
         (0x00bb_b890, fn_00bbb890_entry as AbiFn),
@@ -5082,6 +5414,228 @@ mod n070_tests {
         e.mem.set_u32(pass + 0x18, count);
         e.mem.set_u32(pass + 0x24, array);
         (pass, stages)
+    }
+
+    #[test]
+    fn fn_00bbe120_pass_index_follows_the_jump_tables() {
+        for (pass, index) in [
+            (10u32, 1u32),
+            (15, 6),
+            (9, 9u32.wrapping_sub(0x178)),
+            (0x1d3, 0x59),
+            (0x1d4, 0x5a),
+            (0x1da, 0x60),
+            (0x1db, 0x63),
+            (0x2da, 0x68),
+            (0x2db, 0x69),
+            (0x2dc, 0x164),
+            (0x2e0, 0x68),
+            (0x2e1, 0x69),
+            (0x2ec, 0x68),
+            (0x2ed, 0x69),
+            (0x2ee, 0x176),
+            (0x180, 8),
+        ] {
+            assert_eq!(pass_index_00bbe120(pass), index, "pass {pass:#x}");
+        }
+    }
+
+    #[test]
+    fn fn_00c0cf10_runs_the_pass_constant_setters() {
+        let mut e = rig();
+        let setters = [
+            CONSTANTS_00C0BAE0,
+            CONSTANTS_00C0BB20,
+            CONSTANTS_00C0BB50,
+            CONSTANTS_00C0BBA0,
+            CONSTANTS_00C0BBD0,
+            CONSTANTS_00C0BC00,
+            CONSTANTS_00C0BC90,
+            CONSTANTS_00C0BCF0,
+            SET_UP_00BBDDA0,
+            SET_UP_00BBDCD0,
+        ];
+        for setter in setters {
+            e.register(setter, |_, _| Ret::default());
+        }
+        let this = object(&mut e, 0x80);
+        let state = e.mem.alloc(0x30);
+        let entries = e.mem.alloc(0x20);
+        e.mem.set_u32(state + 0x24, entries);
+        let entry: Vec<u32> = (0..3).map(|_| e.mem.alloc(0xc)).collect();
+        for (i, item) in entry.iter().enumerate() {
+            e.mem.set_u32(entries + 0x10 + 4 * i as u32, *item);
+        }
+        let property = e.mem.alloc(0xc0);
+        let word = e.mem.alloc(4);
+        e.mem.set_u32(word, 0x77);
+        e.mem.set_u32(property + 0xb4, word);
+        let first = e.mem.alloc(8);
+        e.mem.set_u32(first + 4, 0x55);
+        e.mem.set_u32(property + 0xac, first);
+        let second = e.mem.alloc(8);
+        e.mem.set_u32(second + 4, 0x66);
+        e.mem.set_u32(property + 0xb0, second);
+        e.set_global::<u32>(RENDER_STATE_0126F74C, state);
+        e.set_global::<u32>(STATE_WORD_SOURCE_011F9530, 0x99);
+        let entry_words =
+            |e: &Engine| -> Vec<u32> { entry.iter().map(|item| e.mem.u32(item + 8)).collect() };
+        let run = |e: &mut Engine, pass: u32| -> Vec<(u32, Vec<u32>)> {
+            let start = e.call_log.as_ref().unwrap().len();
+            e.call(0x00c0_cf10, &args![this, pass, property]);
+            e.call_log.as_ref().unwrap()[start..]
+                .iter()
+                .filter(|(a, _)| setters.contains(a))
+                .cloned()
+                .collect()
+        };
+        let (s, p) = (state, property);
+        // Passes below 0xe, 0x10 to 0x180 and above 0x1e1: nothing.
+        for pass in [0xdu32, 0x10, 0x180, 0x1e2, 0x188, 0x18e] {
+            assert!(run(&mut e, pass).is_empty(), "{pass:#x}");
+        }
+        assert_eq!(entry_words(&e), vec![0, 0, 0]);
+        assert_eq!(run(&mut e, 0xe), vec![(SET_UP_00BBDDA0, vec![this, p, s])]);
+        assert_eq!(run(&mut e, 0xf), vec![(SET_UP_00BBDDA0, vec![this, p, s])]);
+        assert!(run(&mut e, 0x181).is_empty());
+        assert_eq!(entry_words(&e), vec![0x99, 0x77, 0]);
+        let bae0 = (CONSTANTS_00C0BAE0, vec![this, s, p, 4]);
+        let bb20 = (CONSTANTS_00C0BB20, vec![this, s, p]);
+        let bb50 = (CONSTANTS_00C0BB50, vec![this, s, p, 1]);
+        let bbd0 = (CONSTANTS_00C0BBD0, vec![this, s]);
+        assert_eq!(run(&mut e, 0x182), vec![bae0.clone()]);
+        assert_eq!(run(&mut e, 0x185), vec![bb50.clone()]);
+        assert_eq!(run(&mut e, 0x190), vec![bb20.clone()]);
+        assert_eq!(run(&mut e, 0x19d), vec![bbd0.clone()]);
+        assert_eq!(run(&mut e, 0x19f), vec![bb20.clone(), bbd0.clone()]);
+        assert_eq!(run(&mut e, 0x1ae), vec![bb20, bbd0.clone()]);
+        assert_eq!(run(&mut e, 0x1a0), vec![bbd0.clone(), bae0]);
+        assert_eq!(run(&mut e, 0x1a3), vec![bbd0.clone(), bb50]);
+        assert_eq!(
+            run(&mut e, 0x1bd),
+            vec![
+                (CONSTANTS_00C0BC00, vec![this, s, p, 0x1bd]),
+                (CONSTANTS_00C0BC90, vec![this, s, p]),
+                (CONSTANTS_00C0BCF0, vec![this, s, p, 0]),
+            ]
+        );
+        assert_eq!(
+            run(&mut e, 0x1cc),
+            vec![(CONSTANTS_00C0BBA0, vec![this, s, p])]
+        );
+        assert_eq!(
+            run(&mut e, 0x1e0),
+            vec![(SET_UP_00BBDCD0, vec![this, p, s])]
+        );
+        // The entry cases: +0x18 from +0xb4, +0x10/+0x14 from +0xac/+0xb0.
+        e.mem.set_u32(word, 0x78);
+        assert!(run(&mut e, 0x186).is_empty());
+        assert_eq!(entry_words(&e), vec![0x99, 0x77, 0x78]);
+        assert!(run(&mut e, 0x184).is_empty());
+        assert_eq!(entry_words(&e), vec![0x55, 0x66, 0x78]);
+        e.mem.set_u32(word, 0x79);
+        assert_eq!(run(&mut e, 0x1a4), vec![bbd0.clone()]);
+        assert_eq!(entry_words(&e), vec![0x55, 0x66, 0x79]);
+        e.mem.set_u32(first + 4, 0x56);
+        assert_eq!(run(&mut e, 0x1a2), vec![bbd0]);
+        assert_eq!(entry_words(&e), vec![0x56, 0x66, 0x79]);
+    }
+
+    #[test]
+    fn fn_00bbe120_sets_flags_fog_and_eye_constants() {
+        let mut e = rig();
+        for page in [0x011f_a000u32, 0x011f_4000, 0x011a_9000, 0x010a_d000] {
+            e.map(page, 0x1000);
+        }
+        let this = object(&mut e, 0x40);
+        let first = object(&mut e, 8);
+        let second = object(&mut e, 8);
+        e.mem.set_u32(this + 0x34, first);
+        e.mem.set_u32(this + 0x30, second);
+        // 0x1e0 and 0x1e1: nothing.
+        e.call(0x00bb_e120, &args![this, 0x1e0u32]);
+        e.call(0x00bb_e120, &args![this, 0x1e1u32]);
+        assert!(calls(&e, SLOTS + 0x24).is_empty());
+        // Pass 0x1d5: index 0x5b.
+        let index = 0x5bu32;
+        e.set_global(MASKS_01200A28 + 4 * index, 0b1000u32);
+        e.set_global(MASKS_01200868 + 4 * index, 0b100_0000_0000u32);
+        let flagged = e.mem.alloc(0xc);
+        e.set_global(SHADERS_01201080 + 8, flagged);
+        let last = e.mem.alloc(0xc);
+        e.mem.set_u8(last + 8, 7);
+        e.set_global(FLAGS_012010C4 + 4 * 9, last);
+        let fog_enable = e.mem.alloc(0xc);
+        let eye_enable = e.mem.alloc(0xc);
+        e.set_global(FOG_ENABLE_012010BC, fog_enable);
+        e.set_global(EYE_ENABLE_012010C0, eye_enable);
+        e.call(0x00bb_e120, &args![this, 0x1d5u32]);
+        assert_eq!(calls(&e, SLOTS + 0x24), vec![vec![first], vec![second]]);
+        assert_eq!(e.mem.u8(flagged + 8), 1);
+        assert_eq!(e.global::<u8>(FLAGS_01200854 + 2), 1);
+        assert_eq!(e.global::<u8>(FLAGS_01200854 + 1), 0);
+        assert_eq!(e.mem.u8(last + 8), 1);
+        assert_eq!(e.global::<u8>(FLAGS_01200848 + 9), 1);
+        assert_eq!(e.global::<u8>(FLAGS_01200848), 0);
+        // Neither enable byte set: the constants stay.
+        assert_eq!(e.global::<u32>(FOG_CONSTANT_012013B0), 0);
+        assert!(calls(&e, GET_FOG_PROPERTY_00B55520).is_empty());
+        // Fog with start and end 0, and the eye.
+        let fog = e.mem.alloc(0x70);
+        e.set_global(0x0120_0f00, fog);
+        e.register(GET_FOG_PROPERTY_00B55520, |e, _| {
+            e.mem.u32(0x0120_0f00).into_ret()
+        });
+        e.set_global(FOG_KIND_011F91C4, 2u8);
+        e.mem.set_f32(fog + 0x60, 3.5);
+        e.set_global(FAR_010AD6E0, 500000.0f32);
+        for i in 0..4u32 {
+            e.set_global(DEFAULT_COLOUR_011A9BD0 + 4 * i, 0x100 + i);
+        }
+        for (i, (eye, origin)) in [(10.0f32, 1.0f32), (20.0, 2.0), (30.5, 0.5)]
+            .iter()
+            .enumerate()
+        {
+            e.set_global(EYE_011FA2A0 + 4 * i as u32, *eye);
+            e.set_global(ORIGIN_011F474C + 4 * i as u32, *origin);
+        }
+        // The enable objects are shaders 15 and 16 of `01201080`: bits 16 and 17 set their bytes.
+        e.set_global(MASKS_01200A28 + 4 * index, 0b11_0000_0000_0000_1000u32);
+        e.call(0x00bb_e120, &args![this, 0x1d5u32]);
+        assert_eq!(calls(&e, GET_FOG_PROPERTY_00B55520), vec![vec![2]]);
+        let fog_words: Vec<f32> = (0..4u32)
+            .map(|i| e.global::<f32>(FOG_CONSTANT_012013B0 + 4 * i))
+            .collect();
+        assert_eq!(fog_words, vec![500000.0, 0.0, 3.5, 0.0]);
+        let colour: Vec<u32> = (0..4u32)
+            .map(|i| e.global::<u32>(FOG_COLOUR_012013C0 + 4 * i))
+            .collect();
+        assert_eq!(colour, vec![0x100, 0x101, 0x102, 0x103]);
+        let eye: Vec<f32> = (0..4u32)
+            .map(|i| e.global::<f32>(EYE_CONSTANT_012013D0 + 4 * i))
+            .collect();
+        assert_eq!(eye, vec![9.0, 18.0, 30.0, 1.0]);
+        // A start of NaN counts as not 0: (end, end - start, power, 0) and (colour, 1.0), the
+        // signalling NaN colour word quieted.
+        e.mem.set_f32(fog + 0x30, 100.0);
+        e.mem.set_f32(fog + 0x2c, 40.0);
+        e.mem.set_f32(fog + 0x20, 0.25);
+        e.mem.set_u32(fog + 0x24, 0x7f80_0001);
+        e.mem.set_f32(fog + 0x28, 0.75);
+        e.call(0x00bb_e120, &args![this, 0x1d5u32]);
+        let fog_words: Vec<f32> = (0..4u32)
+            .map(|i| e.global::<f32>(FOG_CONSTANT_012013B0 + 4 * i))
+            .collect();
+        assert_eq!(fog_words, vec![100.0, 60.0, 3.5, 0.0]);
+        assert_eq!(e.global::<f32>(FOG_COLOUR_012013C0), 0.25);
+        assert_eq!(e.global::<u32>(FOG_COLOUR_012013C0 + 4), 0x7fc0_0001);
+        assert_eq!(e.global::<f32>(FOG_COLOUR_012013C0 + 8), 0.75);
+        assert_eq!(e.global::<f32>(FOG_COLOUR_012013C0 + 0xc), 1.0);
+        e.mem.set_f32(fog + 0x30, 0.0);
+        e.mem.set_u32(fog + 0x2c, 0xffc0_0000);
+        e.call(0x00bb_e120, &args![this, 0x1d5u32]);
+        assert_eq!(e.global::<f32>(FOG_CONSTANT_012013B0), 0.0);
+        assert_eq!(e.global::<u32>(FOG_CONSTANT_012013B0 + 4), 0xffc0_0000);
     }
 
     #[test]

@@ -302,6 +302,75 @@ pub fn fn_00df7d60(e: &mut Engine, queue: Ptr, job: Ptr) -> u32 {
     e.call(0x00d0_4e80, &args![queue, job, job, 0u32]).u32()
 }
 
+// Translated from 00df7a90 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function; 00df7a90 to the `RET` at 00df7ab5, its jump table after
+/// it): the job-finished function `00da3400` registers for job type 2, `cdecl` with three words
+/// (only the third, the job, is read). For job kinds 0 to 5 (byte `+0`; the jump table at
+/// `00df7ab8` sends all six to the same code) the counter at `*(job + 0x14)` drops by one and at
+/// 0 [`fn_00df7a60`] runs on the job. Answers 1.
+pub fn fn_00df7a90(e: &mut Engine, _unused_1: u32, _unused_2: u32, job: Ptr) -> u32 {
+    let kind = e.mem.u8(job.addr());
+    let counter = e.mem.u32(job.addr().wrapping_add(0x14));
+    if kind <= 5 {
+        let left = e.mem.u32(counter).wrapping_sub(1);
+        e.mem.set_u32(counter, left);
+        if left == 0 {
+            e.call(0x00df_7a60, &args![job]);
+        }
+    }
+    1
+}
+
+/// One split case of `00df7ad0`: the job's item count word, its remaining total word, its item
+/// pointer word and the item size (a shift or a multiply in the exe).
+type SplitCase = (u32, u32, u32, u32);
+
+/// `00df7ad0`'s jump table at `00df7be0` (read from the exe) as the cases its five targets run:
+/// 0 (`00df7b71`), 1 (`00df7b95`), 2 (`00df7bb6`), 3 (`00df7b24`), 4 (`00df7b49`).
+const SPLIT_CASES_00DF7BE0: [SplitCase; 5] = [
+    (0x34, 0x3c, 0x38, 0x30),
+    (0x24, 0x2c, 0x28, 0x20),
+    (0x30, 0x38, 0x34, 0x10),
+    (0x30, 0x38, 0x34, 0x40),
+    (0x20, 0x28, 0x24, 0x30),
+];
+
+// Translated from 00df7ad0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function; 00df7ad0 to the `RET` at 00df7bdd, its jump table after it):
+/// the job-split function `00da3400` registers for job type 2, `cdecl` with four words (the
+/// third the job, the fourth the new job; the first two not read). Copies the job's 0x80 bytes to
+/// the new job (word by word, in order), then by the job's kind (byte `+0`, 0 to 4): when the
+/// remaining total is above the item count (signed), the new job takes the count as its total,
+/// the job's total drops by the count and its item pointer moves past `count` items, and the
+/// answer is 1; otherwise (or for another kind) 0.
+pub fn fn_00df7ad0(e: &mut Engine, _unused_1: u32, _unused_2: u32, job: Ptr, split: Ptr) -> u32 {
+    let job = job.addr();
+    let split = split.addr();
+    for offset in (0..0x80u32).step_by(4) {
+        let value = e.mem.u32(job.wrapping_add(offset));
+        e.mem.set_u32(split.wrapping_add(offset), value);
+    }
+    let kind = e.mem.u8(job);
+    if kind > 4 {
+        return 0;
+    }
+    let (count, total, items, size) = SPLIT_CASES_00DF7BE0[usize::from(kind)];
+    let first = e.mem.u32(job.wrapping_add(count));
+    if (e.mem.u32(job.wrapping_add(total)) as i32) <= first as i32 {
+        return 0;
+    }
+    e.mem.set_u32(split.wrapping_add(total), first);
+    let count_now = e.mem.u32(job.wrapping_add(count));
+    let left = e.mem.u32(job.wrapping_add(total)).wrapping_sub(count_now);
+    e.mem.set_u32(job.wrapping_add(total), left);
+    let moved = e
+        .mem
+        .u32(job.wrapping_add(items))
+        .wrapping_add(count_now.wrapping_mul(size));
+    e.mem.set_u32(job.wrapping_add(items), moved);
+    1
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -310,6 +379,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00df7d60, fn_00df7d60(Ptr, Ptr) -> u32),
         entry!(0x00df_7760, fn_00df7760(Ptr, Ptr, Ptr, i32)),
         entry!(0x00df_7a60, fn_00df7a60(Ptr) -> u32),
+        entry!(0x00df_7a90, fn_00df7a90(u32, u32, Ptr) -> u32),
+        entry!(0x00df_7ad0, fn_00df7ad0(u32, u32, Ptr, Ptr) -> u32),
         entry!(0x00df_7d00, fn_00df7d00(Ptr, Ptr)),
     ]
 }
@@ -745,5 +816,69 @@ mod tests {
             };
             assert_eq!(e.mem.u32(dest + offset), expected, "offset {offset:#x}");
         }
+    }
+}
+
+#[cfg(test)]
+mod gap1_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00df7a90_drops_the_counter_and_finishes_at_zero() {
+        let mut e = Engine::new();
+        e.register(0x00df_7a60, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        let counter = e.mem.alloc(4);
+        e.mem.set_u32(counter, 2);
+        let job = e.mem.alloc(0x20);
+        e.mem.set_u32(job + 0x14, counter);
+        let finished = |e: &Engine| {
+            e.call_log
+                .as_ref()
+                .unwrap()
+                .iter()
+                .filter(|(a, _)| *a == 0x00df_7a60)
+                .count()
+        };
+        assert_eq!(e.call(0x00df_7a90, &args![0u32, 0u32, job]).u32(), 1);
+        assert_eq!((e.mem.u32(counter), finished(&e)), (1, 0));
+        e.mem.set_u8(job, 5);
+        assert_eq!(e.call(0x00df_7a90, &args![0u32, 0u32, job]).u32(), 1);
+        assert_eq!((e.mem.u32(counter), finished(&e)), (0, 1));
+        // Kinds above 5: nothing.
+        e.mem.set_u8(job, 6);
+        assert_eq!(e.call(0x00df_7a90, &args![0u32, 0u32, job]).u32(), 1);
+        assert_eq!((e.mem.u32(counter), finished(&e)), (0, 1));
+    }
+
+    #[test]
+    fn fn_00df7ad0_copies_the_job_and_splits_it() {
+        let mut e = Engine::new();
+        let job = e.mem.alloc(0x80);
+        let split = e.mem.alloc(0x80);
+        for (kind, (count, total, items, size)) in SPLIT_CASES_00DF7BE0.iter().enumerate() {
+            for offset in (0..0x80u32).step_by(4) {
+                e.mem.set_u32(job + offset, 0x100 + offset);
+            }
+            e.mem.set_u8(job, kind as u8);
+            e.mem.set_u32(job + count, 3);
+            e.mem.set_u32(job + total, 10);
+            e.mem.set_u32(job + items, 0x1000);
+            assert_eq!(e.call(0x00df_7ad0, &args![0u32, 0u32, job, split]).u32(), 1);
+            assert_eq!(e.mem.u32(split + 4), 0x104);
+            assert_eq!(e.mem.u32(split + count), 3);
+            assert_eq!(e.mem.u32(split + items), 0x1000);
+            assert_eq!(e.mem.u32(split + total), 3);
+            assert_eq!(e.mem.u32(job + total), 7);
+            assert_eq!(e.mem.u32(job + items), 0x1000 + 3 * size);
+            // A total not above the count (signed): no split.
+            e.mem.set_u32(job + total, 3);
+            assert_eq!(e.call(0x00df_7ad0, &args![0u32, 0u32, job, split]).u32(), 0);
+            e.mem.set_u32(job + total, 0xffff_fff0);
+            assert_eq!(e.call(0x00df_7ad0, &args![0u32, 0u32, job, split]).u32(), 0);
+        }
+        e.mem.set_u8(job, 5);
+        assert_eq!(e.call(0x00df_7ad0, &args![0u32, 0u32, job, split]).u32(), 0);
+        assert_eq!(e.mem.u8(split), 5);
     }
 }

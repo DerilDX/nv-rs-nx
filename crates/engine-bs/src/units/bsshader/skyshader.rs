@@ -1232,11 +1232,78 @@ pub fn fn_00b899a0(e: &mut Engine, slot: u32) {
     ni_pointer_assign(e, slot, shape);
     release_reference(e, shape);
 }
+/// `00b884e0`'s jump table for the passes 0x23a to 0x2d5 (the byte table at `00b885d0` into the
+/// 10 code addresses at `00b885a8`), read from the exe.
+const TARGETS_00B885A8: [u32; 10] = [
+    0x00b8_859a,
+    0x00b8_8565,
+    0x00b8_858b,
+    0x00b8_8571,
+    0x00b8_857d,
+    0x00b8_855a,
+    0x00b8_852e,
+    0x00b8_853c,
+    0x00b8_854b,
+    0x00b8_85a3,
+];
+const BYTES_00B885D0: [u8; 156] = [
+    0, 1, 2, 3, 4, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
+    9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
+    9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
+    9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
+    9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 5, 6, 7, 8,
+];
+const CASES_00B884E0: [(u32, u32); 11] = [
+    (0x00b8_84f6, 0x6c),
+    (0x00b8_8501, 0x88),
+    (0x00b8_852e, 0x90),
+    (0x00b8_853c, 0x94),
+    (0x00b8_854b, 0x8c),
+    (0x00b8_855a, 0x70),
+    (0x00b8_8565, 0x78),
+    (0x00b8_8571, 0x7c),
+    (0x00b8_857d, 0x80),
+    (0x00b8_858b, 0x84),
+    (0x00b8_859a, 0x74),
+];
+
+// Translated from 00b884e0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function; 00b884e0 to the `RET 4` at 00b885a3, its jump tables after
+/// it): slot 60 (+0xf0) of the sky shader's vtable `010afe18`, `thiscall` with one stack word: the
+/// pass. Pass 9 puts the shader's +0x6c in `0126f74c`, 0x239 its +0x88, and the passes 0x23a to
+/// 0x2d5 with a case in the jump table (read from the exe) their word (+0x70 to +0x94); other
+/// passes: nothing.
+pub fn fn_00b884e0(e: &mut Engine, this: Ptr, pass: u32) {
+    let target = if pass > 0x239 {
+        let case = pass.wrapping_sub(0x23a);
+        if case > 0x9b {
+            return;
+        }
+        TARGETS_00B885A8[usize::from(BYTES_00B885D0[case as usize])]
+    } else if pass == 0x239 {
+        0x00b8_8501
+    } else if pass == 9 {
+        0x00b8_84f6
+    } else {
+        return;
+    };
+    // 00b885a3, the default, only returns.
+    let Some(offset) = CASES_00B884E0
+        .iter()
+        .find(|(address, _)| *address == target)
+        .map(|(_, offset)| *offset)
+    else {
+        return;
+    };
+    let word = e.mem.u32(this.addr() + offset);
+    e.set_global::<u32>(PASS_STATE_0126F74C, word);
+}
 
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00b8_84b0, fn_00b884b0(Ptr)),
+        entry!(0x00b8_84e0, fn_00b884e0(Ptr, u32)),
         entry!(0x00b8_9960, sky_shader_reload_shaders(Ptr)),
         entry!(0x00b8_99a0, fn_00b899a0(u32)),
         entry!(0x00b8_8670, fn_00b88670(Ptr)),
@@ -1847,5 +1914,41 @@ mod n071_tests {
         assert_eq!(e.mem.u32(shape + 4), 1);
         assert_eq!(e.mem.u32(old + 4), 0);
         assert_eq!(calls(&e, REFERENCE_DELETE), vec![vec![old]]);
+    }
+}
+
+#[cfg(test)]
+mod gap1_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00b884e0_puts_the_pass_word_in_the_state() {
+        let mut e = Engine::new();
+        e.map(0x0126_f000, 0x1000);
+        let this = e.mem.alloc(0xa0);
+        for offset in (0x6cu32..0xa0).step_by(4) {
+            e.mem.set_u32(this + offset, 0x1000 + offset);
+        }
+        for (pass, offset) in [
+            (9u32, 0x6cu32),
+            (0x239, 0x88),
+            (0x23a, 0x74),
+            (0x23b, 0x78),
+            (0x23c, 0x84),
+            (0x2d5, 0x8c),
+        ] {
+            e.set_global::<u32>(PASS_STATE_0126F74C, 0);
+            e.call(0x00b8_84e0, &args![this, pass]);
+            assert_eq!(
+                e.global::<u32>(PASS_STATE_0126F74C),
+                0x1000 + offset,
+                "{pass:#x}"
+            );
+        }
+        for pass in [8u32, 10, 0x238, 0x23f, 0x29e, 0x2d6] {
+            e.set_global::<u32>(PASS_STATE_0126F74C, 7);
+            e.call(0x00b8_84e0, &args![this, pass]);
+            assert_eq!(e.global::<u32>(PASS_STATE_0126F74C), 7, "{pass:#x}");
+        }
     }
 }

@@ -20,6 +20,28 @@ pub fn fn_00df6dc0(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
         .u32()
 }
 
+/// The three vtable words `00df6dd0` stores and the CRT `free` it calls (`00401030`, `cdecl`).
+const VTABLE_WORD_010CCF8C: u32 = 0x010c_cf8c;
+const VTABLE_WORD_010CCFAC: u32 = 0x010c_cfac;
+const VTABLE_WORD_010C3BB8: u32 = 0x010c_3bb8;
+const FREE_00401030: u32 = 0x0040_1030;
+
+// Translated from 00df6dd0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function; 00df6dd0 to the `RET 4` at 00df6dfa, inside the extent the
+/// map gives `00df6dc0`): the deleting destructor the thunks `00df6db0` and `00df6dc0` jump to,
+/// `thiscall` with one stack word. Stores `010ccf8c` at `+8`, `010ccfac` at `+4` and `010c3bb8`
+/// at `+0`; with bit 0 of the word set frees the object (`00401030`). Answers `this`.
+pub fn fn_00df6dd0(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
+    let base = this.addr();
+    e.mem.set_u32(base + 8, VTABLE_WORD_010CCF8C);
+    e.mem.set_u32(base + 4, VTABLE_WORD_010CCFAC);
+    e.mem.set_u32(base, VTABLE_WORD_010C3BB8);
+    if flags & 1 != 0 {
+        e.call(FREE_00401030, &args![base]);
+    }
+    base
+}
+
 /// The float at `0104da48`: the start value of the `+0xc` field of the record the contact
 /// handlers get.
 const FIRST_FLOAT: u32 = 0x0104_da48;
@@ -164,6 +186,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00df_6db0, fn_00df6db0(Ptr, u32) -> u32),
         entry!(0x00df_6dc0, fn_00df6dc0(Ptr, u32) -> u32),
+        entry!(0x00df_6dd0, fn_00df6dd0(Ptr, u32) -> u32),
         entry!(0x00df_6e00, fn_00df6e00(Ptr, Ptr, Ptr, i32)),
         entry!(0x00df_6f80, fn_00df6f80(u32, u32) -> u32),
     ]
@@ -445,5 +468,41 @@ mod tests_a01 {
         assert_eq!(e.call(0x00df_6f80, &args![0x4000u32, job]).u32(), 0x4001);
         assert_eq!(*seen.borrow(), vec![vec![job, 0x11, 0x22, 0x33]]);
         assert_eq!(labels(&e, stream, area), vec![0x010d_b978, 0x010c_41f8]);
+    }
+}
+
+#[cfg(test)]
+mod gap1_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00df6dd0_stores_the_vtables_and_frees_on_bit_zero() {
+        let mut e = Engine::new();
+        e.register(FREE_00401030, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        let this = e.mem.alloc(0xc);
+        assert_eq!(e.call(0x00df_6dd0, &args![this, 0u32]).u32(), this);
+        let words: Vec<u32> = (0..3).map(|i| e.mem.u32(this + 4 * i)).collect();
+        assert_eq!(
+            words,
+            vec![
+                VTABLE_WORD_010C3BB8,
+                VTABLE_WORD_010CCFAC,
+                VTABLE_WORD_010CCF8C
+            ]
+        );
+        let frees = |e: &Engine| {
+            e.call_log
+                .as_ref()
+                .unwrap()
+                .iter()
+                .filter(|(a, _)| *a == FREE_00401030)
+                .count()
+        };
+        assert_eq!(frees(&e), 0);
+        assert_eq!(e.call(0x00df_6dd0, &args![this, 3u32]).u32(), this);
+        assert_eq!(frees(&e), 1);
+        // The thunk 00df6dc0 now reaches it with `this - 8`.
+        assert_eq!(e.call(0x00df_6dc0, &args![this + 8, 0u32]).u32(), this);
     }
 }

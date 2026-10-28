@@ -2413,6 +2413,261 @@ pub fn fn_00b63f90(
 /// The shader flags word the render-pass queries take (`011f91d8`).
 const SHADER_FLAGS_011F91D8: u32 = 0x011f_91d8;
 
+/// The batch renderer's pass registration `00b9b3b0` (`thiscall`: pass, group, flag) and
+/// `00b9b3d0` (`thiscall`: pass, flag), and the pass render `00b63320` (`cdecl`: pass, enum).
+const BATCH_REGISTER_00B9B3B0: u32 = 0x00b9_b3b0;
+const BATCH_REGISTER_00B9B3D0: u32 = 0x00b9_b3d0;
+const RENDER_PASS_00B63320: u32 = 0x00b6_3320;
+/// The object `00b64020` reads the `float` `+8` of when a pass's object has no `+0x20`
+/// (`011f4288`, the `MOV EAX, 0x11f4288` immediate).
+const DEFAULT_OBJECT_011F4288: u32 = 0x011f_4288;
+/// The switch of `00b64020` on the pass's byte `+6` less one: the 14 code addresses of its
+/// jump table at `00b643fc` (read from the exe), and the default case (above 0xd).
+const JUMP_TABLE_00B643FC: [u32; 14] = [
+    0x00b6_41d8,
+    0x00b6_4234,
+    0x00b6_424f,
+    0x00b6_426a,
+    0x00b6_4290,
+    0x00b6_429e,
+    0x00b6_42b6,
+    0x00b6_430d,
+    0x00b6_430d,
+    0x00b6_42ce,
+    0x00b6_430d,
+    0x00b6_430d,
+    0x00b6_430d,
+    0x00b6_42d5,
+];
+const SWITCH_DEFAULT_00B642ED: u32 = 0x00b6_42ed;
+
+/// `pBatchRenderer[word +0x2bc of the thread block]` (no modulo, as the exe indexes it at
+/// each call of [`fn_00b64020`] but the first).
+fn thread_renderer_unmodded(e: &mut Engine, accumulator: u32) -> u32 {
+    let tls = e.tls();
+    let thread = e.mem.u32(tls + TLS_WORD_2BC);
+    batch_renderer(e, accumulator, thread)
+}
+
+// Translated from 00b64020 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function here; 00b64020 to the `RET` at 00b643f8, with the
+/// jump table at 00b643fc): the generic register function of the render modes (`011f9f80`,
+/// `011f9f3c`) that the filtering ones jump to. `cdecl` with the five register words
+/// (accumulator, geometry, property state (not read), property, shader); ECX is not read.
+/// Answers true (`MOV AL, 1`) on every path.
+///
+/// Answers at once when the accumulator's byte `+0x164` is set and the shader's word `+0x68`
+/// is 0xd. With `bDoDepthPasses` (`+0x3a`) set, asks the property (slot +0xac with the
+/// geometry) for a depth pass and registers it with the thread's batch renderer
+/// (`00b9b3b0` with group 0xc in first person (`+0x85`), else 0xb, and 0). Then sets bit 9
+/// (`0x200`) of the property's flags `+0x20` to whether the batch renderer
+/// `[thread % uiBatchRendererCount]` has `+0x34 > 0` and its byte `+0x38` set (a change
+/// clears the property's `+0x38` when the bit was clear before a set or set before a clear,
+/// and the word `+0x10` of the property's `+0x3c` object when there is one). Asks the
+/// property for its render passes (slot +0xa0: geometry, the shader flags `011f91d8`, the
+/// address of a zeroed local, `eRenderMode`, the accumulator, 1); sets bit 6 (`0x40`) of
+/// `+0x24` to `b1stPerson` the same way. Each pass with a non-zero enum (`+4`) is
+/// registered by its byte `+6` through the jump table: 1 `00b9b3d0` with 1 when the
+/// accumulator's byte `+0x166` is set and its `int` `+0x168` is above the `float` `+8` of
+/// the pass object's `+0x20` (or of `011f4288`), else 0; 2, 3, 6, 7, 10, 14 `00b9b3b0`
+/// with groups 0xa, 1, 6, 8, 0, 9; 4 and 5 (only with `bRenderDecals`) groups 2 (flag 1)
+/// and 3; 8, 9, 11 to 13 nothing; any other byte the renderer's slot +0x8c with the pass and
+/// its enum. Without passes (null or none) it answers there. Last, with `b1stPerson` and
+/// `bAccumulate` (`+0x84`) both set, takes the property's slot +0xa8 list and for each pass
+/// either hands it to the renderer's slot +0x8c with 0 (`bAccumulate` still set) or renders
+/// it now: `BSShaderManager::GetShader(1)`, `00b7a870(enum, 0)`, slots +0x24 of the shader's
+/// `+0x34` and `+0x30` (when there is a shader), `00b63320(pass, enum)`. The exe keeps the
+/// pass index in the caller's first argument word; it is a local here.
+pub fn fn_00b64020(
+    e: &mut Engine,
+    accumulator: u32,
+    geometry: u32,
+    _unused_3: u32,
+    property: u32,
+    shader: u32,
+) -> bool {
+    if e.mem.u8(accumulator.wrapping_add(0x164)) != 0 && e.mem.u32(shader.wrapping_add(0x68)) == 0xd
+    {
+        return true;
+    }
+    if e.mem.u8(accumulator.wrapping_add(0x3a)) != 0 {
+        let depth = e.vcall(property, 0xac, &args![geometry]).u32();
+        if depth != 0 {
+            let group = if e.mem.u8(accumulator.wrapping_add(0x85)) != 0 {
+                0xcu32
+            } else {
+                0xb
+            };
+            let renderer = thread_renderer_unmodded(e, accumulator);
+            e.call(
+                BATCH_REGISTER_00B9B3B0,
+                &args![renderer, depth, group, 0u32],
+            );
+        }
+    }
+    let tls = e.tls();
+    let thread = e.mem.u32(tls + TLS_WORD_2BC);
+    let current = batch_renderer(e, accumulator, thread % batch_count(e, accumulator));
+    // The exe tests `+0x34 > 0 && +0x38` again inside the change; nothing writes in between.
+    let active =
+        e.mem.i32(current.wrapping_add(0x34)) > 0 && e.mem.u8(current.wrapping_add(0x38)) != 0;
+    let flagged = e.mem.u32(property.wrapping_add(0x20)) & 0x200 != 0;
+    if active != flagged {
+        let flags = e.mem.u32(property.wrapping_add(0x20));
+        if active {
+            if flags & 0x200 == 0 {
+                e.mem.set_u32(property.wrapping_add(0x38), 0);
+            }
+            let flags = e.mem.u32(property.wrapping_add(0x20));
+            e.mem.set_u32(property.wrapping_add(0x20), flags | 0x200);
+        } else {
+            if flags & 0x200 != 0 {
+                e.mem.set_u32(property.wrapping_add(0x38), 0);
+            }
+            let flags = e.mem.u32(property.wrapping_add(0x20));
+            e.mem
+                .set_u32(property.wrapping_add(0x20), flags & 0xffff_fdff);
+        }
+        let object = e.mem.u32(property.wrapping_add(0x3c));
+        if object != 0 {
+            e.mem.set_u32(object.wrapping_add(0x10), 0);
+        }
+    }
+    let mode = e.mem.u32(accumulator.wrapping_add(0x19c));
+    let flags = e.mem.u32(SHADER_FLAGS_011F91D8);
+    let list = e.with_stack(4, |e, local| {
+        e.mem.set_u32(local.addr(), 0);
+        e.vcall(
+            property,
+            0xa0,
+            &args![geometry, flags, local, mode, accumulator, 1u32],
+        )
+        .u32()
+    });
+    let first_person = e.mem.u8(accumulator.wrapping_add(0x85)) != 0;
+    let bits = e.mem.u8(property.wrapping_add(0x24));
+    if first_person {
+        if bits & 0x40 == 0 {
+            e.mem.set_u32(property.wrapping_add(0x38), 0);
+        }
+        let word = e.mem.u32(property.wrapping_add(0x24));
+        e.mem.set_u32(property.wrapping_add(0x24), word | 0x40);
+    } else {
+        if bits & 0x40 != 0 {
+            e.mem.set_u32(property.wrapping_add(0x38), 0);
+        }
+        let word = e.mem.u32(property.wrapping_add(0x24));
+        e.mem
+            .set_u32(property.wrapping_add(0x24), word & 0xffff_ffbf);
+    }
+    if list == 0 || e.mem.u32(list.wrapping_add(0x10)) == 0 {
+        return true;
+    }
+    let mut index = 0u32;
+    while index < e.mem.u32(list.wrapping_add(0x10)) {
+        let base = e.mem.u32(list.wrapping_add(4));
+        let pass = e.mem.u32(base.wrapping_add(index.wrapping_mul(4)));
+        let pass_enum = e.mem.u16(pass.wrapping_add(4));
+        if pass_enum != 0 {
+            register_by_type(e, accumulator, pass, pass_enum);
+        }
+        index = index.wrapping_add(1);
+    }
+    if e.mem.u8(accumulator.wrapping_add(0x85)) == 0
+        || e.mem.u8(accumulator.wrapping_add(0x84)) == 0
+    {
+        return true;
+    }
+    let late = e.vcall(property, 0xa8, &[]).u32();
+    if late == 0 || e.mem.u32(late.wrapping_add(0x10)) == 0 {
+        return true;
+    }
+    let mut index = 0u32;
+    loop {
+        let accumulate = e.mem.u8(accumulator.wrapping_add(0x84)) != 0;
+        let base = e.mem.u32(late.wrapping_add(4));
+        let pass = e.mem.u32(base.wrapping_add(index.wrapping_mul(4)));
+        if accumulate {
+            let renderer = thread_renderer_unmodded(e, accumulator);
+            e.vcall(renderer, 0x8c, &args![pass, 0u32]);
+        } else {
+            let shader = e.call(GET_SHADER, &args![1u32]).u32();
+            let pass_enum = u32::from(e.mem.u16(pass.wrapping_add(4)));
+            e.call(SHADER_SETUP_00B7A870, &args![pass_enum, 0u32]);
+            if shader != 0 {
+                let first = e.mem.u32(shader.wrapping_add(0x34));
+                e.vcall(first, 0x24, &[]);
+                let second = e.mem.u32(shader.wrapping_add(0x30));
+                e.vcall(second, 0x24, &[]);
+            }
+            let pass_enum = u32::from(e.mem.u16(pass.wrapping_add(4)));
+            e.call(RENDER_PASS_00B63320, &args![pass, pass_enum]);
+        }
+        index = index.wrapping_add(1);
+        if index >= e.mem.u32(late.wrapping_add(0x10)) {
+            return true;
+        }
+    }
+}
+
+/// The switch of [`fn_00b64020`] for one pass with a non-zero enum (00b641c3 to 00b6430d).
+fn register_by_type(e: &mut Engine, accumulator: u32, pass: u32, pass_enum: u16) {
+    let case = u32::from(e.mem.u8(pass.wrapping_add(6))).wrapping_sub(1);
+    let target = if case > 0xd {
+        SWITCH_DEFAULT_00B642ED
+    } else {
+        JUMP_TABLE_00B643FC[case as usize]
+    };
+    let group = |e: &mut Engine, group: u32, flag: u32| {
+        let renderer = thread_renderer_unmodded(e, accumulator);
+        e.call(BATCH_REGISTER_00B9B3B0, &args![renderer, pass, group, flag]);
+    };
+    match target {
+        0x00b6_41d8 => {
+            let mut flag = 0u32;
+            if e.mem.u8(accumulator.wrapping_add(0x166)) != 0 {
+                let object = e.mem.u32(pass);
+                let mut source = e.mem.u32(object.wrapping_add(0x20));
+                if source == 0 {
+                    source = DEFAULT_OBJECT_011F4288;
+                }
+                let value = crate::x87::X87Ext::load32(e.mem.u32(source.wrapping_add(8)));
+                let count = e.mem.i32(accumulator.wrapping_add(0x168));
+                let limit = crate::x87::X87Ext::load64(f64::from(count));
+                // FILD; FCOMPP (ST0 the int); TEST AH, 0x41; JNZ: above and ordered.
+                let status = crate::x87::x87_fcom(limit, value);
+                if status & (crate::x87::X87_STATUS_C0 | crate::x87::X87_STATUS_C3) == 0 {
+                    flag = 1;
+                }
+            }
+            let renderer = thread_renderer_unmodded(e, accumulator);
+            e.call(BATCH_REGISTER_00B9B3D0, &args![renderer, pass, flag]);
+        }
+        0x00b6_4234 => group(e, 0xa, 0),
+        0x00b6_424f => group(e, 1, 0),
+        0x00b6_426a => {
+            if e.mem.u8(accumulator.wrapping_add(0x16c)) != 0 {
+                group(e, 2, 1);
+            }
+        }
+        0x00b6_4290 => {
+            if e.mem.u8(accumulator.wrapping_add(0x16c)) != 0 {
+                group(e, 3, 0);
+            }
+        }
+        0x00b6_429e => group(e, 6, 0),
+        0x00b6_42b6 => group(e, 8, 0),
+        0x00b6_42ce => group(e, 0, 0),
+        0x00b6_42d5 => group(e, 9, 0),
+        SWITCH_DEFAULT_00B642ED => {
+            let renderer = thread_renderer_unmodded(e, accumulator);
+            e.vcall(renderer, 0x8c, &args![pass, u32::from(pass_enum)]);
+        }
+        // 0x00b6_430d: the loop's continue.
+        _ => {}
+    }
+}
+
 // Translated from 00b64440 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed (Ghidra made no function here); the register function of render mode 9
 /// (`011f9fa4`), `cdecl` with the five register words. Answers true without registering
@@ -2865,6 +3120,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00b6_3f90,
             fn_00b63f90(Ptr<BSShaderAccumulator>, u32, u32, u32, u32) -> bool
         ),
+        entry!(0x00b6_4020, fn_00b64020(u32, u32, u32, u32, u32) -> bool),
         entry!(0x00b6_4440, fn_00b64440(u32, u32, u32, u32, u32) -> bool),
         entry!(0x00b6_4490, fn_00b64490(u32, u32, u32, u32, u32) -> bool),
         entry!(0x00b6_44b0, fn_00b644b0(u32, u32, u32, u32, u32) -> bool),
@@ -4502,6 +4758,204 @@ mod n012_tests {
             calls(&e, 0x0f00_008c)[1..],
             [vec![renderer, zero, 0], vec![renderer, lit, 0x2d]]
         );
+    }
+
+    /// An accumulator for `00b64020` with renderers 0 (`[thread % 2]`) and 2 (`[thread]`,
+    /// thread word 2), a property whose slots +0xa0, +0xa8 and +0xac answer `list`, `late`
+    /// and `depth`, and the batch calls doubled. Answers (accumulator, renderer 0, renderer
+    /// 2, property).
+    fn register_rig(e: &mut Engine, list: u32, late: u32, depth: u32) -> (u32, u32, u32, u32) {
+        let (this, renderer) = accumulator(e);
+        let other = e.mem.alloc(0x98);
+        e.mem.set_u32(this + 0x17c, other);
+        e.mem.set_u32(this + 0x18c, 2);
+        e.mem.set_u32(this + 0x19c, 6);
+        e.mem.set_u32(SHADER_FLAGS_011F91D8, 0x2f);
+        let mut slots = [0u32; 0x30];
+        slots[0x8c / 4] = 0x0f00_008c;
+        slots[0xa0 / 4] = 0x0f00_00a0;
+        slots[0xa8 / 4] = 0x0f00_00a8;
+        slots[0xac / 4] = 0x0f00_00ac;
+        e.put_vtable(0x0f00_1000, &slots);
+        e.mem.set_u32(other, 0x0f00_1000);
+        e.register(0x0f00_008c, |_, _| Ret::default());
+        e.register_double(0x0f00_00a0, move |e, a| {
+            assert_eq!(e.mem.u32(a[3]), 0);
+            list.into_ret()
+        });
+        e.register_double(0x0f00_00a8, move |_, _| late.into_ret());
+        e.register_double(0x0f00_00ac, move |_, _| depth.into_ret());
+        e.register(BATCH_REGISTER_00B9B3B0, |_, _| Ret::default());
+        e.register(BATCH_REGISTER_00B9B3D0, |_, _| Ret::default());
+        let property = e.mem.alloc(0x60);
+        e.mem.set_u32(property, 0x0f00_1000);
+        let tls = e.tls();
+        e.mem.set_u32(tls + TLS_WORD_2BC, 2);
+        (this, renderer, other, property)
+    }
+
+    /// A pass array of `passes` (count `+0x10`, items `+4`).
+    fn pass_list(e: &mut Engine, passes: &[u32]) -> u32 {
+        let list = e.mem.alloc(0x14);
+        let items = e.mem.alloc(4 * passes.len() as u32 + 4);
+        for (i, pass) in passes.iter().enumerate() {
+            e.mem.set_u32(items + 4 * i as u32, *pass);
+        }
+        e.mem.set_u32(list + 4, items);
+        e.mem.set_u32(list + 0x10, passes.len() as u32);
+        list
+    }
+
+    /// A pass with its object (`+0`), enum (`+4`) and type byte (`+6`).
+    fn pass(e: &mut Engine, object: u32, pass_enum: u16, kind: u8) -> u32 {
+        let pass = e.mem.alloc(0x10);
+        e.mem.set_u32(pass, object);
+        e.mem.set_u16(pass + 4, pass_enum);
+        e.mem.set_u8(pass + 6, kind);
+        pass
+    }
+
+    #[test]
+    fn fn_00b64020_registers_each_pass_by_type() {
+        let mut e = rig();
+        let object = e.mem.alloc(0x30);
+        let lit = e.mem.alloc(0x10);
+        e.mem.set_f32(lit + 8, f32::NAN);
+        let lit_object = e.mem.alloc(0x30);
+        e.mem.set_u32(lit_object + 0x20, lit);
+        e.mem.set_f32(DEFAULT_OBJECT_011F4288 + 8, 4.5);
+        let mut passes = vec![
+            pass(&mut e, object, 0x31, 1),
+            pass(&mut e, lit_object, 0x32, 1),
+            pass(&mut e, object, 0, 2),
+            pass(&mut e, object, 0x40, 0),
+            pass(&mut e, object, 0x41, 15),
+        ];
+        for kind in 2..=14u8 {
+            passes.push(pass(&mut e, object, 0x100 + u16::from(kind), kind));
+        }
+        let list = pass_list(&mut e, &passes);
+        let (this, renderer, other, property) = register_rig(&mut e, list, 0, 0x7777);
+        // Byte +0x164 and a shader of type 0xd: nothing.
+        let shader = e.mem.alloc(0x70);
+        e.mem.set_u32(shader + 0x68, 0xd);
+        e.mem.set_u8(this + 0x164, 1);
+        let words = args![this, 0x77u32, 0u32, property, shader];
+        assert!(e.call(0x00b6_4020, &words).bool());
+        assert!(calls(&e, 0x0f00_00a0).is_empty());
+        e.mem.set_u32(shader + 0x68, 0xc);
+        e.mem.set_u8(this + 0x3a, 1);
+        e.mem.set_u8(this + 0x166, 1);
+        e.mem.set_u32(this + 0x168, 5);
+        e.mem.set_u8(this + 0x16c, 1);
+        e.mem.set_u32(renderer + 0x34, 1);
+        e.mem.set_u8(renderer + 0x38, 1);
+        let changed = e.mem.alloc(0x14);
+        e.mem.set_u32(changed + 0x10, 9);
+        e.mem.set_u32(property + 0x3c, changed);
+        e.mem.set_u32(property + 0x38, 0x55);
+        e.mem.set_u32(property + 0x24, 0x41);
+        assert!(e.call(0x00b6_4020, &words).bool());
+        assert_eq!(calls(&e, 0x0f00_00ac), vec![vec![property, 0x77]]);
+        let asked = calls(&e, 0x0f00_00a0);
+        assert_eq!(asked[0][0..3], [property, 0x77, 0x2f]);
+        assert_eq!(asked[0][4..], [6, this, 1]);
+        assert_eq!(e.mem.u32(property + 0x20), 0x200);
+        assert_eq!(e.mem.u32(property + 0x24), 1);
+        assert_eq!(e.mem.u32(property + 0x38), 0);
+        assert_eq!(e.mem.u32(changed + 0x10), 0);
+        let p = |i: usize| passes[i];
+        assert_eq!(
+            calls(&e, BATCH_REGISTER_00B9B3B0),
+            vec![
+                vec![other, 0x7777, 0xb, 0],
+                vec![other, p(5), 0xa, 0],
+                vec![other, p(6), 1, 0],
+                vec![other, p(7), 2, 1],
+                vec![other, p(8), 3, 0],
+                vec![other, p(9), 6, 0],
+                vec![other, p(10), 8, 0],
+                vec![other, p(13), 0, 0],
+                vec![other, p(17), 9, 0],
+            ]
+        );
+        assert_eq!(
+            calls(&e, BATCH_REGISTER_00B9B3D0),
+            vec![vec![other, p(0), 1], vec![other, p(1), 0]]
+        );
+        assert_eq!(
+            calls(&e, 0x0f00_008c),
+            vec![vec![other, p(3), 0x40], vec![other, p(4), 0x41]]
+        );
+        assert!(calls(&e, 0x0f00_00a8).is_empty());
+        // Without decals the types 4 and 5 register nothing; the bit set stays.
+        e.mem.set_u8(this + 0x16c, 0);
+        e.mem.set_u8(this + 0x3a, 0);
+        e.mem.set_u32(property + 0x38, 0x55);
+        assert!(e.call(0x00b6_4020, &words).bool());
+        assert_eq!(calls(&e, BATCH_REGISTER_00B9B3B0).len(), 9 + 6);
+        assert_eq!(e.mem.u32(property + 0x38), 0x55);
+        assert_eq!(calls(&e, 0x0f00_00ac).len(), 1);
+    }
+
+    #[test]
+    fn fn_00b64020_first_person_late_passes() {
+        let mut e = rig();
+        let object = e.mem.alloc(0x30);
+        let skipped = pass(&mut e, object, 0, 3);
+        let list = pass_list(&mut e, &[skipped]);
+        let first = pass(&mut e, object, 0x51, 0);
+        let second = pass(&mut e, object, 0x52, 0);
+        let late = pass_list(&mut e, &[first, second]);
+        let (this, renderer, other, property) = register_rig(&mut e, list, late, 0x7777);
+        e.mem.set_u8(this + 0x3a, 1);
+        e.mem.set_u8(this + 0x84, 1);
+        e.mem.set_u8(this + 0x85, 1);
+        e.mem.set_u32(renderer + 0x34, 0);
+        e.mem.set_u8(renderer + 0x38, 1);
+        e.mem.set_u32(property + 0x20, 0x201);
+        e.mem.set_u32(property + 0x38, 0x55);
+        // The renderer's slot +0x8c clears bAccumulate: the second pass renders now.
+        e.register_double(0x0f00_008c, move |e, _| {
+            e.mem.set_u8(this + 0x84, 0);
+            Ret::default()
+        });
+        let shader = e.mem.alloc(0x40);
+        let mut slots = [0u32; 0x10];
+        slots[0x24 / 4] = 0x0f00_0024;
+        e.put_vtable(0x0f00_3000, &slots);
+        let (a, b) = (e.mem.alloc(8), e.mem.alloc(8));
+        e.mem.set_u32(a, 0x0f00_3000);
+        e.mem.set_u32(b, 0x0f00_3000);
+        e.mem.set_u32(shader + 0x34, a);
+        e.mem.set_u32(shader + 0x30, b);
+        e.register(0x0f00_0024, |_, _| Ret::default());
+        e.register_double(GET_SHADER, move |_, _| shader.into_ret());
+        e.register(SHADER_SETUP_00B7A870, |_, _| Ret::default());
+        e.register(RENDER_PASS_00B63320, |_, _| Ret::default());
+        let words = args![this, 0x77u32, 0u32, property, 0u32];
+        assert!(e.call(0x00b6_4020, &words).bool());
+        assert_eq!(
+            calls(&e, BATCH_REGISTER_00B9B3B0),
+            vec![vec![other, 0x7777, 0xc, 0]]
+        );
+        assert_eq!(e.mem.u32(property + 0x20), 1);
+        assert_eq!(e.mem.u32(property + 0x24), 0x40);
+        assert_eq!(e.mem.u32(property + 0x38), 0);
+        assert_eq!(calls(&e, 0x0f00_008c), vec![vec![other, first, 0]]);
+        assert_eq!(calls(&e, GET_SHADER), vec![vec![1]]);
+        assert_eq!(calls(&e, SHADER_SETUP_00B7A870), vec![vec![0x52, 0]]);
+        assert_eq!(calls(&e, 0x0f00_0024), vec![vec![a], vec![b]]);
+        assert_eq!(calls(&e, RENDER_PASS_00B63320), vec![vec![second, 0x52]]);
+        // No shader: the two slots are skipped.
+        e.register_double(GET_SHADER, |_, _| 0u32.into_ret());
+        e.mem.set_u8(this + 0x84, 1);
+        assert!(e.call(0x00b6_4020, &words).bool());
+        assert_eq!(calls(&e, 0x0f00_0024).len(), 2);
+        assert_eq!(calls(&e, RENDER_PASS_00B63320).len(), 2);
+        // Without bAccumulate the late list is not asked for.
+        assert!(e.call(0x00b6_4020, &words).bool());
+        assert_eq!(calls(&e, 0x0f00_00a8).len(), 2);
     }
 
     #[test]
