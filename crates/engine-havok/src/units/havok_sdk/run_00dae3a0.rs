@@ -1140,6 +1140,9 @@ pub fn fn_00dae3a0(e: &mut Engine, record: u32, points: u32, start: u32, cell: u
             let last_second = e.mem.u32(table + 4);
             count -= 1;
             e.mem.set_u32(entry + 4, last_second);
+            // `SUB EDI,0x8` at 00daed70: the entry pointer steps back with the
+            // index, so the entry moved in from the end is looked at next.
+            entry = entry.wrapping_sub(8);
         }
         index = index.wrapping_add(1);
         entry += 8;
@@ -1894,6 +1897,51 @@ mod a09_tests_b {
         let table = record + 4 + 16;
         assert_eq!([e.mem.u16(table), e.mem.u16(table + 2)], [0xaaa1, 0xaaa2]);
         assert_eq!(calls(&e, MANIFOLD_REMOVE_POINT), vec![vec![record]]);
+    }
+
+    /// p181: the entry moved in from the end goes through the same check at the dropped
+    /// entry's place (`SUB EDI,0x8` at 00daed70). Entries 0 and 2 go, entry 1 stays: the old
+    /// last entry (0x33) moves to place 0 and goes too, then 0x22 moves there and stays. Before
+    /// the fix the pointer moved on, 0x33 stayed in the record with its id already freed (the
+    /// next step wrote it to the output or freed it a second time) and 0x22 was lost.
+    #[test]
+    fn an_entry_moved_in_from_the_end_is_checked_at_the_dropped_place() {
+        let mut e = engine();
+        let vertices: [Vec4; 4] = [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 0.0],
+            [10.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 0.0],
+        ];
+        let points = make_points(
+            &mut e,
+            &vertices,
+            [0.5, 0.0, 0.0, 0.0],
+            [0.25, 2.0, 1.0, 5.0],
+        );
+        let record = make_record(
+            &mut e,
+            [1, 1],
+            &[
+                (1, 1, 0x11, [2, 3, 0, 0]),
+                (1, 1, 0x22, [0, 1, 0, 0]),
+                (1, 1, 0x33, [2, 3, 0, 0]),
+            ],
+            &[0xaaa1, 0xaaa2],
+        );
+        let (object, cell, out) = make_object_and_cell(&mut e, 3);
+        let kept = entry_bytes(&e, record, 1);
+        e.call(0x00da_e3a0, &args![record, points, 0u32, cell, object]);
+        assert_eq!(
+            calls(&e, OBJECT_SLOT_14),
+            vec![vec![object, 0x11, 0xe7a], vec![object, 0x33, 0xe7a]]
+        );
+        assert_eq!(e.mem.u8(record + 2), 1);
+        assert_eq!(entry_bytes(&e, record, 0), kept);
+        assert_eq!(e.mem.u32(out + 0x20), 0x22);
+        assert_eq!(e.mem.u32(cell), out + 0x30);
+        let table = record + 4 + 8;
+        assert_eq!([e.mem.u16(table), e.mem.u16(table + 2)], [0xaaa1, 0xaaa2]);
     }
 
     #[test]
