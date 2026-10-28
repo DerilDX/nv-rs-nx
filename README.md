@@ -71,7 +71,7 @@ Experimental, but already playable in places:
 </table>
 
 Not yet: a full playthrough, loading original saves, script-extender (NVSE)
-plugins, Linux and VR.
+plugins, packaged Linux and macOS builds, and VR.
 
 ## Progress
 
@@ -133,6 +133,29 @@ cargo run --release -- "/path/to/Fallout New Vegas/Data" GSDocMitchellHouse
 
 Apple Silicon builds a native arm64 viewer by default. The game executable
 and Windows release packages remain Windows-specific.
+
+### Build and run on Linux (Vulkan and Wayland)
+
+The viewer builds from source on Linux and supports native Wayland and X11
+windows. On Fedora, install `alsa-lib-devel`, `libudev-devel`,
+`wayland-devel`, and `libxkbcommon-devel`. Debian and Ubuntu need
+`libasound2-dev`, `libudev-dev`, `libwayland-dev`, and `libxkbcommon-dev`.
+Install a Vulkan loader and a working GPU driver for your system.
+
+From a Wayland session, pass your own game data folder. When
+`WAYLAND_DISPLAY` is set, winit prefers Wayland. Unsetting `DISPLAY` is
+optional and forces the native Wayland path; `WGPU_BACKEND=vulkan` selects
+Vulkan rendering:
+
+```sh
+cd viewer
+env -u DISPLAY WGPU_BACKEND=vulkan cargo run --release -- \
+  "/path/to/Fallout New Vegas/Data" GSDocMitchellHouse
+```
+
+For Steam/Proton installations, pass the active plugin list and INI when
+needed with `--plugins` and `--ini`. Linux builds currently run from source;
+Windows remains the packaged playtest platform.
 
 ---
 

@@ -12,7 +12,7 @@ publish = false
 
 [dependencies]
 # Pinned: Bevy's API changes between releases.
-bevy = "0.16"
+bevy = { version = "0.16", features = ["wayland"] }
 # Bevy's own wgpu (the same version, no features of its own): the window's
 # surface asked which present modes it takes (`present`).
 wgpu = { version = "24", default-features = false }
