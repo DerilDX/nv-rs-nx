@@ -36,45 +36,45 @@ pub fn fn_00dfbd70(e: &mut Engine, this: Ptr, flags: u8) -> Ptr {
 }
 
 // Translated from 00dfbbf0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `hkTypeInfo::m_finishLoadedObjectFunction` (Xbox PDB field name) of a class record whose class the engine map does not name (address held in the static data word at 011ba358): cdecl with two stack words, `object` and `finishing`. When `object` is not null, runs `13306480` (thiscall, `RET 4`) on `object` with the one stack word `finishing`.
+/// `hkTypeInfo::m_finishLoadedObjectFunction` (Xbox PDB field name) of a class record whose class the engine map does not name (address held in the static data word at 011ba358): cdecl with two stack words, `object` and `finishing`. When `object` is not null, runs `00cb0a70` (the `CALL` at 00dfbbfd) (thiscall, `RET 4`) on `object` with the one stack word `finishing`.
 pub fn fn_00dfbbf0(e: &mut Engine, object: Ptr, finishing: u32) {
     if object.addr() != 0 {
-        e.call(0x1330_6480, &args![object.addr(), finishing]);
+        e.call(0x00cb_0a70, &args![object.addr(), finishing]);
     }
 }
 
 // Translated from 00dfbc20 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `hkTypeInfo::m_cleanupLoadedObjectFunction` (Xbox PDB field name) of a class record whose class the engine map does not name (address held in the static data word at 011ba35c): cdecl with one stack word, `object`. Jumps to `13306880` (`hkStringPtr::~hkStringPtr` in Ghidra, fastcall, no stack word) with `object` as `this`, so it answers what that answers.
+/// `hkTypeInfo::m_cleanupLoadedObjectFunction` (Xbox PDB field name) of a class record whose class the engine map does not name (address held in the static data word at 011ba35c): cdecl with one stack word, `object`. Jumps to `00cb0c00` (the `JMP` at 00dfbc24) (`hkStringPtr::~hkStringPtr` in Ghidra, fastcall, no stack word) with `object` as `this`, so it answers what that answers.
 pub fn fn_00dfbc20(e: &mut Engine, object: Ptr) -> u32 {
-    e.call(0x1330_6880, &args![object.addr()]).u32()
+    e.call(0x00cb_0c00, &args![object.addr()]).u32()
 }
 
 // Translated from 00dfbc30 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `hkTypeInfo::m_finishLoadedObjectFunction` (Xbox PDB field name) of a class record whose class the engine map does not name (address held in the static data word at 011ba388): cdecl with two stack words, `object` and `finishing`. When `object` is not null, runs `13306480` (thiscall, `RET 4`) on `object + 0x4` with the one stack word `finishing`.
+/// `hkTypeInfo::m_finishLoadedObjectFunction` (Xbox PDB field name) of a class record whose class the engine map does not name (address held in the static data word at 011ba388): cdecl with two stack words, `object` and `finishing`. When `object` is not null, runs `00cb0a70` (the `CALL` at 00dfbc40) (thiscall, `RET 4`) on `object + 0x4` with the one stack word `finishing`.
 pub fn fn_00dfbc30(e: &mut Engine, object: Ptr, finishing: u32) {
     if object.addr() != 0 {
-        e.call(0x1330_6480, &args![object.addr() + 4, finishing]);
+        e.call(0x00cb_0a70, &args![object.addr() + 4, finishing]);
     }
 }
 
 // Translated from 00dfbc70 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `hkTypeInfo::m_cleanupLoadedObjectFunction` (Xbox PDB field name) of a class record whose class the engine map does not name (address held in the static data word at 011ba38c): cdecl with one stack word, `object`. Jumps to `13306880` (`hkStringPtr::~hkStringPtr` in Ghidra, fastcall, no stack word) with `object + 0x4` as `this`, so it answers what that answers.
+/// `hkTypeInfo::m_cleanupLoadedObjectFunction` (Xbox PDB field name) of a class record whose class the engine map does not name (address held in the static data word at 011ba38c): cdecl with one stack word, `object`. Jumps to `00cb0c00` (the `JMP` at 00dfbc77) (`hkStringPtr::~hkStringPtr` in Ghidra, fastcall, no stack word) with `object + 0x4` as `this`, so it answers what that answers.
 pub fn fn_00dfbc70(e: &mut Engine, object: Ptr) -> u32 {
-    e.call(0x1330_6880, &args![object.addr() + 4]).u32()
+    e.call(0x00cb_0c00, &args![object.addr() + 4]).u32()
 }
 
 // Translated from 00dfbc80 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `hkTypeInfo::m_finishLoadedObjectFunction` (Xbox PDB field name) of a class record whose class the engine map does not name (address held in the static data word at 011ba3a0): cdecl with two stack words, `object` and `finishing`. When `object` is not null, runs `13306480` (thiscall, `RET 4`) on `object` with the one stack word `finishing`.
+/// `hkTypeInfo::m_finishLoadedObjectFunction` (Xbox PDB field name) of a class record whose class the engine map does not name (address held in the static data word at 011ba3a0): cdecl with two stack words, `object` and `finishing`. When `object` is not null, runs `00cb0a70` (the `CALL` at 00dfbc8d) (thiscall, `RET 4`) on `object` with the one stack word `finishing`.
 pub fn fn_00dfbc80(e: &mut Engine, object: Ptr, finishing: u32) {
     if object.addr() != 0 {
-        e.call(0x1330_6480, &args![object.addr(), finishing]);
+        e.call(0x00cb_0a70, &args![object.addr(), finishing]);
     }
 }
 
 // Translated from 00dfbca0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `hkTypeInfo::m_cleanupLoadedObjectFunction` (Xbox PDB field name) of a class record whose class the engine map does not name (address held in the static data word at 011ba3a4): cdecl with one stack word, `object`. Jumps to `14661024` (`hkaAnnotationTrack::~hkaAnnotationTrack` in Ghidra, fastcall, no stack word) with `object` as `this`, so it answers what that answers.
+/// `hkTypeInfo::m_cleanupLoadedObjectFunction` (Xbox PDB field name) of a class record whose class the engine map does not name (address held in the static data word at 011ba3a4): cdecl with one stack word, `object`. Jumps to `00dfb5a0` (the `JMP` at 00dfbca4) (`hkaAnnotationTrack::~hkaAnnotationTrack` in Ghidra, fastcall, no stack word) with `object` as `this`, so it answers what that answers.
 pub fn fn_00dfbca0(e: &mut Engine, object: Ptr) -> u32 {
-    e.call(0x1466_1024, &args![object.addr()]).u32()
+    e.call(0x00df_b5a0, &args![object.addr()]).u32()
 }
 
 // Translated from 00dfbcb0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -251,73 +251,73 @@ mod tests_a07_gap {
     #[test]
     fn fn_00dfbbf0_runs_the_callee_unless_the_object_is_null() {
         let mut e = Engine::new();
-        e.register(0x1330_6480, |_, _| Ret::default());
+        e.register(0x00cb_0a70, |_, _| Ret::default());
         let object = e.mem.alloc(0x40);
         e.call_log = Some(vec![]);
         e.call(0x00df_bbf0, &args![0u32, 7u32]);
         e.call(0x00df_bbf0, &args![object, 7u32]);
-        assert_eq!(calls_to(&mut e, 0x1330_6480), vec![vec![object, 7]]);
+        assert_eq!(calls_to(&mut e, 0x00cb_0a70), vec![vec![object, 7]]);
     }
 
     #[test]
     fn fn_00dfbc20_hands_the_object_to_the_callee() {
         let mut e = Engine::new();
-        e.register(0x1330_6880, |_, _| Ret {
+        e.register(0x00cb_0c00, |_, _| Ret {
             eax: 0x55,
             ..Ret::default()
         });
         let object = e.mem.alloc(0x40);
         e.call_log = Some(vec![]);
         assert_eq!(e.call(0x00df_bc20, &args![object]).u32(), 0x55);
-        assert_eq!(calls_to(&mut e, 0x1330_6880), vec![vec![object]]);
+        assert_eq!(calls_to(&mut e, 0x00cb_0c00), vec![vec![object]]);
     }
 
     #[test]
     fn fn_00dfbc30_runs_the_callee_unless_the_object_is_null() {
         let mut e = Engine::new();
-        e.register(0x1330_6480, |_, _| Ret::default());
+        e.register(0x00cb_0a70, |_, _| Ret::default());
         let object = e.mem.alloc(0x40);
         e.call_log = Some(vec![]);
         e.call(0x00df_bc30, &args![0u32, 7u32]);
         e.call(0x00df_bc30, &args![object, 7u32]);
-        assert_eq!(calls_to(&mut e, 0x1330_6480), vec![vec![object + 4, 7]]);
+        assert_eq!(calls_to(&mut e, 0x00cb_0a70), vec![vec![object + 4, 7]]);
     }
 
     #[test]
     fn fn_00dfbc70_hands_the_object_to_the_callee() {
         let mut e = Engine::new();
-        e.register(0x1330_6880, |_, _| Ret {
+        e.register(0x00cb_0c00, |_, _| Ret {
             eax: 0x55,
             ..Ret::default()
         });
         let object = e.mem.alloc(0x40);
         e.call_log = Some(vec![]);
         assert_eq!(e.call(0x00df_bc70, &args![object]).u32(), 0x55);
-        assert_eq!(calls_to(&mut e, 0x1330_6880), vec![vec![object + 4]]);
+        assert_eq!(calls_to(&mut e, 0x00cb_0c00), vec![vec![object + 4]]);
     }
 
     #[test]
     fn fn_00dfbc80_runs_the_callee_unless_the_object_is_null() {
         let mut e = Engine::new();
-        e.register(0x1330_6480, |_, _| Ret::default());
+        e.register(0x00cb_0a70, |_, _| Ret::default());
         let object = e.mem.alloc(0x40);
         e.call_log = Some(vec![]);
         e.call(0x00df_bc80, &args![0u32, 7u32]);
         e.call(0x00df_bc80, &args![object, 7u32]);
-        assert_eq!(calls_to(&mut e, 0x1330_6480), vec![vec![object, 7]]);
+        assert_eq!(calls_to(&mut e, 0x00cb_0a70), vec![vec![object, 7]]);
     }
 
     #[test]
     fn fn_00dfbca0_hands_the_object_to_the_callee() {
         let mut e = Engine::new();
-        e.register(0x1466_1024, |_, _| Ret {
+        e.register(0x00df_b5a0, |_, _| Ret {
             eax: 0x55,
             ..Ret::default()
         });
         let object = e.mem.alloc(0x40);
         e.call_log = Some(vec![]);
         assert_eq!(e.call(0x00df_bca0, &args![object]).u32(), 0x55);
-        assert_eq!(calls_to(&mut e, 0x1466_1024), vec![vec![object]]);
+        assert_eq!(calls_to(&mut e, 0x00df_b5a0), vec![vec![object]]);
     }
 
     #[test]

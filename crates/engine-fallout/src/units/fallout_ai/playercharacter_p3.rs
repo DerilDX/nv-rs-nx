@@ -840,7 +840,7 @@ pub fn fn_0095de30(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32) {
     let mut zoom = setting_float(e, SETTING_011E0970);
     let divisor = setting_float(e, SETTING_011CE870);
     // A local the game initializes to 1.0 is never read.
-    let camera = e.call(READ_GLOBAL_011DEB7C, &args![]).u32();
+    let camera = e.call(GET_CAMERA_HOLDER, &args![]).u32();
     let target = e.call(READ_DWORD_AT_AC, &args![camera]).u32();
     e.call(COPY_16_BYTES_TO_OFFSET_100, &args![target, SOURCE_011AD840]);
 
@@ -870,7 +870,7 @@ pub fn fn_0095de30(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32) {
     }
 
     if e.mem.u8(FLAG_011E07B8) != 0 && e.mem.u8(FOV_MOVING_FLAG) != 0 {
-        let camera = e.call(READ_GLOBAL_011DEB7C, &args![]).u32();
+        let camera = e.call(GET_CAMERA_HOLDER, &args![]).u32();
         let current = e.call(READ_FLOAT_AT_BC, &args![camera]).f32();
         if default_world != current {
             e.call(FUNCTION_00950610, &args![this, default_world]);
@@ -4973,8 +4973,6 @@ const POINTER_011DEA0C: u32 = 0x011d_ea0c;
 const POINTER_011E07D0: u32 = 0x011e_07d0;
 /// The global at `011f21cc`, holding a pointer.
 const POINTER_011F21CC: u32 = 0x011f_21cc;
-/// The function at `011deb7c` (called as its callers do).
-const READ_GLOBAL_011DEB7C: u32 = 0x011d_eb7c;
 /// The setting object at `011cdd78`.
 const SETTING_011CDD78: u32 = 0x011c_dd78;
 /// The setting object at `011ce344`.
@@ -8256,7 +8254,7 @@ mod tests {
         READ_FLOAT_AT_110,
         READ_FLOAT_AT_BC,
         READ_FLOAT_AT_C,
-        READ_GLOBAL_011DEB7C,
+        GET_CAMERA_HOLDER,
         SETTING_BOOL_POINTER,
         SETTING_FLOAT,
         SETTING_FLOAT_VALUE,

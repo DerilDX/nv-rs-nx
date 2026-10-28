@@ -1047,7 +1047,9 @@ pub fn pathing_solution_save_game(e: &mut Engine, this: Ptr<PathingSolution>, bu
         e.call(CURRENT_NODE_SAVE, &args![node, buffer]);
     }
 
-    e.with_stack(0x10, |e, infos| {
+    // The info array is 0x18 bytes: 006e3850 builds a simple array and a second object at +0x10
+    // (two vtables, 006e3960 and 004968b0); EBP-0x24 in the exe.
+    e.with_stack(0x18, |e, infos| {
         e.call(INFO_ARRAY_CONSTRUCT, &args![infos]);
         let info_count = if infos.addr() != 0 {
             e.call(ARRAY_SIZE, &args![infos]).u32()
@@ -1106,7 +1108,9 @@ pub fn pathing_solution_load_game(e: &mut Engine, this: Ptr<PathingSolution>, bu
         e.call(CURRENT_NODE_LOAD, &args![node, buffer]);
     }
 
-    e.with_stack(0x10, |e, infos| {
+    // The info array is 0x18 bytes: 006e3850 builds a simple array and a second object at +0x10
+    // (two vtables, 006e3960 and 004968b0); EBP-0x24 in the exe.
+    e.with_stack(0x18, |e, infos| {
         e.call(INFO_ARRAY_CONSTRUCT, &args![infos]);
         let info_count = e.call(LOAD_SIZED_VALUE, &args![buffer]).u32();
         e.call(INFO_ARRAY_SET_SIZE, &args![infos, info_count, 1u32]);

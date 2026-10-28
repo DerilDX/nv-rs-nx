@@ -346,8 +346,9 @@ pub fn fn_00c04d60(e: &mut Engine, this: Ptr) -> bool {
 /// the larger of the +0xc of the data at +0x5c and that of +0x60 (the second when not below,
 /// NaN included), the next three come from +0x5c's first three and three of the last ones
 /// are 1.0; otherwise they are the data's +0xc to +0x1c. The words +0x68 to +0x74 and the
-/// data's +0 to +8 and +0x20 to +0x2c fill the rest.
-pub fn fn_00c04f50(e: &mut Engine, this: Ptr) {
+/// data's +0 to +8 and +0x20 to +0x2c fill the rest. Answers the block +0x88 (`LEA EAX,[ECX+0x88]`
+/// at 00c04fef, left in `EAX`): its caller copies the constants from it (00bae5dd).
+pub fn fn_00c04f50(e: &mut Engine, this: Ptr) -> u32 {
     let base = this.addr();
     // The locals +0 to +0x34 of the exe's frame, by index.
     let mut local = [0u32; 14];
@@ -388,6 +389,7 @@ pub fn fn_00c04f50(e: &mut Engine, this: Ptr) {
         e.mem
             .set_u32(base + 0x94 + 4 * index as u32, x87_quiet_bits(local[*slot]));
     }
+    base + 0x88
 }
 
 // Translated from 00c050b0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -7217,7 +7219,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00c0_4d50, fn_00c04d50(Ptr, u32)),
         entry!(0x00c0_4d60, fn_00c04d60(Ptr) -> bool),
         entry!(0x00c0_4da0, fn_00c04da0(Ptr)),
-        entry!(0x00c0_4f50, fn_00c04f50(Ptr)),
+        entry!(0x00c0_4f50, fn_00c04f50(Ptr) -> u32),
         entry!(0x00c0_50b0, fn_00c050b0(Ptr, u32, u32)),
         entry!(0x00c0_5160, fn_00c05160(Ptr, u32) -> Ptr),
         entry!(0x00c0_5180, fn_00c05180(Ptr, Ptr, u32)),
@@ -7258,6 +7260,19 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fn_00c04f50_answers_the_block_at_0x88() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0xd0);
+        let data = e.mem.alloc(0x40);
+        e.mem.set_u32(this + 0x5c, data);
+        e.mem.set_u32(this + 0x60, data);
+        // `LEA EAX,[ECX+0x88]` at 00c04fef; 00bae560 copies the constants from it (00bae5dd).
+        assert_eq!(e.call(0x00c0_4f50, &args![this]).u32(), this + 0x88);
+        e.mem.set_u8(this + 0x58, 1);
+        assert_eq!(e.call(0x00c0_4f50, &args![this]).u32(), this + 0x88);
+    }
 
     #[test]
     fn fn_00c1a450_deletes_only_on_bit_0() {

@@ -3918,9 +3918,12 @@ fn load_face(e: &mut Engine, this: Ptr<TESNPC>, buffer: Ptr, changed: &mut u8) {
     let mut parts_differ = false;
     let version = e.vcall(buffer.addr(), 0, &args![]).u8();
     if version >= 0xe {
-        e.with_stack(0x14, |e, locals| {
+        // The scrap array is 0x14 bytes (its scrap heap at +0x10, set by 0060ba40), so the
+        // cell follows it. In the exe they are separate locals: the array at EBP-0x5c, the
+        // cells at EBP-0x64 and EBP-0x74.
+        e.with_stack(0x18, |e, locals| {
             let array = locals.addr();
-            let cell = locals.addr() + 0x10;
+            let cell = locals.addr() + 0x14;
             e.call(0x0060_ba40, &args![array]);
             let mut node = base + 0x1dc;
             while node != 0 {

@@ -1981,15 +1981,20 @@ pub fn fn_009b0920(e: &mut Engine, this: Ptr, rigid_body: Ptr) {
         return;
     }
 
-    e.with_stack(0xa4, |e, frame| {
+    // The exe's vectors are separate 12-byte locals: the impulse at EBP-0x70, its scaled copy
+    // at EBP-0x64, the torque at EBP-0x7c, the angular intermediate at EBP-0x88 and the scaled
+    // torque at EBP-0x94 (Ghidra prints the last two as `EBP + 0xffffff78` and `0xffffff6c`).
+    // The angular intermediate and the scaled torque get their own slots past the others here
+    // instead of +0x78 and +0x6c, where they lay over the torque and the impulse.
+    e.with_stack(0xbc, |e, frame| {
         let target_vector = Ptr::<()>::new(frame.addr());
         let direction = Ptr::<()>::new(frame.addr() + 0x20);
         let position = Ptr::<()>::new(frame.addr() + 0x38);
         let impulse = Ptr::<()>::new(frame.addr() + 0x70);
         let torque = Ptr::<()>::new(frame.addr() + 0x7c);
         let scaled_impulse = Ptr::<()>::new(frame.addr() + 0x64);
-        let angular_intermediate = Ptr::<()>::new(frame.addr() + 0x78);
-        let scaled_torque = Ptr::<()>::new(frame.addr() + 0x6c);
+        let angular_intermediate = Ptr::<()>::new(frame.addr() + 0xa4);
+        let scaled_torque = Ptr::<()>::new(frame.addr() + 0xb0);
         let output = Ptr::<()>::new(frame.addr() + 0x98);
         e.call(0x0068_15c0, &args![target_vector]);
         e.call(0x0068_15c0, &args![direction]);

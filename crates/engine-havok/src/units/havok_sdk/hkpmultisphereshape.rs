@@ -237,11 +237,14 @@ pub fn hkp_multi_sphere_shape_get_aabb_impl(
 // Translated from 00d2a920 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkpMultiSphereShape::getCollisionSpheresImpl` (Xbox PDB): copies the
 /// `m_numSpheres` spheres to `out`.
+/// Answers `out` (the `const hkSphere*` of the Xbox PDB signature; `EAX` is `out` at the
+/// RET 00d2a957): hkpHeightFieldAgent::staticGetPenetrations reads it through the
+/// hkpSphereRepShape slot +0x30 of body A's shape (`MOV [ESP+0x14],EAX` at 00d3187d).
 pub fn hkp_multi_sphere_shape_get_collision_spheres_impl(
     e: &mut Engine,
     this: Ptr<HkpMultiSphereShape>,
     out: Ptr,
-) {
+) -> Ptr {
     let count = e.get(this, HkpMultiSphereShape::m_numSpheres);
     for index in 0..count.max(0) as u32 {
         copy_vec(
@@ -250,6 +253,7 @@ pub fn hkp_multi_sphere_shape_get_collision_spheres_impl(
             out.addr() + 0x10 * index,
         );
     }
+    out
 }
 
 // Translated from 00d2a960 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -514,7 +518,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x00d2a920,
-            hkp_multi_sphere_shape_get_collision_spheres_impl(Ptr<HkpMultiSphereShape>, Ptr)
+            hkp_multi_sphere_shape_get_collision_spheres_impl(Ptr<HkpMultiSphereShape>, Ptr) -> Ptr
         ),
         entry!(0x00d2a960, fn_00d2a960(Ptr, Ptr, Ptr, i32, Ptr) -> i32),
         entry!(
@@ -591,6 +595,15 @@ mod tests {
         let mut e = engine();
         let this = shape(&mut e, &[[0.0; 4]; 3]);
         assert_eq!(e.call(0x00d2_a5f0, &args![this]).u32(), 3);
+    }
+
+    #[test]
+    fn collision_spheres_answer_the_buffer() {
+        let mut e = engine();
+        let this = shape(&mut e, &[[1.0, 2.0, 3.0, 0.5]]);
+        let out = e.mem.alloc(0x10);
+        // EAX is `out` at the RET (00d2a957); hkpHeightFieldAgent reads it (00d3187d).
+        assert_eq!(e.call(0x00d2_a920, &args![this, out]).u32(), out);
     }
 
     #[test]

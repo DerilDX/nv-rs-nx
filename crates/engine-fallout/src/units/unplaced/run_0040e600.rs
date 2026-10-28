@@ -28,13 +28,19 @@ const CALLEE_006491D0: u32 = 0x0064_91d0;
 /// bytes into its object, no stack words, plain `RET`): when `0040e210(object, 1)` answers
 /// true in `AL`, runs `00639b40` on the object; otherwise calls the sub-object's own vtable
 /// slot +8 with 0 and hands its `ST0`, stored as a `float`, to `006491d0` (`cdecl`).
-pub fn fn_0040e600(e: &mut Engine, this: Ptr) {
+/// Answers the `EAX` of whichever call ran last (`00639b40` at 0040e621, or `006491d0` at
+/// 0040e63d; the RET 0040e648 follows both): the vtable `01013f28` is SpellItem's
+/// EffectItemList sub-object (RTTI, sub-object +0x24) and its slot +0x10 is
+/// `EffectItemList::GetLevel` (Xbox PDB layout), which returns `SkillLevel::Value` (Xbox PDB
+/// `?GetLevel@SpellItem@@UAA?AW4Value@SkillLevel@@XZ`); the other implementation of the slot,
+/// `009da760`, answers its value too. No exe reader of the slot was found.
+pub fn fn_0040e600(e: &mut Engine, this: Ptr) -> u32 {
     let object = this.addr().wrapping_sub(0x24);
     if e.call(CALLEE_0040E210, &args![object, 1u32]).u8() != 0 {
-        e.call(CALLEE_00639B40, &args![object]);
+        e.call(CALLEE_00639B40, &args![object]).u32()
     } else {
         let value = e.vcall(this.addr(), 8, &args![0u32]).f64();
-        e.call(CALLEE_006491D0, &args![x87_store32(value)]);
+        e.call(CALLEE_006491D0, &args![x87_store32(value)]).u32()
     }
 }
 
@@ -51,7 +57,7 @@ pub fn fn_0040e670(e: &mut Engine, this: Ptr) -> u32 {
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0040_e650, fn_0040e650(Ptr) -> bool),
-        entry!(0x0040_e600, fn_0040e600(Ptr)),
+        entry!(0x0040_e600, fn_0040e600(Ptr) -> u32),
         entry!(0x0040_e670, fn_0040e670(Ptr) -> u32),
     ]
 }
@@ -89,6 +95,34 @@ mod n075_tests {
         e.put_vtable(0x0070_0000, &[0, 0, 0x0060_0008]);
         e.call_log = Some(vec![]);
         e
+    }
+
+    #[test]
+    fn fn_0040e600_answers_the_level_the_last_call_answered() {
+        let mut e = engine(0x0000_0101);
+        e.register(CALLEE_00639B40, |_, _| Ret {
+            eax: 3,
+            ..Ret::default()
+        });
+        e.register(CALLEE_006491D0, |_, _| Ret {
+            eax: 2,
+            ..Ret::default()
+        });
+        let object = e.mem.alloc(0x40);
+        let sub = object + 0x24;
+        e.mem.set_u32(sub, 0x0070_0000);
+        // EAX at the RET 0040e648 is 00639b40's (0040e621) when 0040e210 answers true.
+        assert_eq!(e.call(0x0040_e600, &args![sub]).u32(), 3);
+        let mut e2 = engine(0x0000_0100);
+        e2.register(CALLEE_006491D0, |_, _| Ret {
+            eax: 2,
+            ..Ret::default()
+        });
+        let object = e2.mem.alloc(0x40);
+        let sub = object + 0x24;
+        e2.mem.set_u32(sub, 0x0070_0000);
+        // Otherwise it is 006491d0's (0040e63d).
+        assert_eq!(e2.call(0x0040_e600, &args![sub]).u32(), 2);
     }
 
     #[test]

@@ -1835,8 +1835,8 @@ pub fn barter_menu_remove_stolen_items(e: &mut Engine, _unused_1: u32, item: u32
         }
     }
     // The frame below `EBP`: the list at `EBP - 0x14`, the entry at `EBP - 0x20`, the
-    // reference at `EBP - 0x8c` (to `EBP - 0x24`).
-    e.with_stack(0x70, |e, frame| {
+    // reference at `EBP - 0x8c` (to `EBP - 0x24`, 0x68 bytes: 0055a2f0 writes +0x64).
+    e.with_stack(0x74, |e, frame| {
         let list = frame.addr();
         let entry_local = frame.addr() + 8;
         let reference = frame.addr() + 0xc;

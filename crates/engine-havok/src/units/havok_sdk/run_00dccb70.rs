@@ -365,7 +365,11 @@ pub fn fn_00dccf40(e: &mut Engine, this: u32, source: u32) {
 /// index) * 2`), the byte at `[this + 0x3c]` (`+0x16`), a zero byte (`+0x17`) and a zero vector
 /// (`+0x50`). When `result` is 0 the code still stores the three vertices (at addresses 0x20,
 /// 0x30, 0x40), which faults; that is translated as it is.
-pub fn fn_00dccf60(e: &mut Engine, this: u32, key: u32, result: u32) {
+/// Answers the shape (`hkpShapeContainer::getChildShape` returns `const hkpShape*` in the Xbox
+/// PDB): `EAX` is `result`, or 0 (`XOR EAX,EAX` at 00dcd123) when `result` is 0, at the RET
+/// 00dcd137. hkpShapeCollection::getAabbImpl reads the child through it (`MOV EDX,[EAX]` at
+/// 00d21657 after the container's slot +0x14 call at 00d21652).
+pub fn fn_00dccf60(e: &mut Engine, this: u32, key: u32, result: u32) -> u32 {
     let bits = e.mem.u32(this + 0x20);
     let triangle = triangle_in_subpart(key, bits);
     let subpart_index = subpart_of(key, bits);
@@ -456,20 +460,21 @@ pub fn fn_00dccf60(e: &mut Engine, this: u32, key: u32, result: u32) {
             );
         }
     }
+    target
 }
 
 // Translated from 00dccae0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `hkTypeInfo::m_finishLoadedObjectFunction` (Xbox PDB field name) of a class record whose class the engine map does not name (address held in the static data word at 011b7f70): cdecl with two stack words, `object` and `finishing`. When `object` is not null, runs `13306480` (thiscall, `RET 4`) on `object + 0x4` with the one stack word `finishing`.
+/// `hkTypeInfo::m_finishLoadedObjectFunction` (Xbox PDB field name) of a class record whose class the engine map does not name (address held in the static data word at 011b7f70): cdecl with two stack words, `object` and `finishing`. When `object` is not null, runs `00cb0a70` (the `CALL` at 00dccaf0) (thiscall, `RET 4`) on `object + 0x4` with the one stack word `finishing`.
 pub fn fn_00dccae0(e: &mut Engine, object: Ptr, finishing: u32) {
     if object.addr() != 0 {
-        e.call(0x1330_6480, &args![object.addr() + 4, finishing]);
+        e.call(0x00cb_0a70, &args![object.addr() + 4, finishing]);
     }
 }
 
 // Translated from 00dccb10 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `hkTypeInfo::m_cleanupLoadedObjectFunction` (Xbox PDB field name) of a class record whose class the engine map does not name (address held in the static data word at 011b7f74): cdecl with one stack word, `object`. Jumps to `13306880` (`hkStringPtr::~hkStringPtr` in Ghidra, fastcall, no stack word) with `object + 0x4` as `this`, so it answers what that answers.
+/// `hkTypeInfo::m_cleanupLoadedObjectFunction` (Xbox PDB field name) of a class record whose class the engine map does not name (address held in the static data word at 011b7f74): cdecl with one stack word, `object`. Jumps to `00cb0c00` (the `JMP` at 00dccb17) (`hkStringPtr::~hkStringPtr` in Ghidra, fastcall, no stack word) with `object + 0x4` as `this`, so it answers what that answers.
 pub fn fn_00dccb10(e: &mut Engine, object: Ptr) -> u32 {
-    e.call(0x1330_6880, &args![object.addr() + 4]).u32()
+    e.call(0x00cb_0c00, &args![object.addr() + 4]).u32()
 }
 
 // Translated from 00dccb20 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -490,7 +495,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00dccd50, fn_00dccd50(u32, u32, u32, u32)),
         entry!(0x00dccdd0, fn_00dccdd0(u32, u32, f32, u32)),
         entry!(0x00dccf40, fn_00dccf40(u32, u32)),
-        entry!(0x00dccf60, fn_00dccf60(u32, u32, u32)),
+        entry!(0x00dccf60, fn_00dccf60(u32, u32, u32) -> u32),
         entry!(0x00dccae0, fn_00dccae0(Ptr, u32)),
         entry!(0x00dccb10, fn_00dccb10(Ptr) -> u32),
         entry!(0x00dccb20, fn_00dccb20(u32)),
@@ -816,6 +821,18 @@ mod tests {
     }
 
     #[test]
+    fn the_child_shape_answers_the_buffer() {
+        let mut e = engine();
+        let (this, _) = triangle_mesh(&mut e, true);
+        let result = e.mem.alloc(0x60);
+        // EAX is the buffer at the RET (00dcd137); 00d21657 reads the child through it.
+        assert_eq!(
+            e.call(0x00dc_cf60, &args![this, 1u32, result]).u32(),
+            result
+        );
+    }
+
+    #[test]
     fn a_triangle_shape_is_built_from_the_subparts_indices() {
         for wide in [true, false] {
             // Key 1 (subpart 0, triangle 1): vertices 2, 0, 1 scaled by (2, 3, 4); the mask is 0
@@ -919,25 +936,25 @@ mod tests_a07_gap {
     #[test]
     fn fn_00dccae0_runs_the_callee_unless_the_object_is_null() {
         let mut e = Engine::new();
-        e.register(0x1330_6480, |_, _| Ret::default());
+        e.register(0x00cb_0a70, |_, _| Ret::default());
         let object = e.mem.alloc(0x40);
         e.call_log = Some(vec![]);
         e.call(0x00dc_cae0, &args![0u32, 7u32]);
         e.call(0x00dc_cae0, &args![object, 7u32]);
-        assert_eq!(calls_to(&mut e, 0x1330_6480), vec![vec![object + 4, 7]]);
+        assert_eq!(calls_to(&mut e, 0x00cb_0a70), vec![vec![object + 4, 7]]);
     }
 
     #[test]
     fn fn_00dccb10_hands_the_object_to_the_callee() {
         let mut e = Engine::new();
-        e.register(0x1330_6880, |_, _| Ret {
+        e.register(0x00cb_0c00, |_, _| Ret {
             eax: 0x55,
             ..Ret::default()
         });
         let object = e.mem.alloc(0x40);
         e.call_log = Some(vec![]);
         assert_eq!(e.call(0x00dc_cb10, &args![object]).u32(), 0x55);
-        assert_eq!(calls_to(&mut e, 0x1330_6880), vec![vec![object + 4]]);
+        assert_eq!(calls_to(&mut e, 0x00cb_0c00), vec![vec![object + 4]]);
     }
 
     #[test]

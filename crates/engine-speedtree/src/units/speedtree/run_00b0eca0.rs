@@ -404,7 +404,9 @@ pub fn fn_00b0f410(
 pub fn fn_00b0fb80(e: &mut Engine) {
     e.with_stack(0x1C, |e, text| {
         e.call(STRING_FROM_C_STRING, &args![text, VECTOR_TOO_LONG_TEXT]);
-        e.with_stack(0x10, |e, error| {
+        // The length_error is 0x28 bytes: the 0xc-byte std::exception (00ec78e0) and the 0x1c-byte
+        // message string 0044a310 builds at +0xc.
+        e.with_stack(0x28, |e, error| {
             e.call(RUNTIME_ERROR_FROM_STRING, &args![error, text]);
             e.mem.set_u32(error.addr(), LENGTH_ERROR_VTABLE);
             e.call(

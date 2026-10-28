@@ -3420,10 +3420,14 @@ fn wake_from_death_pose(e: &mut Engine, this: Ptr<Actor>, node: u32) {
 /// `0043fcd0`) when `from_reference_float`, else the actor's virtual `+0x2bc`
 /// result and the caller's `node`.
 fn knock_down(e: &mut Engine, this: Ptr<Actor>, node: u32, from_reference_float: bool) {
+    // The rotation is a whole 0x24-byte NiMatrix3 (004a0c90 writes all nine floats), so the
+    // vector and the transform's result follow it. The exe keeps them apart the same way:
+    // matrix EBP-0x70, vector EBP-0x7c, result EBP-0xd4 in the first branch of 00881d30;
+    // EBP-0xa0, EBP-0xac and EBP-0xe0 in the second.
     e.with_stack(0x40, |e, frame| {
         let matrix = frame.addr();
-        let vector = frame.addr() + 0x0c;
-        let rotated = frame.addr() + 0x18;
+        let vector = frame.addr() + 0x24;
+        let rotated = frame.addr() + 0x30;
         e.call(POINT_CONSTRUCTOR, &args![matrix]);
         let angle = if from_reference_float {
             let pointer = e.call(REFERENCE_FLOAT_POINTER, &args![this]).u32();
@@ -4580,6 +4584,51 @@ mod tests {
         assert_eq!((rotate[0], rotate[2]), (result, 0x7001));
         let scale = args_of(&e, 0x004a_3760);
         assert_eq!((scale[1], scale[2]), (0.25f32.to_bits(), 0x7002));
+    }
+
+    // ---- 00881d30 (knock-down) ----
+
+    /// The knock-down's rotation matrix is a whole NiMatrix3: building the (0, 1, 0)
+    /// vector does not write over its second row before the transform reads it.
+    #[test]
+    fn knock_down_keeps_the_whole_rotation_matrix_apart_from_the_vector() {
+        let mut e = engine(&[DO_KNOCK_DOWN, POINT_CONSTRUCTOR]);
+        let vtable = e.mem.alloc(0x400);
+        e.mem.set_u32(vtable + 0x2bc, 0x0f20_0001);
+        e.mem.set_u32(vtable + 0x48, 0x0f20_0002);
+        e.register(0x0f20_0001, |_, _| Ret {
+            st0: 0.5,
+            ..Ret::default()
+        });
+        e.register(0x0f20_0002, |_, _| Ret::default());
+        let actor = e.mem.alloc(0x200);
+        e.mem.set_u32(actor, vtable);
+        // The matrix gets nine distinct words; the vector its three floats.
+        e.register(MATRIX_SET_ANGLE, |e, a| {
+            for i in 0..9 {
+                e.mem.set_u32(a[0] + 4 * i, 0x100 + i);
+            }
+            Ret::default()
+        });
+        e.register(VECTOR_BUILD, |e, a| {
+            for i in 0..3 {
+                e.mem.set_u32(a[0] + 4 * i, a[1 + i as usize]);
+            }
+            Ret::default()
+        });
+        let seen = Rc::new(RefCell::new(vec![]));
+        let record = seen.clone();
+        e.register_double(MATRIX_TRANSFORM, move |e, a| {
+            record
+                .borrow_mut()
+                .extend((0..9).map(|i| e.mem.u32(a[0] + 4 * i)));
+            ret(a[2])
+        });
+        knock_down(&mut e, Ptr::new(actor), 0x1234, false);
+        assert_eq!(
+            *seen.borrow(),
+            (0..9).map(|i| 0x100 + i).collect::<Vec<_>>()
+        );
     }
 
     // ---- 00575610 ----

@@ -245,7 +245,9 @@ pub fn fn_006ea350(e: &mut Engine, this: Ptr) -> i32 {
     let mut built = 0i32;
     e.call(0x0040_fbf0, &args![this.addr() + 0x20, 0u32]);
     let count = e.call(0x0044_ddc0, &args![this.addr() + 0x40]).u32();
-    e.with_stack(0x10, |e, ray_cast| {
+    // The ray cast object 006e61a0 builds is 0x94 bytes (its last float at +0x90); the exe
+    // keeps it at EBP-0xac (`EBP + 0xffffff54`) of a `SUB ESP,0xa4` frame.
+    e.with_stack(0x94, |e, ray_cast| {
         for index in 0..count {
             let request_slot = e.call(0x0087_7a30, &args![this.addr() + 0x40, index]).u32();
             let request = e.mem.u32(request_slot);

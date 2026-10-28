@@ -52,10 +52,14 @@ pub fn hk_object_resource_get_imports_exports(
 // Translated from 00e04e70 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkObjectResource::stealContentsPointer` (Xbox PDB), `(a, b)`: calls virtual slot `0x18`
 /// with both words, then clears the contents pointer (`+8`) and the class (`+0xC`).
-pub fn hk_object_resource_steal_contents_pointer(e: &mut Engine, this: Ptr, a: u32, b: u32) {
-    e.vcall(this.addr(), 0x18, &args![a, b]);
+/// Answers what the slot `0x18` call answered (`stealContentsPointer` returns `void*` in the
+/// Xbox PDB; `EAX` is the `CALL EAX` result of 00e04e84 at the RET 00e04e8f). No exe reader of
+/// the slot +0x20 was found.
+pub fn hk_object_resource_steal_contents_pointer(e: &mut Engine, this: Ptr, a: u32, b: u32) -> u32 {
+    let contents = e.vcall(this.addr(), 0x18, &args![a, b]).u32();
     e.mem.set_u32(this.addr() + 8, 0);
     e.mem.set_u32(this.addr() + 0xc, 0);
+    contents
 }
 
 // Translated from 00e04ea0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -214,7 +218,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x00e0_4e70,
-            hk_object_resource_steal_contents_pointer(Ptr, u32, u32)
+            hk_object_resource_steal_contents_pointer(Ptr, u32, u32) -> u32
         ),
         entry!(0x00e0_4ea0, hk_object_resource_get_contents_type_name(Ptr) -> u32),
         entry!(0x00e0_4eb0, fn_00e04eb0(Ptr, Ptr)),
@@ -320,6 +324,18 @@ mod tests {
         e.call(0x00e0_4e70, &args![this, 5u32, 6u32]);
         assert_eq!(*log.borrow(), vec!["steal:5:6".to_string()]);
         assert_eq!((e.mem.u32(this + 8), e.mem.u32(this + 0xc)), (0, 0));
+    }
+
+    #[test]
+    fn steal_contents_pointer_answers_what_slot_0x18_answered() {
+        let (mut e, _) = engine();
+        e.register_double(STEAL_SLOT, |_, _| Ret {
+            eax: 0x4321,
+            ..Ret::default()
+        });
+        let this = object(&mut e, &[(0x18, STEAL_SLOT)]);
+        // EAX is the slot 0x18 result (00e04e84) at the RET 00e04e8f.
+        assert_eq!(e.call(0x00e0_4e70, &args![this, 5u32, 6u32]).u32(), 0x4321);
     }
 
     #[test]

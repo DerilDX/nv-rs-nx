@@ -1358,7 +1358,9 @@ pub fn hkp_world_linear_cast(
         let default_value = x87_quiet(e.global::<f32>(LINEAR_CASTER_DEFAULT));
         let broad_phase = e.get(this, HkpWorld::m_broadPhase);
         let extra = e.mem.u32(collision_input + 0x70);
-        e.with_stack(0x84, |e, caster| {
+        // The caster runs past +0x84: 00cfaed0 also writes +0x84 and the word at +0x88 (the exe
+        // keeps it at ESP+0x10 of 00c92430, its +0x80 at ESP+0x90).
+        e.with_stack(0x90, |e, caster| {
             e.mem.set_f32(caster.addr() + 0x80, default_value);
             e.mem.set_u32(caster.addr(), LINEAR_CASTER_VTABLE);
             e.mem.set_u32(caster.addr() + 0x24, 0);

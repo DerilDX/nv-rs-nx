@@ -6322,7 +6322,9 @@ fn message_set_underwater(e: &mut Engine, this: Ptr<BSAudioManager>) {
 }
 
 /// Message 56 (`MSET_LISTENER_POSITION`): with a listener (`BSAudio` +0x10)
-/// its slot 8 gets the message's vector, and `bListenerMoved` is set.
+/// its slot 8 gets a pointer to a stack copy of the message's vector
+/// (`00ae4f7c`..`00ae5009`: copied to EBP-0x198, then `LEA`/`PUSH` of it),
+/// and `bListenerMoved` is set.
 fn message_set_listener_position(
     e: &mut Engine,
     this: Ptr<BSAudioManager>,
@@ -6334,7 +6336,12 @@ fn message_set_listener_position(
     let audio = e.global::<u32>(AUDIO_GLOBAL);
     let listener = e.mem.u32(audio + AUDIO_LISTENER);
     if listener != 0 {
-        e.vcall(listener, LISTENER_SLOT_SET_POSITION, &args![x, y, z]);
+        e.with_stack(12, |e, position| {
+            e.mem.set_f32(position.addr(), x);
+            e.mem.set_f32(position.addr() + 4, y);
+            e.mem.set_f32(position.addr() + 8, z);
+            e.vcall(listener, LISTENER_SLOT_SET_POSITION, &[position.addr()]);
+        });
         e.set(this, BSAudioManager::bListenerMoved, true);
     }
 }
@@ -10431,9 +10438,11 @@ mod tests {
         assert!(!w.f.e.get(w.f.this, BSAudioManager::bListenerMoved));
         let (_listener, listener_vtable) = install_listener(&mut w.f);
         send(&mut w, [56, 0, 0, 0], [1.0, 2.0, 3.0]);
+        let call = listener_vtable.calls(LISTENER_SLOT_SET_POSITION)[0].clone();
+        assert_eq!(call.len(), 2, "one word: the vector's address");
         assert_eq!(
-            listener_vtable.calls(LISTENER_SLOT_SET_POSITION)[0][1..],
-            [1.0f32.to_bits(), 2.0f32.to_bits(), 3.0f32.to_bits()]
+            [0, 4, 8].map(|k| w.f.e.mem.f32(call[1] + k)),
+            [1.0, 2.0, 3.0]
         );
         assert!(w.f.e.get(w.f.this, BSAudioManager::bListenerMoved));
     }

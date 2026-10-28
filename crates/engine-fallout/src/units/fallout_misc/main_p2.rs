@@ -1251,7 +1251,10 @@ pub fn main_render_menu_background(e: &mut Engine, this: Ptr) {
         fn_008706b0(e, this, target, 0, in_pipboy);
 
         if is_menu_visible(e, 0x40c) && e.call(0x004a_4040, &args![]).bool() {
-            e.with_stack(0x20, |e, guard| {
+            // 004a0eb0 builds a 0xc8-byte object (its base 00a69400 fills 0x90 bytes, then
+            // +0x90, +0xbc, +0xc0 and the pointer at +0xc4); the exe keeps it at EBP-0xec
+            // (`EBP + 0xffffff14`) of 00871dc0.
+            e.with_stack(0xc8, |e, guard| {
                 let at = guard.addr();
                 e.call(0x004a_0eb0, &args![at, 0u32]);
                 let menu = e.call(GET_CURRENT_RENDERED_MENU, &args![]).u32();

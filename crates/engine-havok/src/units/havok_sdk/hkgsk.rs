@@ -395,7 +395,10 @@ pub fn hk_gsk_process_edge_triangle(
                 return 0;
             }
         }
-        return e.with_stack(0x80, |e, frame| {
+        // Each closest-points result of 00d22e40 is 0x30 bytes (its distance at +0x20): the
+        // exe keeps them at ESP+0x64 and ESP+0x94 of its `SUB ESP,0xc4` frame (direction at
+        // +0x14, edges at +0x34 and +0x44), so the second result runs to +0x90 here.
+        return e.with_stack(0x90, |e, frame| {
             let base = frame.addr();
             let direction = base;
             let edge_12 = base + 0x10;

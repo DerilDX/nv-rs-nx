@@ -2690,6 +2690,7 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             "FileTimeToLocalFileTime",
             entry!(0, time::file_time_to_local_file_time(Ptr, Ptr) -> u32).1,
         ),
+        (k, "GetLocalTime", entry!(0, time::get_local_time(Ptr)).1),
         (
             k,
             "FileTimeToSystemTime",

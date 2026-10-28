@@ -1707,11 +1707,15 @@ pub fn hk_gsk_shape_convert_vertex_ids_to_vertices(
 /// `hkgpMesh::LineShape::getBoundingBox` (Xbox PDB; `this` is ECX; stack: `out`): the lane-wise
 /// minimum of the two end points (`this + 0x10`, `this + 0x20`) at `out` and the maximum at
 /// `out + 0x10`.
-pub fn hkgp_mesh_line_shape_get_bounding_box(e: &mut Engine, this: Ptr, out: Ptr) {
+/// Answers `out` (the `hkAabb` returned through the hidden pointer, Xbox PDB `getBoundingBox`
+/// returns `?AVhkAabb`; `EAX` is `out`, loaded at 00e21dde, at the RET 00e21df4). No exe
+/// reader of the slot +0xc was found.
+pub fn hkgp_mesh_line_shape_get_bounding_box(e: &mut Engine, this: Ptr, out: Ptr) -> Ptr {
     let start = load_vec(e, this.addr() + 0x10);
     let end = load_vec(e, this.addr() + 0x20);
     store_vec(e, out.addr(), min_ps(start, end));
     store_vec(e, out.addr() + 0x10, max_ps(start, end));
+    out
 }
 
 // Translated from 00e21d40 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -8747,7 +8751,9 @@ fn offset_prism_points(e: &mut Engine, triangle: u32, points: u32) {
 pub fn mesh_create_offset(e: &mut Engine, this: Ptr, offset: f32, iterations: i32) -> Ptr {
     let clone = mesh_clone(e, this);
     let c = clone.addr();
-    e.with_stack(0x140, |e, frame| {
+    // The tree 00d9c110 builds at +0xd0 is 0x80 bytes (its last vector at +0x70), so the frame
+    // runs to +0x150 (the exe's tree at ESP+0xd0 reaches the top of its `SUB ESP,0x144` block).
+    e.with_stack(0x150, |e, frame| {
         let s = frame.addr();
         let triangles = s + 0x14;
         let boxes = s + 0x20;
@@ -13657,7 +13663,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00e2_2520,
             hk_gsk_shape_convert_vertex_ids_to_vertices(Ptr, u32, u32, u32)
         ),
-        entry!(0x00e2_1dd0, hkgp_mesh_line_shape_get_bounding_box(Ptr, Ptr)),
+        entry!(0x00e2_1dd0, hkgp_mesh_line_shape_get_bounding_box(Ptr, Ptr) -> Ptr),
         entry!(
             0x00e2_1d40,
             hkgp_mesh_line_shape_get_supporting_vertex(Ptr, Ptr, Ptr)
@@ -15562,6 +15568,15 @@ mod tests {
         let mut e = engine();
         install_reporter(&mut e, 1);
         e.call(0x00e2_2520, &args![0x1000u32, 1u32, 2u32, 3u32]);
+    }
+
+    #[test]
+    fn hkgp_mesh_line_shape_get_bounding_box_00e21dd0_answers_the_box() {
+        let mut e = engine();
+        let shape = e.mem.alloc(0x30);
+        let out = e.mem.alloc(0x20);
+        // EAX is `out` at the RET 00e21df4 (the `hkAabb` hidden return pointer).
+        assert_eq!(e.call(0x00e2_1dd0, &args![shape, out]).u32(), out);
     }
 
     #[test]

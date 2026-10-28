@@ -1124,7 +1124,8 @@ fn do_click_current_page(e: &mut Engine, this: Ptr<MapMenu>) {
             let x = e.mem.u32(position);
             let y = e.mem.u32(position + 4);
             let z = e.mem.u32(position + 8);
-            e.with_stack(8, |e, map_point| {
+            // 0079c380 writes a whole 12-byte point (x, y, z) at EBP-0x4c in the exe.
+            e.with_stack(0xc, |e, map_point| {
                 e.call(WORLD_TO_MAP_COORD, &args![this, map_point, x, y, z, world]);
                 for (size_trait, position_trait, offset) in
                     [(0xfb1u32, 0xfa1u32, 0u32), (0xfb0, 0xfa2, 4)]

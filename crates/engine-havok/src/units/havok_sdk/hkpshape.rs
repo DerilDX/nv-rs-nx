@@ -28,6 +28,9 @@ const SIGN_MASK_VECTOR: u32 = 0x010c_44d0;
 /// are read again for every ray. The result written to `result` is the 16-byte vector
 /// `LANE_MASK_VECTORS[hit mask]`, where the hit mask has bit `n` set for each live ray that
 /// hit.
+/// Answers `result` (the `hkVector4Comparison` returned through the hidden pointer, Xbox PDB
+/// `castRayBundleImpl` returns `?AVhkVector4Comparison`; `EAX` is `result`, loaded at 00c9e547,
+/// at the RET 00c9e553). No exe reader of the slot +0x28 was found.
 pub fn hkp_shape_cast_ray_bundle_impl(
     e: &mut Engine,
     this: Ptr,
@@ -35,7 +38,7 @@ pub fn hkp_shape_cast_ray_bundle_impl(
     bundle: Ptr,
     outputs: u32,
     lanes: Ptr,
-) {
+) -> Ptr {
     let base = bundle.addr();
     // The transposed rays: lane `n` of each coordinate vector, with 0 as the fourth word.
     let ray_point = |e: &Engine, group: u32, n: u32| -> [u32; 4] {
@@ -80,6 +83,7 @@ pub fn hkp_shape_cast_ray_bundle_impl(
     });
     let vector = e.mem.bytes(LANE_MASK_VECTORS + (hits << 4), 16);
     e.mem.write(result.addr(), &vector);
+    result
 }
 
 // Translated from 00c9e560 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -132,7 +136,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00c9e3f0, hkp_shape_calc_size_for_spu(u32, u32, u32) -> u32),
         entry!(
             0x00c9e400,
-            hkp_shape_cast_ray_bundle_impl(Ptr, Ptr, Ptr, u32, Ptr)
+            hkp_shape_cast_ray_bundle_impl(Ptr, Ptr, Ptr, u32, Ptr) -> Ptr
         ),
         entry!(0x00c9e560, hkp_shape_get_maximum_projection(Ptr, Ptr) -> f32),
     ]
@@ -264,6 +268,19 @@ mod tests {
         e.call(0x00c9e400, &args![shape, result, bundle, outputs, lanes]);
         assert!(casts.borrow().is_empty());
         assert_eq!(e.mem.u32(result), 0);
+    }
+
+    #[test]
+    fn cast_ray_bundle_answers_the_result_pointer() {
+        let (mut e, shape) = engine();
+        let bundle = bundle(&mut e);
+        let outputs = e.mem.alloc(0x50 * 4);
+        let lanes = lanes(&mut e, [false; 4]);
+        let result = e.mem.alloc(16);
+        cast_double(&mut e, outputs, &[]);
+        // EAX is `result` (00c9e547) at the RET 00c9e553.
+        let answer = e.call(0x00c9e400, &args![shape, result, bundle, outputs, lanes]);
+        assert_eq!(answer.u32(), result);
     }
 
     #[test]

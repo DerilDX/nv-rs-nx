@@ -275,13 +275,17 @@ pub fn hkp_capsule_shape_get_first_vertex(e: &mut Engine, this: Ptr<HkpCapsuleSh
 // Translated from 00d224a0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkpCapsuleShape::getCollisionSpheresImpl` (Xbox PDB): copies
 /// `m_vertexA` then `m_vertexB` (the two collision spheres) to `out`.
+/// Answers `out` (the `const hkSphere*` of the Xbox PDB signature; `EAX` is `out` at the
+/// RET 00d224bb): hkpConvexTransformShape::getCollisionSpheresImpl reads it through its child
+/// shape's slot +0x30 (`MOV EDI,EAX` at 00d5df2f).
 pub fn hkp_capsule_shape_get_collision_spheres_impl(
     e: &mut Engine,
     this: Ptr<HkpCapsuleShape>,
     out: Ptr,
-) {
+) -> Ptr {
     copy_vec(e, this.addr() + VERTEX_A, out.addr());
     copy_vec(e, this.addr() + VERTEX_B, out.addr() + 0x10);
+    out
 }
 
 // Translated from 00d224c0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -642,7 +646,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x00d224a0,
-            hkp_capsule_shape_get_collision_spheres_impl(Ptr<HkpCapsuleShape>, Ptr)
+            hkp_capsule_shape_get_collision_spheres_impl(Ptr<HkpCapsuleShape>, Ptr) -> Ptr
         ),
         entry!(0x00d224c0, fn_00d224c0(Ptr, Ptr, Ptr, Ptr)),
         entry!(
@@ -811,6 +815,15 @@ mod tests {
         let out = e.mem.alloc(16);
         e.call(0x00d22480, &args![this, out]);
         assert_eq!(load_vec(&e, out), [0.0, 0.0, 2.0, 1.0]);
+    }
+
+    #[test]
+    fn collision_spheres_answer_the_buffer() {
+        let mut e = engine();
+        let this = capsule(&mut e);
+        let out = e.mem.alloc(32);
+        // EAX is `out` at the RET (00d224bb); the convex transform shape reads it (00d5df2f).
+        assert_eq!(e.call(0x00d2_24a0, &args![this, out]).u32(), out);
     }
 
     #[test]

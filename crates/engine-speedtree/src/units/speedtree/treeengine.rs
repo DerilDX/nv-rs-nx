@@ -1111,7 +1111,9 @@ pub fn fn_00b2c890(e: &mut Engine, this: Ptr<CTreeEngine>, lod_step: f32) {
                 x87_load32(largest),
                 e.global::<f64>(LOD_SCALE_DOUBLE),
             ));
-            e.with_stack(0x18, |e, reducer| {
+            // The leaf reducer is 0x28 bytes: 00b40ad0 runs its base constructor and stores the
+            // floats and the word at +0x18 to +0x24 (EBP-0x4c in the exe).
+            e.with_stack(0x28, |e, reducer| {
                 e.call(
                     LEAF_REDUCER_CONSTRUCT,
                     &args![

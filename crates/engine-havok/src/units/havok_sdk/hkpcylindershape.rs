@@ -342,7 +342,10 @@ pub fn hkp_cylinder_shape_get_first_vertex(e: &mut Engine, this: Ptr, out: Ptr) 
 /// ring of offsets `c U`, `h (V + U)`, `c V`, `-h (U - V)`, ... with `h = c * 0.70710677`
 /// (lane 3 of each offset cleared, the sphere radius is the `+0x10` radius); the last two are the
 /// end points moved by `+-` that end offset along `U x V` with radius `radius + end offset`.
-pub fn hkp_cylinder_shape_get_collision_spheres_impl(e: &mut Engine, this: Ptr, out: Ptr) {
+/// Answers `out` (the `const hkSphere*` of the Xbox PDB signature; `EAX` is `out`, loaded
+/// at 00d57919, at the RET 00d57a98): hkpConvexTransformShape::getCollisionSpheresImpl reads
+/// it through its child shape's slot +0x30 (`MOV EDI,EAX` at 00d5df2f).
+pub fn hkp_cylinder_shape_get_collision_spheres_impl(e: &mut Engine, this: Ptr, out: Ptr) -> Ptr {
     let me = this.addr();
     let r = x87_quiet(e.mem.f32(me + CYLINDER_RADIUS));
     let a = load_vec(e, me + VERTEX_A);
@@ -415,6 +418,7 @@ pub fn hkp_cylinder_shape_get_collision_spheres_impl(e: &mut Engine, this: Ptr, 
     );
     e.mem.set_f32(out.addr() + 0x10c, radius_sum);
     e.mem.set_f32(out.addr() + 0x11c, radius_sum);
+    out
 }
 
 // Translated from 00d57b70 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -916,7 +920,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00d57870, hkp_cylinder_shape_get_first_vertex(Ptr, Ptr)),
         entry!(
             0x00d57890,
-            hkp_cylinder_shape_get_collision_spheres_impl(Ptr, Ptr)
+            hkp_cylinder_shape_get_collision_spheres_impl(Ptr, Ptr) -> Ptr
         ),
         entry!(
             0x00d57b70,
@@ -1119,6 +1123,15 @@ mod tests {
         e.call(0x00d576d0, &args![this, ids, 0i32, untouched]);
         e.call(0x00d576d0, &args![this, ids, -2i32, untouched]);
         assert_eq!(e.mem.u32(untouched + 0xc), 0);
+    }
+
+    #[test]
+    fn collision_spheres_answer_the_buffer() {
+        let mut e = engine();
+        let this = cylinder(&mut e, 0.1, 0.5);
+        let out = e.mem.alloc(0x120);
+        // EAX is `out` at the RET (00d57a98); the convex transform shape reads it (00d5df2f).
+        assert_eq!(e.call(0x00d5_7890, &args![this, out]).u32(), out);
     }
 
     #[test]

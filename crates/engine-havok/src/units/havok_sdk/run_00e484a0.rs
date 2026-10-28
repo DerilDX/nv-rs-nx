@@ -511,7 +511,11 @@ pub fn fn_00e48b90(
 /// object gets the vtable `010c749c`, the radius `float` at `this + 0x40` (through the x87
 /// stack), the user data word (0 when `[this + 0x34]` is null, else the `u16` at
 /// `*(this + 0x30) + 2 * ([mesh + 0x34] + index)`) and the byte at `this + 0x3c`.
-pub fn fn_00e48cb0(e: &mut Engine, this: Ptr, index: u32, out: u32) {
+/// Answers `out` (`hkpShapeContainer::getChildShape` returns `const hkpShape*` in the Xbox PDB;
+/// `EAX` is `out`, 0 through `XOR EAX,EAX` at 00e48d69 when it is null, at the RET 00e48d9f):
+/// hkpShapeCollection::getAabbImpl reads the child through it (`MOV EDX,[EAX]` at 00d21657
+/// after the container's slot +0x14 call at 00d21652).
+pub fn fn_00e48cb0(e: &mut Engine, this: Ptr, index: u32, out: u32) -> u32 {
     let this = this.addr();
     let mesh = e.mem.u32(this.wrapping_add(0x24));
     let record_stride = e.mem.u32(mesh.wrapping_add(0x14));
@@ -570,6 +574,7 @@ pub fn fn_00e48cb0(e: &mut Engine, this: Ptr, index: u32, out: u32) {
     store_vec(e, out.wrapping_add(0x30), product);
     let product = mulps(load_vec(e, third), load_vec(e, this.wrapping_add(0x10)));
     store_vec(e, out.wrapping_add(0x40), product);
+    out
 }
 
 /// This unit's translated functions, by exe address.
@@ -596,7 +601,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00e4_8b90,
             fn_00e48b90(Ptr, u32, u32, u32, u32, u32, u32) -> u32
         ),
-        entry!(0x00e4_8cb0, fn_00e48cb0(Ptr, u32, u32)),
+        entry!(0x00e4_8cb0, fn_00e48cb0(Ptr, u32, u32) -> u32),
     ]
 }
 
@@ -1274,6 +1279,15 @@ mod tests {
         e.mem.set_u8(this + 0x3c, 9);
         e.mem.set_f32(this + 0x40, 0.5);
         this
+    }
+
+    #[test]
+    fn the_triangle_answers_the_buffer() {
+        let mut e = engine();
+        let this = mesh_owner(&mut e, true);
+        let out = e.mem.alloc(0x80);
+        // EAX is `out` at the RET (00e48d9f); 00d21657 reads the child through it.
+        assert_eq!(e.call(0x00e4_8cb0, &args![this, 1u32, out]).u32(), out);
     }
 
     #[test]

@@ -1632,9 +1632,12 @@ pub fn fn_008c45e0(
 
 // Translated from 008c4610 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Magic caster virtual `+0x3c`: forwards (`flag`, `value`) to `008153a0` on
-/// the same caster.
-pub fn fn_008c4610(e: &mut Engine, this: Ptr, flag: bool, value: f32) {
-    e.call(FN_008153A0, &args![this, flag, quiet(value)]);
+/// the same caster. Answers its `ST0` (the call at 008c4626 is the last before the RET
+/// 008c462e): the slot is `GetMagicEffectivenessModifier`, a `float` in the Xbox PDB
+/// (`?GetMagicEffectivenessModifier@Actor@@MAAM_NM@Z`), and MagicCaster::FindTargets_ov2 stores
+/// it from the caster's own slot +0x3c call (`FSTP` after 008171ca).
+pub fn fn_008c4610(e: &mut Engine, this: Ptr, flag: bool, value: f32) -> f64 {
+    e.call(FN_008153A0, &args![this, flag, quiet(value)]).f64()
 }
 
 // Translated from 008c40e0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2207,7 +2210,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x008c4560, fn_008c4560(Ptr) -> bool),
         entry!(0x008c45a0, fn_008c45a0(Ptr, bool)),
         entry!(0x008c45e0, fn_008c45e0(Ptr, u32, Ptr, Ptr, u32) -> bool),
-        entry!(0x008c4610, fn_008c4610(Ptr, bool, f32)),
+        entry!(0x008c4610, fn_008c4610(Ptr, bool, f32) -> f64),
         entry!(0x008c4640, actor_update_alpha(Ptr)),
         entry!(0x008c4790, fn_008c4790(Ptr, f32)),
         entry!(0x008c47d0, fn_008c47d0(Ptr, f32)),
@@ -3688,6 +3691,18 @@ mod tests {
         e.set_global(RESET_VALUE_01012054, -2.0f32);
         fn_008c4400(&mut e, actor);
         assert_eq!(e.mem.f32(w.actor + 0x19c), -2.0);
+    }
+
+    #[test]
+    fn fn_008c4610_answers_the_modifier_in_st0() {
+        let (mut e, w) = setup();
+        e.register(FN_008153A0, |_, _| Ret {
+            st0: 0.75,
+            ..Ret::default()
+        });
+        // ST0 at the RET 008c462e is 008153a0's; FindTargets_ov2 stores it (after 008171ca).
+        let answer = e.call(0x008c_4610, &args![w.caster, 1u32, 1.5f32.to_bits()]);
+        assert_eq!(answer.f64(), 0.75);
     }
 
     #[test]

@@ -75,6 +75,22 @@ pub fn file_time_to_local_file_time(e: &mut Engine, utc: Ptr, local: Ptr) -> u32
     1
 }
 
+// Platform: replaces KERNEL32.DLL GetLocalTime (import)
+/// `GetLocalTime(out)`: the real clock now less the player's bias in effect now, as a
+/// `SYSTEMTIME` (eight 16-bit words): `FileTimeToLocalFileTime` of `GetSystemTimeAsFileTime`,
+/// then `FileTimeToSystemTime` (all three measured, module comment). The save system calls it
+/// (`008511a1`, after the character is named).
+pub fn get_local_time(e: &mut Engine, out: Ptr) {
+    let zone = zone_info(e);
+    let now = now_filetime();
+    let bias = zone::bias_at(&zone, zone::filetime_seconds(now));
+    let local = now.wrapping_sub((i64::from(bias) * 600_000_000) as u64);
+    let words = zone::system_time(local).expect("the clock is before 30828");
+    for (i, w) in words.iter().enumerate() {
+        e.mem.set_u16(out.addr() + 2 * i as u32, *w);
+    }
+}
+
 // Platform: replaces KERNEL32.DLL FileTimeToSystemTime (import)
 /// `FileTimeToSystemTime(time, out)`: the `SYSTEMTIME` of a `FILETIME` ([`zone::system_time`]);
 /// above 0x7FFF_FFFF_FFFF_FFFF FALSE with `ERROR_INVALID_PARAMETER` and `out` untouched
@@ -400,6 +416,22 @@ mod tests {
         b[0xa8..0xac].copy_from_slice(&(-60i32).to_le_bytes());
         let hex: String = b.iter().map(|x| format!("{x:02x}")).collect();
         super::super::d3d9::load_adapter_table(e, &format!("GetTimeZoneInformation\t\t2\t{hex}\n"));
+    }
+
+    #[test]
+    fn local_time_is_the_system_time_of_the_local_file_time_now() {
+        let mut e = Engine::new();
+        eastern(&mut e);
+        let at = e.mem.alloc(0x40);
+        get_system_time_as_file_time(&mut e, Ptr::new(at));
+        file_time_to_local_file_time(&mut e, Ptr::new(at), Ptr::new(at + 8));
+        file_time_to_system_time(&mut e, Ptr::new(at + 8), Ptr::new(at + 0x10));
+        get_local_time(&mut e, Ptr::new(at + 0x20));
+        let words = |e: &Engine, p: u32| (0..8).map(|i| e.mem.u16(p + 2 * i)).collect::<Vec<_>>();
+        let (expected, got) = (words(&e, at + 0x10), words(&e, at + 0x20));
+        // Same date and minute (a second may tick between the two clock reads).
+        assert_eq!(expected[..5], got[..5]);
+        assert!(got[0] >= 2026);
     }
 
     #[test]

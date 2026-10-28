@@ -788,8 +788,9 @@ pub fn c_speed_tree_rt_load_tree(e: &mut Engine, this: Ptr<CSpeedTreeRT>, filena
 /// the header.
 pub fn fn_00b059e0(e: &mut Engine, this: Ptr<CSpeedTreeRT>, data: u32, size: u32) -> u8 {
     let mut loaded = 0u8;
-    // The `CTreeFileAccess` (0x14 bytes: the index and the byte vector).
-    e.with_stack(0x14, |e, access| {
+    // The `CTreeFileAccess` (0x1c bytes: the index and the 0x18-byte byte vector, whose
+    // constructor 00657ee0 clears its words up to +0x14; EBP-0x30 to EBP-0x14 in the exe).
+    e.with_stack(0x1c, |e, access| {
         fn_00b06090(e, access, data, size as i32);
         let engine = e.get(this, CSpeedTreeRT::m_pEngine);
         if e.call(0x00b2_b550, &args![engine, access]).bool() {

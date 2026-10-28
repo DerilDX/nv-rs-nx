@@ -2714,7 +2714,8 @@ pub fn script_force_close_file(e: &mut Engine, a: ScriptArgs) -> bool {
 pub fn fn_005bfe90(e: &mut Engine, a: ScriptArgs) -> bool {
     let holder = e.call(CAMERA_HOLDER, &args![]).u32();
     let camera = e.call(WORD_AT_0XAC, &args![holder]).u32();
-    let request = e.mem.alloc(0x74);
+    // 004a37b0 clears bytes up to +0x79, so the request is 0x7c bytes (EBP-0x88 in the exe).
+    let request = e.mem.alloc(0x7c);
     e.call(DECAL_REQUEST_CONSTRUCT, &args![request]);
     let position = e.call(CAMERA_POSITION, &args![camera]).u32();
     copy_words(e, position, request, 3);

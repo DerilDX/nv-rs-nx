@@ -28,11 +28,11 @@ pub fn fn_00dfd940(e: &mut Engine, object: Ptr) -> u32 {
 pub fn fn_00dfd960(_e: &mut Engine, _unused_0: u32, _unused_1: u32) {}
 
 // Translated from 00dfd990 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `hkTypeInfo::m_finishLoadedObjectFunction` (Xbox PDB field name) of a class record whose class the engine map does not name (address stored by the code at 00fc34bf): cdecl with two stack words, `object` and `finishing`. When `object` is not null, stores the vtable word 0x010e_33dc at its start, then runs `13306480` (thiscall, `RET 4`) on `object + 0x14` with the one stack word `finishing`.
+/// `hkTypeInfo::m_finishLoadedObjectFunction` (Xbox PDB field name) of a class record whose class the engine map does not name (address stored by the code at 00fc34bf): cdecl with two stack words, `object` and `finishing`. When `object` is not null, stores the vtable word 0x010e_33dc at its start, then runs `00cb0a70` (the `CALL` at 00dfd9a6) (thiscall, `RET 4`) on `object + 0x14` with the one stack word `finishing`.
 pub fn fn_00dfd990(e: &mut Engine, object: Ptr, finishing: u32) {
     if object.addr() != 0 {
         e.mem.set_u32(object.addr(), 0x010e_33dc);
-        e.call(0x1330_6480, &args![object.addr() + 20, finishing]);
+        e.call(0x00cb_0a70, &args![object.addr() + 20, finishing]);
     }
 }
 
@@ -161,14 +161,14 @@ mod tests_a07_gap {
     #[test]
     fn fn_00dfd990_stores_the_vtable_and_runs_the_callee_unless_the_object_is_null() {
         let mut e = Engine::new();
-        e.register(0x1330_6480, |_, _| Ret::default());
+        e.register(0x00cb_0a70, |_, _| Ret::default());
         let object = e.mem.alloc(0x40);
         e.call_log = Some(vec![]);
         e.call(0x00df_d990, &args![0u32, 7u32]);
         assert_eq!(e.mem.u32(object), 0);
         e.call(0x00df_d990, &args![object, 7u32]);
         assert_eq!(e.mem.u32(object), 0x010e_33dc);
-        assert_eq!(calls_to(&mut e, 0x1330_6480), vec![vec![object + 20, 7]]);
+        assert_eq!(calls_to(&mut e, 0x00cb_0a70), vec![vec![object + 20, 7]]);
     }
 
     #[test]

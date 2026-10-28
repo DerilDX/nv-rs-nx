@@ -4021,8 +4021,11 @@ pub fn fn_009e5ae0(e: &mut Engine, this: Ptr<H>, seconds: f32) -> u32 {
         e.call(LIST_CLEAR, &args![this.addr() + H::ActorAvoidList.off]);
     }
     let target = fn_009e55e0(e, actor);
-    e.with_stack(0x300, |e, block| {
-        let found = block;
+    // The avoid array is a 0x10-byte BSSimpleArray (009e9b20 clears +4, +8 and +0xc); the exe
+    // keeps it at EBP-0x3c, apart from the vector at EBP-0x54. It sits after the other locals
+    // here, not under the delta at +0xc.
+    e.with_stack(0x310, |e, block| {
+        let found = block.byte_add(0x300);
         let delta = block.byte_add(0x0c);
         let up = block.byte_add(0x18);
         let in_way = block.byte_add(0x24);
@@ -4651,8 +4654,10 @@ pub fn fn_009e71b0(e: &mut Engine, actor: Ptr, request: Ptr, handler: Ptr<H>) {
         return;
     }
     let multiplier = fld(e, AVOID_RADIUS_WALK);
-    e.with_stack(0xc0, |e, block| {
-        let found = block;
+    // The avoid array is a 0x10-byte BSSimpleArray (EBP-0x2c in the exe); it sits after the
+    // other locals here, not under the slot at +0xc.
+    e.with_stack(0xd0, |e, block| {
+        let found = block.byte_add(0xc0);
         let slot = block.byte_add(0x0c);
         let nodes_block = block.byte_add(0x10);
         e.call(AVOID_ARRAY_CONSTRUCT, &args![found]);

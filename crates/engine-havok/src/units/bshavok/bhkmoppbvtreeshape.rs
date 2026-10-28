@@ -169,9 +169,13 @@ pub fn bhk_mopp_bv_tree_shape_link_object(e: &mut Engine, this: Ptr, stream: u32
 
 // Translated from 00cc9ce0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `bhkMoppBvTreeShape::RegisterStreamables` (Xbox PDB): a tail jump to
-/// `bhkBvTreeShape::RegisterStreamables` (`00ca4f40`) with `this` and the stream.
-pub fn bhk_mopp_bv_tree_shape_register_streamables(e: &mut Engine, this: Ptr, stream: u32) {
-    e.call(BV_TREE_REGISTER_STREAMABLES, &args![this, stream]);
+/// `bhkBvTreeShape::RegisterStreamables` (`00ca4f40`) with `this` and the stream. Answers what
+/// it answers (`EAX` after the `JMP` at 00cc9ce0; the Xbox PDB's `RegisterStreamables` returns
+/// `bool`): NiObject-level callers test it, e.g. `TEST AL,AL` at 00a66f78 after the slot +0x54
+/// call at 00a66f76 in NiGeometryData::RegisterStreamables.
+pub fn bhk_mopp_bv_tree_shape_register_streamables(e: &mut Engine, this: Ptr, stream: u32) -> u32 {
+    e.call(BV_TREE_REGISTER_STREAMABLES, &args![this, stream])
+        .u32()
 }
 
 // Translated from 00cc9cf0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -620,7 +624,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00cc_9cd0, bhk_mopp_bv_tree_shape_link_object(Ptr, u32)),
         entry!(
             0x00cc_9ce0,
-            bhk_mopp_bv_tree_shape_register_streamables(Ptr, u32)
+            bhk_mopp_bv_tree_shape_register_streamables(Ptr, u32) -> u32
         ),
         entry!(0x00cc_9cf0, bhk_mopp_bv_tree_shape_is_equal(Ptr, u32) -> u32),
         entry!(0x00cc_9d00, fn_00cc9d00(Ptr, u32, u32, u32) -> Ptr),
@@ -765,6 +769,15 @@ mod shape_tests {
         let order: Vec<u32> = log.borrow().iter().map(|c| c.0).collect();
         assert_eq!(order, [SERIALIZABLE_KILL, BV_TREE_DESTRUCT]);
         assert_eq!(calls_to(&log, BV_TREE_DESTRUCT), [[this]]);
+    }
+
+    #[test]
+    fn register_streamables_answers_what_the_jump_target_answers() {
+        let mut e = Engine::new();
+        let log: Calls = Rc::default();
+        record(&mut e, BV_TREE_REGISTER_STREAMABLES, 0x101, &log);
+        // EAX after the `JMP` at 00cc9ce0 is the target's.
+        assert_eq!(e.call(0x00cc_9ce0, &args![0x11u32, 0x21u32]).u32(), 0x101);
     }
 
     #[test]

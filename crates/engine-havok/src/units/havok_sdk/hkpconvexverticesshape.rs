@@ -172,7 +172,15 @@ pub fn hkp_convex_vertices_shape_get_first_vertex(e: &mut Engine, this: Ptr, out
 /// `hkpConvexVerticesShape::getCollisionSpheresImpl` (Xbox PDB): writes one sphere per vertex to
 /// `out`: the vertex's x, y and z with `m_radius` in `w`, all copied bit for bit. Nothing for a
 /// count of zero or less.
-pub fn hkp_convex_vertices_shape_get_collision_spheres_impl(e: &mut Engine, this: Ptr, out: Ptr) {
+/// Answers `out` (the `const hkSphere*` of the Xbox PDB signature; `EAX` is `out`,
+/// `MOV EAX,EBX` at 00d58ea7, at the RET 00d58ed1): hkpConvexTransformShape::
+/// getCollisionSpheresImpl reads it through its child shape's slot +0x30 (`MOV EDI,EAX` at
+/// 00d5df2f).
+pub fn hkp_convex_vertices_shape_get_collision_spheres_impl(
+    e: &mut Engine,
+    this: Ptr,
+    out: Ptr,
+) -> Ptr {
     let me = this.addr();
     let count = e.mem.i32(me + NUM_VERTICES);
     let radius_bits = e.mem.u32(me + RADIUS);
@@ -186,6 +194,7 @@ pub fn hkp_convex_vertices_shape_get_collision_spheres_impl(e: &mut Engine, this
         e.mem.set_u32(sphere + 0xc, radius_bits);
         sphere = sphere.wrapping_add(0x10);
     }
+    out
 }
 
 // Translated from 00d58ee0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -902,7 +911,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x00d58d80,
-            hkp_convex_vertices_shape_get_collision_spheres_impl(Ptr, Ptr)
+            hkp_convex_vertices_shape_get_collision_spheres_impl(Ptr, Ptr) -> Ptr
         ),
         entry!(
             0x00d58ee0,
@@ -1046,6 +1055,15 @@ mod tests {
         assert_eq!(e.mem.f32(out + 4), 5.0);
         assert_eq!(e.mem.f32(out + 8), 6.0);
         assert_eq!(e.mem.u32(out + 0xc), 0);
+    }
+
+    #[test]
+    fn collision_spheres_answer_the_buffer() {
+        let mut e = engine();
+        let this = hull(&mut e);
+        let out = e.mem.alloc(0x60);
+        // EAX is `out` at the RET (00d58ed1); the convex transform shape reads it (00d5df2f).
+        assert_eq!(e.call(0x00d5_8d80, &args![this, out]).u32(), out);
     }
 
     #[test]

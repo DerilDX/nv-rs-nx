@@ -932,8 +932,11 @@ pub fn fn_009db930(e: &mut Engine, request: u32, retry_count: u32) {
 /// `ActorMover::ClearDataForNewPathingRequest` (Xbox PDB): clears
 /// `bStopMovementNextUpdate`, calls the virtual `ClearForcedMoveMode`
 /// and drops the request. When a path was being awaited it gets a new
-/// message queue and, if `clear_waiting` is set, forgets the wait, drops the
-/// path and resets the pathing-failed state.
+/// message queue and, if `clear_waiting` is set, forgets the wait. The path
+/// is then always dropped (`009dba05`: `0066b0d0(+0x20, 0)`) and the
+/// pathing-failed state reset (`009dba0f`: `SetPathingFailed(0)`): the
+/// not-waiting jump at `009db9a2` and the flag test at `009db9f4` both land
+/// on `009db9fd`, ahead of those two calls.
 pub fn actor_mover_clear_data_for_new_pathing_request(
     e: &mut Engine,
     this: Ptr<ActorMover>,
@@ -947,10 +950,10 @@ pub fn actor_mover_clear_data_for_new_pathing_request(
         reset_message_queue(e, this);
         if clear_waiting {
             e.set(this, ActorMover::bWaitingForPath, false);
-            set_ni_pointer(e, base + 0x20, 0);
-            e.call(SET_PATHING_FAILED, &args![this, false]);
         }
     }
+    set_ni_pointer(e, base + 0x20, 0);
+    e.call(SET_PATHING_FAILED, &args![this, false]);
     e.call(DEBUG_STUB, &args![this]);
 }
 
@@ -4375,7 +4378,10 @@ mod tests {
 
     #[test]
     fn clear_data_for_new_request_waits_and_clears_only_on_demand() {
-        for (waiting, clear_waiting) in [(false, true), (true, false), (true, true)] {
+        // 009db950: only the new queue (009db9a2) and the end of the wait (009db9f4) are
+        // conditional; the path drop (009dba05) and SetPathingFailed(0) (009dba0f) always run.
+        for (waiting, clear_waiting) in [(false, false), (false, true), (true, false), (true, true)]
+        {
             let mut r = rig();
             attach_path(&mut r);
             attach_request(&mut r);
@@ -4389,17 +4395,12 @@ mod tests {
             assert_eq!(r.e.mem.u32(r.mover.addr() + 0x1c), 0);
             assert_eq!(count(&log, MOVER_FAKE + 0x10), 1);
             assert_eq!(count(&log, QUEUE_POINTER_SET), waiting as usize);
-            let cleared = waiting && clear_waiting;
-            assert_eq!(count(&log, SET_PATHING_FAILED), cleared as usize);
+            assert_eq!(count(&log, SET_PATHING_FAILED), 1);
             assert_eq!(
                 r.e.get(r.mover, ActorMover::bWaitingForPath),
                 waiting && !clear_waiting
             );
-            if cleared {
-                assert_eq!(r.e.mem.u32(r.mover.addr() + 0x20), 0);
-            } else {
-                assert_ne!(r.e.mem.u32(r.mover.addr() + 0x20), 0);
-            }
+            assert_eq!(r.e.mem.u32(r.mover.addr() + 0x20), 0);
         }
     }
 

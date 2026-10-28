@@ -176,11 +176,14 @@ pub fn fn_00d1ff80(e: &mut Engine, a: Ptr, b: Ptr, c: Ptr, out: Ptr) {
 /// spheres to `out`, each with `m_radius` in its `w` lane (through
 /// `FLD`/`FSTP`): the corners A, B and C, and when `m_isExtruded` is set
 /// `extrusion + A`, `extrusion + B` and `C + extrusion`.
+/// Answers `out` (the `const hkSphere*` of the Xbox PDB signature; `EAX` is `out` at the
+/// RET 00d20193): hkpConvexTransformShape::getCollisionSpheresImpl reads it through its child
+/// shape's slot +0x30 (`MOV EDI,EAX` at 00d5df2f).
 pub fn hkp_triangle_shape_get_collision_spheres_impl(
     e: &mut Engine,
     this: Ptr<HkpTriangleShape>,
     out: Ptr,
-) {
+) -> Ptr {
     let me = this.addr();
     let radius = x87_quiet(e.get(this, HkpTriangleShape::m_radius));
     let a = load_vec(e, me + VERTEX_A);
@@ -201,6 +204,7 @@ pub fn hkp_triangle_shape_get_collision_spheres_impl(
         sphere(e, 4, addps(extrusion, b));
         sphere(e, 5, addps(c, extrusion));
     }
+    out
 }
 
 /// The edge function `00d201a0` computes for four points at once: for each
@@ -805,7 +809,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00d1ff80, fn_00d1ff80(Ptr, Ptr, Ptr, Ptr)),
         entry!(
             0x00d20110,
-            hkp_triangle_shape_get_collision_spheres_impl(Ptr<HkpTriangleShape>, Ptr)
+            hkp_triangle_shape_get_collision_spheres_impl(Ptr<HkpTriangleShape>, Ptr) -> Ptr
         ),
         entry!(0x00d201a0, fn_00d201a0(Ptr, Ptr, Ptr, Ptr, Ptr)),
         entry!(
@@ -990,6 +994,15 @@ mod tests {
         // A degenerate triangle gives zero.
         e.call(0x00d1ff80, &args![a, a, a, out]);
         assert_eq!(load_vec(&e, out), [0.0; 4]);
+    }
+
+    #[test]
+    fn collision_spheres_answer_the_buffer() {
+        let mut e = engine();
+        let this = triangle(&mut e, false);
+        let out = e.mem.alloc(0x60);
+        // EAX is `out` at the RET (00d20193); the convex transform shape reads it (00d5df2f).
+        assert_eq!(e.call(0x00d2_0110, &args![this, out]).u32(), out);
     }
 
     #[test]

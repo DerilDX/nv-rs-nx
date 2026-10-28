@@ -2043,7 +2043,9 @@ pub fn fn_00a84310(
         let array = e.mem.u32(partitions_at.addr());
         e.mem.set_u32(array.wrapping_add(triangle * 4), value);
     };
-    let ok = e.with_stack(0x18, |e, frame| {
+    // The map (0x10), the found word and the triangle's three 16-bit corners (6 bytes; the
+    // exe pushes ESP+0x3c, +0x3e and +0x40 of its `SUB ESP,0x38` frame), so 0x1a bytes.
+    let ok = e.with_stack(0x1c, |e, frame| {
         let map = frame.addr();
         let found = map + 0x10;
         let corners = map + 0x14;

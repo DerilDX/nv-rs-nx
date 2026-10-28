@@ -32,17 +32,17 @@ pub fn fn_00d1f150(e: &mut Engine, object: Ptr) -> u32 {
 pub fn fn_00d1f170(_e: &mut Engine, _unused_0: u32, _unused_1: u32) {}
 
 // Translated from 00d1f180 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `hkTypeInfo::m_finishLoadedObjectFunction` (Xbox PDB field name) of a class record whose class the engine map does not name (address stored by the code at 00fbe99f): cdecl with two stack words, `object` and `finishing`. When `object` is not null, runs `13225472` (thiscall, `RET 4`) on `object` with the one stack word `finishing`.
+/// `hkTypeInfo::m_finishLoadedObjectFunction` (Xbox PDB field name) of a class record whose class the engine map does not name (address stored by the code at 00fbe99f): cdecl with two stack words, `object` and `finishing`. When `object` is not null, runs `00c9ce00` (the `CALL` at 00d1f18d) (thiscall, `RET 4`) on `object` with the one stack word `finishing`.
 pub fn fn_00d1f180(e: &mut Engine, object: Ptr, finishing: u32) {
     if object.addr() != 0 {
-        e.call(0x1322_5472, &args![object.addr(), finishing]);
+        e.call(0x00c9_ce00, &args![object.addr(), finishing]);
     }
 }
 
 // Translated from 00d1f1c0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `hkTypeInfo::m_cleanupLoadedObjectFunction` (Xbox PDB field name) of a class record whose class the engine map does not name (address held in the static data word at 011b3a0c): cdecl with one stack word, `object`. Jumps to `13226816` (fastcall, no stack word) with `object` as `this`, so it answers what that answers.
+/// `hkTypeInfo::m_cleanupLoadedObjectFunction` (Xbox PDB field name) of a class record whose class the engine map does not name (address held in the static data word at 011b3a0c): cdecl with one stack word, `object`. Jumps to `00c9d340` (the `JMP` at 00d1f1c4) (fastcall, no stack word) with `object` as `this`, so it answers what that answers.
 pub fn fn_00d1f1c0(e: &mut Engine, object: Ptr) -> u32 {
-    e.call(0x1322_6816, &args![object.addr()]).u32()
+    e.call(0x00c9_d340, &args![object.addr()]).u32()
 }
 
 /// This unit's translated functions, by exe address.
@@ -202,24 +202,24 @@ mod tests_a07_gap {
     #[test]
     fn fn_00d1f180_runs_the_callee_unless_the_object_is_null() {
         let mut e = Engine::new();
-        e.register(0x1322_5472, |_, _| Ret::default());
+        e.register(0x00c9_ce00, |_, _| Ret::default());
         let object = e.mem.alloc(0x40);
         e.call_log = Some(vec![]);
         e.call(0x00d1_f180, &args![0u32, 7u32]);
         e.call(0x00d1_f180, &args![object, 7u32]);
-        assert_eq!(calls_to(&mut e, 0x1322_5472), vec![vec![object, 7]]);
+        assert_eq!(calls_to(&mut e, 0x00c9_ce00), vec![vec![object, 7]]);
     }
 
     #[test]
     fn fn_00d1f1c0_hands_the_object_to_the_callee() {
         let mut e = Engine::new();
-        e.register(0x1322_6816, |_, _| Ret {
+        e.register(0x00c9_d340, |_, _| Ret {
             eax: 0x55,
             ..Ret::default()
         });
         let object = e.mem.alloc(0x40);
         e.call_log = Some(vec![]);
         assert_eq!(e.call(0x00d1_f1c0, &args![object]).u32(), 0x55);
-        assert_eq!(calls_to(&mut e, 0x1322_6816), vec![vec![object]]);
+        assert_eq!(calls_to(&mut e, 0x00c9_d340), vec![vec![object]]);
     }
 }

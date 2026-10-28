@@ -20,10 +20,10 @@ pub fn return_constant_00dfe4a0(_e: &mut Engine) -> u32 {
 }
 
 // Translated from 00dfe410 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `hkTypeInfo::m_finishLoadedObjectFunction` (Xbox PDB field name) of a class record whose class the engine map does not name (address stored by the code at 00fc3e0f): cdecl with two stack words, `object` and `finishing`. When `object` is not null, runs `14945440` (thiscall, `RET 4`) on `object` with the one stack word `finishing`.
+/// `hkTypeInfo::m_finishLoadedObjectFunction` (Xbox PDB field name) of a class record whose class the engine map does not name (address stored by the code at 00fc3e0f): cdecl with two stack words, `object` and `finishing`. When `object` is not null, runs `00e40ca0` (the `CALL` at 00dfe41d) (thiscall, `RET 4`) on `object` with the one stack word `finishing`.
 pub fn fn_00dfe410(e: &mut Engine, object: Ptr, finishing: u32) {
     if object.addr() != 0 {
-        e.call(0x1494_5440, &args![object.addr(), finishing]);
+        e.call(0x00e4_0ca0, &args![object.addr(), finishing]);
     }
 }
 
@@ -176,12 +176,12 @@ mod tests_a07_gap {
     #[test]
     fn fn_00dfe410_runs_the_callee_unless_the_object_is_null() {
         let mut e = Engine::new();
-        e.register(0x1494_5440, |_, _| Ret::default());
+        e.register(0x00e4_0ca0, |_, _| Ret::default());
         let object = e.mem.alloc(0x40);
         e.call_log = Some(vec![]);
         e.call(0x00df_e410, &args![0u32, 7u32]);
         e.call(0x00df_e410, &args![object, 7u32]);
-        assert_eq!(calls_to(&mut e, 0x1494_5440), vec![vec![object, 7]]);
+        assert_eq!(calls_to(&mut e, 0x00e4_0ca0), vec![vec![object, 7]]);
     }
 
     #[test]

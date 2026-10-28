@@ -134,7 +134,8 @@ fn xor_bits(v: Vec4, mask: [u32; 4]) -> Vec4 {
 /// transform comes from `calculateBoneModelSpace` when its flag has bit 2 and straight from the
 /// array otherwise: the translation is the model translation turned by the inverse of the
 /// parent's rotation (the rotation with the three lowest sign bits flipped, `010c4c00`) plus the
-/// negated double of the parent's own translation turned by its rotation; the rotation is `setMul`
+/// negated double of the parent's own translation turned by that inverse too (cross term
+/// `translation x rotation` in the exe); the rotation is `setMul`
 /// of that inverse and the model rotation; the scale is the model scale times the reciprocal of
 /// the parent's scale (`RCPPS` and one Newton step, lanes 0 to 2, lane 3 zero). Ends by clearing
 /// bit 1 of the flag word.
@@ -152,12 +153,17 @@ fn update_local(e: &mut Engine, pose: u32, index: i32, parent: u16) {
                 .u32()
         };
         let parent_translation = load_vec(e, parent_block);
-        let half = rotate_half(e, load_vec(e, parent_block + 0x10), parent_translation);
-        let negated = xor_bits(add4(half, half), load_bits(e, SIGN_BITS));
         let inverse_rotation = xor_bits(
             load_vec(e, parent_block + 0x10),
             load_bits(e, SIGN_BITS_XYZ),
         );
+        // The parent's translation is turned by the INVERSE rotation: the exe's cross term is
+        // `(t.y * q.z - t.z * q.y) * w` (translation x rotation; 00cda690, 00cda8e0, 00cdad80,
+        // and inlined in 00c7aa60), which is `rotate_half` of the conjugate (`q* x t`, the dot
+        // term unchanged). Turning it by `q` instead moved a child bone by about twice its
+        // parent's model position (Doc's Bip01 Head ~150 units off Neck1 under look IK).
+        let half = rotate_half(e, inverse_rotation, parent_translation);
+        let negated = xor_bits(add4(half, half), load_bits(e, SIGN_BITS));
         let scale = load_vec(e, parent_block + 0x20);
         let ones = load_vec(e, ONE_LANES);
         let lanes = shufps(scale, unpckhps(scale, ones), 0xc4);
@@ -1158,6 +1164,63 @@ mod tests {
         e.mem.set_u8(rig.pose + 0x29, 1);
         e.call(0x00cd_a690, &args![rig.pose]);
         assert_eq!(flags_of(&e, &rig, 2), [1, 1]);
+    }
+
+    /// The exe's local-from-model step turns the parent's translation by the parent's INVERSE
+    /// rotation (cross term `t x q` in 00cda690 / 00cda8e0 / 00cdad80), so a child sitting at
+    /// its parent's model position plus (5, 0, 0) turned by the parent comes back as (5, 0, 0)
+    /// for a parent turned 90 degrees about x and standing 100 units up. Turning the parent's
+    /// translation by the rotation itself gave (5, 200, 0): Doc's head 150 units off his neck.
+    #[test]
+    fn syncing_the_local_space_turns_the_parent_translation_back() {
+        let (mut e, _) = engine();
+        let rig = make_rig(&mut e, &[NO_PARENT, 0], &[0; 2], 0, [1, 0]);
+        let s = std::f32::consts::FRAC_1_SQRT_2;
+        put_transform(
+            &mut e,
+            rig.model,
+            [0.0, 0.0, 100.0, 0.0],
+            [s, 0.0, 0.0, s],
+            [1.0, 1.0, 1.0, 1.0],
+        );
+        // The child: parent translation + q (5, 0, 0) = (5, 0, 100).
+        put_transform(
+            &mut e,
+            rig.model + 0x30,
+            [5.0, 0.0, 100.0, 0.0],
+            [s, 0.0, 0.0, s],
+            [1.0, 1.0, 1.0, 1.0],
+        );
+        set_flags_of(&mut e, &rig, &[1, 1]);
+        e.call(0x00cd_a690, &args![rig.pose]);
+        let [t, _, _] = get_transform(&e, rig.local + 0x30);
+        for (got, want) in t[..3].iter().zip([5.0, 0.0, 0.0]) {
+            assert!((got - want).abs() < 1e-3, "local translation {t:?}");
+        }
+        // The same step through accessBoneModelSpace with its children kept (00cdad80, 1),
+        // the call DoLookAtIK makes on the head bone.
+        let (mut e, _) = engine();
+        let rig = make_rig(&mut e, &[NO_PARENT, 0], &[0; 2], 0, [1, 0]);
+        put_transform(
+            &mut e,
+            rig.model,
+            [0.0, 0.0, 100.0, 0.0],
+            [s, 0.0, 0.0, s],
+            [1.0, 1.0, 1.0, 1.0],
+        );
+        put_transform(
+            &mut e,
+            rig.model + 0x30,
+            [5.0, 0.0, 100.0, 0.0],
+            [s, 0.0, 0.0, s],
+            [1.0, 1.0, 1.0, 1.0],
+        );
+        set_flags_of(&mut e, &rig, &[0, 1]);
+        e.call(0x00cd_ad80, &args![rig.pose, 0u32, 1u32]);
+        let [t, _, _] = get_transform(&e, rig.local + 0x30);
+        for (got, want) in t[..3].iter().zip([5.0, 0.0, 0.0]) {
+            assert!((got - want).abs() < 1e-3, "local translation {t:?}");
+        }
     }
 
     #[test]

@@ -11472,7 +11472,10 @@ const SETTING_BOOL_11E05EC: u32 = 0x011e_05ec;
 const SAY_REPORT_MANAGER: u32 = 0x011f_11e0;
 /// `00905f30`: thiscall on the manager, takes the actor and the line text.
 const SAY_REPORT: u32 = 0x0090_5f30;
-/// `00935f00`: cdecl, a form id and a flag.
+/// `00935f00`: cdecl, a form id and a word: when the reference is an actor
+/// (virtual `+0xfc`), `004bc4a0(3)`. It is also the voice's played callback
+/// (`008a29ba` pushes it for `00adc050`, message 0x3b), which runs when the
+/// sound starts (`00ae9af0` from `00aed080`).
 const SAY_CANCEL_FN: u32 = 0x0093_5f00;
 /// Global `float` the cancel of a missing lip sync stores
 /// (`0x011d951c`).
@@ -11798,9 +11801,12 @@ fn say_line(
     let manager = e.call(AUDIO_MANAGER_INSTANCE, &args![]).u32();
     let form_id = e.call(REFR_FORM_ID, &args![this]).u32();
     let first = e.call(ENTRY_FIRST_EXTRA_LIST, &args![out_sound]).u32();
+    // 008a29ae..008a29cb: the form id, `PUSH 0x935f00`, the sound id. Not
+    // `SayToCallBack` (`00936a20`): as the played callback it would end the
+    // line the moment its voice starts.
     e.call(
         AUDIO_MANAGER_SET_CALLBACK_B,
-        &args![manager, first, SAY_TO_CALLBACK, form_id],
+        &args![manager, first, SAY_CANCEL_FN, form_id],
     );
     let result: f32;
     if lip_sync != 0 {
@@ -20841,8 +20847,12 @@ mod tests {
         );
         assert_eq!(
             calls_to(&e, AUDIO_MANAGER_SET_CALLBACK_B),
-            vec![vec![0x6300, 3000, SAY_TO_CALLBACK, 0x4400]]
+            vec![vec![0x6300, 3000, SAY_CANCEL_FN, 0x4400]]
         );
+        // The played callback is `00935f00` (008a29ba), never `SayToCallBack`,
+        // which would end the line as its voice starts.
+        assert_eq!(SAY_CANCEL_FN, 0x0093_5f00);
+        assert_eq!(call_count(&e, SAY_TO_CALLBACK), 0);
         // Playback is delayed by (0.5 + 2.0) * 1000 milliseconds.
         assert_eq!(
             calls_to(&e, SOUND_HANDLE_PLAY_AFTER),

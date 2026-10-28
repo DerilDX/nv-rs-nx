@@ -348,14 +348,18 @@ pub fn hkp_sphere_shape_get_aabb_impl(
 /// `hkpSphereShape::getCollisionSpheresImpl` (Xbox PDB): the one collision
 /// sphere is the origin with the radius in its `w` lane (the radius goes
 /// through `FLD`/`FSTP`).
+/// Answers `out` (the `const hkSphere*` of the Xbox PDB signature; `EAX` is `out` at the
+/// RET 00cd8158): hkpConvexTransformShape::getCollisionSpheresImpl reads it through its child
+/// shape's slot +0x30 (`MOV EDI,EAX` at 00d5df2f).
 pub fn hkp_sphere_shape_get_collision_spheres_impl(
     e: &mut Engine,
     this: Ptr<HkpSphereShape>,
     out: Ptr,
-) {
+) -> Ptr {
     store_vec(e, out.addr(), [0.0; 4]);
     let radius = e.get(this, HkpSphereShape::m_radius);
     e.mem.set_f32(out.addr() + 0xc, x87_quiet(radius));
+    out
 }
 
 // Translated from 00cd8190 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -648,7 +652,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x00cd8140,
-            hkp_sphere_shape_get_collision_spheres_impl(Ptr<HkpSphereShape>, Ptr)
+            hkp_sphere_shape_get_collision_spheres_impl(Ptr<HkpSphereShape>, Ptr) -> Ptr
         ),
         entry!(
             0x00cd8190,
@@ -813,6 +817,15 @@ mod tests {
         e.call(0x00cd8100, &args![this, transform, 0.25f32, out]);
         assert_eq!(load_vec(&e, out), [0.25, 1.25, 2.25, 3.25]);
         assert_eq!(load_vec(&e, out + 0x10), [1.75, 2.75, 3.75, 4.75]);
+    }
+
+    #[test]
+    fn collision_sphere_answers_the_buffer() {
+        let mut e = engine();
+        let this = sphere(&mut e, 0.75);
+        let out = e.mem.alloc(0x10);
+        // EAX is `out` at the RET (00cd8158); the convex transform shape reads it (00d5df2f).
+        assert_eq!(e.call(0x00cd_8140, &args![this, out]).u32(), out);
     }
 
     #[test]

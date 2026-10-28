@@ -567,8 +567,17 @@ pub fn hk_data_world_native_find_object(
 
 // Translated from 00dbb610 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkDataWorldNative::getType` (Xbox PDB), thiscall, `RET 4`: stores 0 at `out`.
-pub fn hk_data_world_native_get_type(e: &mut Engine, _this: Ptr<HkDataWorldNative>, out: Ptr) {
+/// Answers `out` (the `hkEnum<DataWorldType>` returned through the hidden pointer, Xbox PDB
+/// `getType` returns `?AV?$hkEnum`; `EAX` is `out`, loaded at 00dbb610, at the RET 00dbb61a):
+/// the tagfile reader's readClass tests the type through it (`CMP [EAX],EBX` at 00dc6ccc after
+/// its world's slot +0x18 call at 00dc6cca, the world at reader +0x10).
+pub fn hk_data_world_native_get_type(
+    e: &mut Engine,
+    _this: Ptr<HkDataWorldNative>,
+    out: Ptr,
+) -> Ptr {
     e.mem.set_u32(out.addr(), 0);
+    out
 }
 
 // Translated from 00dbb620 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -859,8 +868,12 @@ pub fn fn_00dbba10(_e: &mut Engine, _this: Ptr, _unused_1: u32) -> f32 {
 // Translated from 00dbba20 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkDataArrayImpl::asHalf` (Xbox PDB), thiscall, `RET 8`: stores the 16-bit half 0 at `out`
 /// (the exe converts 0.0 to its upper 16 bits); `this` and the second argument are not read.
-pub fn hk_data_array_impl_as_half(e: &mut Engine, _this: Ptr, out: Ptr, _unused_2: u32) {
+/// Answers `out` (`hkHalf` returned through the hidden pointer, Xbox PDB `asHalf` returns
+/// `?AVhkHalf`; `EAX` is `out`, loaded at 00dbba23, at the RET 00dbba34). No exe reader of
+/// the slot +0x38 was found.
+pub fn hk_data_array_impl_as_half(e: &mut Engine, _this: Ptr, out: Ptr, _unused_2: u32) -> Ptr {
     e.mem.set_u16(out.addr(), 0);
+    out
 }
 
 // Translated from 00dbba40 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1753,7 +1766,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x00db_b610,
-            hk_data_world_native_get_type(Ptr<HkDataWorldNative>, Ptr)
+            hk_data_world_native_get_type(Ptr<HkDataWorldNative>, Ptr) -> Ptr
         ),
         entry!(
             0x00db_b620,
@@ -1807,7 +1820,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             hk_data_class_native_get_member_index_by_name(Ptr<HkDataClassNative>, u32) -> i32
         ),
         entry!(0x00db_ba10, fn_00dbba10(Ptr, u32) -> f32),
-        entry!(0x00db_ba20, hk_data_array_impl_as_half(Ptr, Ptr, u32)),
+        entry!(0x00db_ba20, hk_data_array_impl_as_half(Ptr, Ptr, u32) -> Ptr),
         entry!(0x00db_ba40, fn_00dbba40(Ptr, u32) -> u64),
         entry!(
             0x00db_ba50,
@@ -2432,6 +2445,20 @@ mod tests {
         assert_eq!(
             calls_to(&e, CLASS_ACCESSOR_INIT_PAIR)[1][1..],
             [0x7000, 0x6100]
+        );
+    }
+
+    #[test]
+    fn world_get_type_answers_the_result_pointer() {
+        let mut e = engine();
+        let out = e.mem.alloc(8);
+        // EAX is `out` at the RET 00dbb61a; the tagfile reader tests `[EAX]` (00dc6ccc).
+        assert_eq!(e.call(0x00db_b610, &args![0x1000u32, out]).u32(), out);
+        let half = e.mem.alloc(4);
+        // asHalf: EAX is `out` at the RET 00dbba34.
+        assert_eq!(
+            e.call(0x00db_ba20, &args![0x1000u32, half, 5u32]).u32(),
+            half
         );
     }
 

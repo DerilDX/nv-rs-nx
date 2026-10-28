@@ -2636,13 +2636,16 @@ pub fn fn_00b5d300(e: &mut Engine, this: Ptr<ShadowSceneNode>, light: u32) {
     let ni_light = e.mem.u32(light.wrapping_add(LIGHT_SP_LIGHT));
     // `FLD; FSTP; FLD; FSTP` of the radius.
     let radius = x87_quiet_bits(e.mem.u32(ni_light.wrapping_add(0xe0)));
-    e.with_stack(0x20, |e, frame| {
+    e.with_stack(0x24, |e, frame| {
         // The function's frame: its own argument slot (the light), the point, the bound and
-        // the portal temporary.
+        // the portal temporary. The exe (ESP-based, `SUB ESP,0x2c`) keeps them apart: the
+        // portal at +0x4, the point at +0x10, the bound's centre at +0x1c and its radius at
+        // +0x28 (`FSTP [ESP+0x38]` after four pushes), the light argument at +0x30. The bound is
+        // 0x10 bytes, so the portal slot sits after it rather than on its radius.
         let light_slot = frame.addr();
         let point = light_slot + 4;
         let bound = light_slot + 0x10;
-        let portal_slot = light_slot + 0x1c;
+        let portal_slot = light_slot + 0x20;
         e.mem.set_u32(light_slot, light);
         for word in 0..3u32 {
             e.mem.set_u32(point + 4 * word, position[word as usize]);
@@ -6258,6 +6261,64 @@ mod b064_tests {
         let rooms_of_light = e.mem.u32(light + 0x214);
         assert_eq!(e.mem.u32(rooms_of_light), room);
         assert_eq!(calls(&e, LIGHT_ADD_OBJECT), vec![vec![light, room]]);
+    }
+
+    /// The portal temporary of 00b5d300 does not overlap the bound: a room the light has
+    /// left walks its portals (writing the portal slot), and the next room still gets the
+    /// light's radius at bound +0xc.
+    #[test]
+    fn fn_00b5d300_keeps_the_bound_radius_after_walking_a_rooms_portals() {
+        let mut e = rig();
+        object_doubles(&mut e);
+        light_update_doubles(&mut e);
+        let this = scene(&mut e);
+        let graph = e.mem.alloc(0x80);
+        e.mem.set_u32(graph + 0x28, 1);
+        e.set(this, ShadowSceneNode::pBSPortalGraph, graph);
+        // Every room bound test records the radius it was handed.
+        let radii = e.mem.alloc(0x10);
+        e.register_double(0x0f10_0300, move |e, a| {
+            let count = e.mem.u32(radii);
+            let radius = e.mem.u32(a[1] + 0xc);
+            e.mem.set_u32(radii + 4 + 4 * count, radius);
+            e.mem.set_u32(radii, count + 1);
+            0u32.into_ret()
+        });
+        e.register(0x0f10_0304, |_, _| 0u32.into_ret());
+        let shape = object(&mut e, 0x10);
+        let shape_vtable = e.mem.u32(shape);
+        e.mem.set_u32(shape_vtable + 0xb4, 0x0f10_0304);
+        let holder = e.mem.alloc(0x10);
+        e.mem.set_u32(holder + 0xc, shape);
+        let rooms = e.mem.alloc(12);
+        let portal = e.mem.alloc(0x110);
+        for with_portal in [true, false] {
+            let room = object(&mut e, 0x100);
+            let room_vtable = e.mem.u32(room);
+            e.mem.set_u32(room_vtable + 0x110, 0x0f10_0300);
+            e.mem.set_u32(room + 0xac, holder);
+            if with_portal {
+                let portals = e.mem.alloc(12);
+                append(&mut e, portals, portal);
+                e.mem.set_u32(room + 0xb4, e.mem.u32(portals));
+            }
+            append(&mut e, rooms, room);
+        }
+        e.mem.set_u32(graph + 0x20, e.mem.u32(rooms));
+        let light = object(&mut e, 0x250);
+        let ni_light = e.mem.alloc(0x100);
+        e.mem.set_f32(ni_light + 0xc4, 1.0);
+        e.mem.set_f32(ni_light + 0xe0, 5.0);
+        e.mem.set_u32(light + 0xf8, ni_light);
+        // Every find answers the first slot: the rooms list the light (so it is removed)
+        // and the portal is already in the light's portal array.
+        e.register(ARRAY_FIND_00B5A930, |_, _| 0u32.into_ret());
+        e.register(ARRAY_REMOVE_00B5AEA0, |_, _| Ret::default());
+        e.register(PORTAL_GRAPH_ALWAYS_RENDER_COUNT, |_, _| 0u32.into_ret());
+        e.call(0x00b5_d300, &args![this, light]);
+        assert_eq!(e.mem.u32(radii), 2);
+        assert_eq!(e.mem.f32(radii + 4), 5.0);
+        assert_eq!(e.mem.f32(radii + 8), 5.0);
     }
 
     /// The array slot allocation double (`BSSimpleArray` virtual slot +4).

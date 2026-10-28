@@ -2153,6 +2153,9 @@ fn ray_world(e: &Engine, base: u32) -> u32 {
 /// height of the point; with byte `+0x240` clear the normal becomes the vector `(fill, fill,
 /// third, fill)`. The start, end, normal and fraction are stored in the cache record, and a miss
 /// stores the "no hit" float; the record index `[this + 0x238]` grows by one.
+/// Answers `hit` (the `hkBool` returned through the hidden pointer, Xbox PDB `castRay` returns
+/// `?AVhkBool`; `EAX` is `hit`, reloaded at 00c77a9b, at the RET 00c77ab5 on every path). No exe
+/// reader of the hkaRaycastInterface slot +0x8 was found.
 pub fn bhk_ragdoll_controller_cast_ray(
     e: &mut Engine,
     this: Ptr,
@@ -2161,7 +2164,7 @@ pub fn bhk_ragdoll_controller_cast_ray(
     to: u32,
     fraction: u32,
     normal: u32,
-) {
+) -> u32 {
     let base = this.addr();
     let no_hit = x87_quiet(e.mem.f32(NO_HIT_FRACTION));
     let record = ray_cache_record(e, base);
@@ -2263,7 +2266,7 @@ pub fn bhk_ragdoll_controller_cast_ray(
         e.mem
             .set_u32(next, x87_quiet_bits(e.mem.u32(NO_HIT_FRACTION)));
         advance_ray_cache(e, base, hit, found);
-        return;
+        return hit;
     }
     let along = [x87_quiet(e.mem.f32(fraction)); 4];
     let ones = load4(e, ONE_VECTOR);
@@ -2320,6 +2323,7 @@ pub fn bhk_ragdoll_controller_cast_ray(
     let next = ray_cache_record(e, base) + 0x40;
     e.mem.set_u32(next, x87_quiet_bits(e.mem.u32(fraction)));
     advance_ray_cache(e, base, hit, found);
+    hit
 }
 
 /// The end of `castRay`: the record index `[this + 0x238]` is incremented (16 bits) and the byte
@@ -7163,7 +7167,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00c7c3a0, bhk_ragdoll_controller_init_foot_ik(Ptr, u32)),
         entry!(
             0x00c77460,
-            bhk_ragdoll_controller_cast_ray(Ptr, u32, u32, u32, u32, u32)
+            bhk_ragdoll_controller_cast_ray(Ptr, u32, u32, u32, u32, u32) -> u32
         ),
         entry!(0x00c7e3b0, fn_00c7e3b0(Ptr)),
         entry!(0x00c76350, bhk_ragdoll_controller_do_foot_ik(Ptr, u32)),
@@ -7963,6 +7967,27 @@ mod tests {
             rig.normal
         ];
         e.call(0x00c7_7460, &call_args);
+    }
+
+    #[test]
+    fn cast_ray_answers_the_hit_pointer() {
+        let mut e = engine();
+        let log = CallLog::default();
+        let rig = cast_rig(&mut e, &log, 0.0, 0, None);
+        put_floats(&mut e, rig.cache + 0x10, &[0.005, 0.0, 10.0, 99.0]);
+        put_floats(&mut e, rig.cache + 0x20, &[0.0; 4]);
+        put_floats(&mut e, rig.cache + 0x30, &[0.0, 0.6, 0.8, 0.0]);
+        e.mem.set_f32(rig.cache + 0x40, 0.25);
+        let call_args = args![
+            rig.this,
+            rig.hit,
+            rig.from,
+            rig.to,
+            rig.fraction,
+            rig.normal
+        ];
+        // EAX is `hit` (00c77a9b) at the RET 00c77ab5.
+        assert_eq!(e.call(0x00c7_7460, &call_args).u32(), rig.hit);
     }
 
     #[test]

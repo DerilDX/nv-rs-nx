@@ -427,9 +427,13 @@ pub fn destructor_00d46c30(e: &mut Engine, this: Ptr) {
 // Translated from 00d46c80 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkMemoryTrackStreamReader::skip` (Xbox PDB), `this` = the reader: advances the position at
 /// `+0xc` by `count`.
-pub fn memory_track_stream_reader_skip(e: &mut Engine, this: Ptr, count: u32) {
+/// Answers `count` (`hkStreamReader::skip` returns `int` in the Xbox PDB; `EAX` is `count`, loaded
+/// at 00d46c80, at the RET 00d46c87). No exe reader of the slot +0x14 through an
+/// hkStreamReader was found.
+pub fn memory_track_stream_reader_skip(e: &mut Engine, this: Ptr, count: u32) -> u32 {
     let at = this.addr() + 0xc;
     e.mem.set_u32(at, e.mem.u32(at).wrapping_add(count));
+    count
 }
 
 // Translated from 00d46c90 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -475,7 +479,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00d4_6b30, array_stream_writer_seek(Ptr, i32, u32) -> u32),
         entry!(0x00d4_6be0, destructor_00d46be0(Ptr)),
         entry!(0x00d4_6c30, destructor_00d46c30(Ptr)),
-        entry!(0x00d4_6c80, memory_track_stream_reader_skip(Ptr, u32)),
+        entry!(0x00d4_6c80, memory_track_stream_reader_skip(Ptr, u32) -> u32),
         entry!(0x00d4_6c90, returns_true_00d46c90(Ptr, u32) -> u32),
         entry!(0x00d4_6ca0, memory_track_stream_reader_is_ok(Ptr, u32) -> u32),
         entry!(0x00d4_6cc0, deleting_destructor_00d46cc0(Ptr, u8) -> Ptr),
@@ -1069,6 +1073,15 @@ mod tests {
         e.call(0x00d4_6c30, &args![writer]);
         assert_eq!(e.mem.u32(writer), BASE_VTABLE);
         assert!(log.borrow().is_empty());
+    }
+
+    #[test]
+    fn reader_skip_answers_the_count() {
+        let (mut e, _log, _) = track_engine();
+        let t = counting_track(&mut e);
+        let r = stream(&mut e, t, 10);
+        // EAX is the count at the RET 00d46c87 (`int skip(int)`).
+        assert_eq!(e.call(0x00d4_6c80, &args![r, 5u32]).u32(), 5);
     }
 
     #[test]

@@ -48,7 +48,7 @@ const REGISTER_AGENT_OTHER: u32 = 0x00cf_bcc0;
 /// The frame the queries build on the stack: three contacts of 0x20 bytes, three feature
 /// entries of 8 bytes, the capsule's end points, the triangle's vertices (in world space), a
 /// byte for the kind of the feature asked about, a temporary vector, the triangle's cache and
-/// a copy of a contact.
+/// a copy of a contact followed by the two bodies (the `hkpCdPoint` the collector gets).
 const OUT: u32 = 0;
 const FEATURES: u32 = 0x60;
 const ENDS: u32 = 0x80;
@@ -57,7 +57,7 @@ const KIND: u32 = 0xd0;
 const TEMP: u32 = 0xe0;
 const CACHE: u32 = 0xf0;
 const COPY: u32 = 0x110;
-const FRAME_SIZE: u32 = 0x130;
+const FRAME_SIZE: u32 = 0x138;
 
 /// The two bodies, the input and the triangle's cache of a query.
 #[derive(Clone, Copy)]
@@ -174,7 +174,9 @@ fn pick_contact(e: &mut Engine, frame: u32, pair: Pair) -> Option<u32> {
 
 /// `getClosestPoints`: profiled (`"TtCapsTriangle"`); `this` gives the cache (`this + 0x14`)
 /// of the virtual version, the static version makes it. The picked contact (see
-/// `pick_contact`) is copied (32 bytes) and handed to the collector (slot 4).
+/// `pick_contact`) is copied (32 bytes), followed by body A and body B (the exe's locals
+/// right after the copy: EBP-0xec, then EBP-0xcc and -0xc8, set at the start), and that
+/// `hkpCdPoint` is handed to the collector (slot 4, `addCdPoint`).
 fn closest_points(
     e: &mut Engine,
     this: Option<u32>,
@@ -200,6 +202,8 @@ fn closest_points(
         if let Some(contact) = pick_contact(e, frame, pair) {
             copy_vec(e, contact, frame + COPY);
             copy_vec(e, contact + 0x10, frame + COPY + 0x10);
+            e.mem.set_u32(frame + COPY + 0x20, body_a);
+            e.mem.set_u32(frame + COPY + 0x24, body_b);
             e.vcall(collector, 4, &args![frame + COPY]);
         }
     });
@@ -989,9 +993,14 @@ mod tests {
         let mut s = scene([0.5, 0.2, 0.0], [0; 3], 0, 0);
         let collector = logging_object(&mut s.e, &s.log, COLLECTOR);
         let got: Rc<RefCell<Vec<[f32; 8]>>> = Rc::new(RefCell::new(Vec::new()));
+        let bodies: Rc<RefCell<Vec<[u32; 2]>>> = Rc::new(RefCell::new(Vec::new()));
         let copy = Rc::clone(&got);
+        let copy_bodies = Rc::clone(&bodies);
         s.e.register_double(COLLECTOR + 4, move |e, a| {
             copy.borrow_mut().push(floats(e, a[1]));
+            copy_bodies
+                .borrow_mut()
+                .push([e.mem.u32(a[1] + 0x20), e.mem.u32(a[1] + 0x24)]);
             Ret::default()
         });
         let this = 0x4000_0000;
@@ -1003,6 +1012,8 @@ mod tests {
         s.e.call(address, &words);
         assert_eq!(*s.seen.borrow(), vec![world()]);
         assert_eq!(*got.borrow(), vec![contact(1, 0.2)]);
+        // The hkpCdPoint carries the two bodies after the contact.
+        assert_eq!(*bodies.borrow(), vec![[s.a, s.b]]);
         let util = &calls(&s.log, CAPS_VS_TRI)[0];
         if virtual_method {
             assert_eq!(util[4], this + 0x14);

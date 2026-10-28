@@ -916,11 +916,14 @@ fn light_alpha(e: &mut Engine, fallback: u32, property: u32) {
     if e.call(ALPHA_TEST_004A2020, &args![property, 0x11u32]).u32() as u8 != 0 {
         return;
     }
-    e.with_stack(0x14, |e, frame| {
+    // `other` is a whole 12-byte vector (00633b40 writes three floats), so the light
+    // iterator word follows it. In the exe (00bbe9c0, ESP-based) the vector, the scaled
+    // vector and the iterator are separate locals (ESP+0x8, ESP+0x18, ESP+0x34).
+    e.with_stack(0x1c, |e, frame| {
         let frame = frame.addr();
         let vector = frame;
         let other = frame + 0xc;
-        let out = frame + 0x10;
+        let out = frame + 0x18;
         let mut best = 0.0f32.to_bits();
         e.mem.set_u32(out, 0);
         let light = e.call(FIRST_ACTIVE_LIGHT, &args![property, out]).u32();

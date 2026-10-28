@@ -1412,7 +1412,9 @@ fn world_cell(e: &mut Engine, x: u32, y: u32) -> u32 {
 /// when the cell has one. `material` is kept without a texture.
 fn land_material(e: &mut Engine, cell: u32, point: u32, material: u32) -> u32 {
     let mut material = material;
-    e.with_stack(0x44, |e, data| {
+    // The land coordinate data is 0x50 bytes (0053b550 fills it up to +0x4d); the height
+    // follows it rather than sitting on its +0x40 word.
+    e.with_stack(0x54, |e, data| {
         let data = data.addr();
         e.call(LAND_COORD_DATA_CONSTRUCT, &args![data]);
         let land = e.call(CELL_GET_LAND, &args![cell]).u32();
@@ -1424,7 +1426,7 @@ fn land_material(e: &mut Engine, cell: u32, point: u32, material: u32) -> u32 {
         if texture == 0 {
             return;
         }
-        let height = data + 0x40;
+        let height = data + 0x50;
         e.mem.set_u32(height, 0.0f32.to_bits());
         material = e.call(LAND_TEXTURE_MATERIAL, &args![texture]).u32();
         if e.call(CELL_GET_LAND_HEIGHT, &args![cell, point, height])
@@ -1634,7 +1636,10 @@ fn jump_material(e: &mut Engine, reference: u32, cell: u32, water: bool, point: 
         && e.call(CELL_GET_LAND, &args![cell]).u32() != 0
     {
         let mut material = 0u32;
-        e.with_stack(0x44, |e, data| {
+        // The land coordinate data is 0x50 bytes: 0053b550 fills it up to the bytes at +0x4c and
+        // +0x4d. The height is its own local after it (the exe: data at EBP-0x8c, height at
+        // EBP-0x94 in 008391b0).
+        e.with_stack(0x54, |e, data| {
             let data = data.addr();
             e.call(LAND_COORD_DATA_CONSTRUCT, &args![data]);
             let land = e.call(CELL_GET_LAND, &args![cell]).u32();
@@ -1643,7 +1648,7 @@ fn jump_material(e: &mut Engine, reference: u32, cell: u32, water: bool, point: 
             let word = u32::from(e.mem.u16(data + 0x3c));
             let land = e.call(CELL_GET_LAND, &args![cell]).u32();
             let texture = e.call(LAND_TEXTURE_AT, &args![land, byte, word]).u32();
-            let height = data + 0x40;
+            let height = data + 0x50;
             e.mem.set_u32(height, 0.0f32.to_bits());
             if water {
                 material = 8;

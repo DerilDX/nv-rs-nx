@@ -5998,11 +5998,15 @@ pub fn fn_004c7400(
                             && usable)
                     {
                         e.vcall(weapon + 0x9c, 0x10, &args![]);
+                        // The object `00726070` answers for `weapon + 0x74` (kept at
+                        // EBP-0x70, 004c77d3..004c77f0) is the one whose slot 8 at +0x24 gives
+                        // the limit below; 0 when there is none.
                         let ammo_slot = weapon + 0x74;
-                        let mut limit_slot = ammo_slot;
-                        if limit_slot != 0 {
-                            e.call(WORD_AT_4, &args![limit_slot]);
-                        }
+                        let mut limit_slot = if ammo_slot != 0 {
+                            e.call(WORD_AT_4, &args![ammo_slot]).u32()
+                        } else {
+                            0
+                        };
                         ask_actor_value(e, actor, weapon);
                         let has_extras = entry != 0 && e.mem.u32(entry) != 0 && {
                             let head = e.mem.u32(entry);

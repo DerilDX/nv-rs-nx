@@ -895,7 +895,9 @@ fn queue_overlapping_navmeshes(
     obstacle: u32,
     operation: u32,
 ) {
-    e.with_stack(0x10, |e, found| {
+    // The navmesh scrap array is 0x14 bytes (006c6c60 sets its scrap heap at +0x10; EBP-0x2c in
+    // 006c1190, EBP-0x24 in 006c1760), one word more than the 0x10 this frame had.
+    e.with_stack(0x14, |e, found| {
         let found = found.addr();
         e.call(NAVMESH_ARRAY_CTOR, &args![found]);
         if e.call(OBSTACLE_OVERLAPPING_NAVMESHES, &args![obstacle, found])

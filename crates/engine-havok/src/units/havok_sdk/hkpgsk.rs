@@ -1557,7 +1557,9 @@ fn segment_segment_contact(
     normal_out: u32,
     closest_out: u32,
 ) {
-    e.with_stack(0x40, |e, frame| {
+    // The closest-points result of 00d22e40 is 0x30 bytes (its distance at +0x20), so the frame
+    // runs to +0x50 rather than ending inside it.
+    e.with_stack(0x50, |e, frame| {
         let x = frame.addr();
         let (direction_b, direction_a, closest) = (x, x + 0x10, x + 0x20);
         let a0 = ld(e, segment_a);

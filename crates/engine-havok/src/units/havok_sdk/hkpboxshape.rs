@@ -212,8 +212,14 @@ pub fn hkp_box_shape_convert_vertex_ids_to_vertices_impl(
 // Translated from 00c9dd30 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkpBoxShape::getCollisionSpheresImpl` (Xbox PDB): writes the eight
 /// corner spheres to `out`: the sign vectors times `(half extent x, y, z,
-/// m_radius)`.
-pub fn hkp_box_shape_get_collision_spheres_impl(e: &mut Engine, this: Ptr<HkpBoxShape>, out: Ptr) {
+/// m_radius)`. Answers `out` (the `const hkSphere*` of the Xbox PDB signature; `EAX` is `out`
+/// at the RET 00c9dda4): hkpConvexTransformShape::getCollisionSpheresImpl reads it through
+/// its child shape's slot +0x30 (`MOV EDI,EAX` at 00d5df2f).
+pub fn hkp_box_shape_get_collision_spheres_impl(
+    e: &mut Engine,
+    this: Ptr<HkpBoxShape>,
+    out: Ptr,
+) -> Ptr {
     let half = load_vec(e, this.addr() + HALF_EXTENTS);
     let radius = x87_quiet(e.get(this, HkpBoxShape::m_radius));
     // The `w` lane of the multiplier is the radius (it replaces the stored `w`).
@@ -223,6 +229,7 @@ pub fn hkp_box_shape_get_collision_spheres_impl(e: &mut Engine, this: Ptr<HkpBox
         let sphere = std::array::from_fn(|lane| signs[lane] * scale[lane]);
         store_vec(e, out.addr() + 0x10 * corner, sphere);
     }
+    out
 }
 
 // Translated from 00c9de40 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -451,7 +458,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x00c9dd30,
-            hkp_box_shape_get_collision_spheres_impl(Ptr<HkpBoxShape>, Ptr)
+            hkp_box_shape_get_collision_spheres_impl(Ptr<HkpBoxShape>, Ptr) -> Ptr
         ),
         entry!(
             0x00c9de40,
@@ -605,6 +612,15 @@ mod tests {
                 "corner {corner}"
             );
         }
+    }
+
+    #[test]
+    fn collision_spheres_answer_the_buffer() {
+        let mut e = engine();
+        let this = the_box(&mut e);
+        let out = e.mem.alloc(0x80);
+        // EAX is `out` at the RET (00c9dda4); 00d5df2f reads it.
+        assert_eq!(e.call(0x00c9_dd30, &args![this, out]).u32(), out);
     }
 
     /// A profile stream with room for two records; the TLS lookup returns it.

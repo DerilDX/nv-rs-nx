@@ -1471,10 +1471,12 @@ pub fn fn_006f9800(e: &mut Engine, this: Ptr, item: u32) -> u32 {
 }
 
 // Translated from 006f9850 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Unnamed: an array's element copy for 0x20-byte elements (thiscall, two words: destination and
-/// count; `RET 8`; `this` is not read): `0042f5d0(destination, count * 0x20)` (cdecl).
-pub fn fn_006f9850(e: &mut Engine, _this: Ptr, destination: u32, count: u32) {
-    e.call(0x0042_f5d0, &args![destination, count << 5]);
+/// Unnamed: an array's reallocation for 0x20-byte elements (thiscall, two words: the buffer and
+/// the count; `RET 8`; `this` is not read): `0042f5d0(buffer, count * 0x20)` (cdecl), whose
+/// answer is left in EAX up to the `RET` (`006f9862`..`006f986d`) and is the new buffer
+/// `006f9eb0` stores (vtable slot 0xC).
+pub fn fn_006f9850(e: &mut Engine, _this: Ptr, buffer: u32, count: u32) -> u32 {
+    e.call(0x0042_f5d0, &args![buffer, count << 5]).u32()
 }
 
 // Translated from 006f9c20 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1731,7 +1733,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006f_9740, fn_006f9740(Ptr) -> Ptr),
         entry!(0x006f_9770, fn_006f9770(Ptr)),
         entry!(0x006f_9800, fn_006f9800(Ptr, u32) -> u32),
-        entry!(0x006f_9850, fn_006f9850(Ptr, u32, u32)),
+        entry!(0x006f_9850, fn_006f9850(Ptr, u32, u32) -> u32),
         entry!(0x006f_9c20, fn_006f9c20(Ptr, u32) -> u32),
         entry!(
             0x006f_9cd0,
@@ -3275,12 +3277,13 @@ mod n089_tests {
     }
 
     #[test]
-    fn n089_006f9850_copies_the_elements() {
+    fn n089_006f9850_reallocates_and_answers_the_new_buffer() {
         let mut e = Engine::new();
-        stub(&mut e, &[0x0042_f5d0]);
+        e.register(0x0042_f5d0, |_, _| 0x7000u32.into_ret());
         e.call_log = Some(vec![]);
-        e.call(0x006f_9850, &args![0u32, 0x6000u32, 3u32]);
+        let answer = e.call(0x006f_9850, &args![0u32, 0x6000u32, 3u32]).u32();
         assert_eq!(calls_to(&e, 0x0042_f5d0), vec![vec![0x6000, 0x60]]);
+        assert_eq!(answer, 0x7000, "the buffer 0042f5d0 leaves in EAX");
     }
 
     #[test]

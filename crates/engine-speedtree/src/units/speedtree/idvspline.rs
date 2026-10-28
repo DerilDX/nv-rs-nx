@@ -1687,7 +1687,9 @@ fn key_less(e: &mut Engine, a: u32, b: u32) -> bool {
 fn throw_with_text(e: &mut Engine, text: u32, vtable: u32, throw_info: u32) -> ! {
     e.with_stack(0x1c, |e, string| {
         e.call(STRING_FROM_C_STRING, &args![string, text]);
-        e.with_stack(0x10, |e, exception| {
+        // A std::runtime_error is 0x28 bytes: the 0xc-byte std::exception (00ec78e0) and the
+        // 0x1c-byte message string 0044a310 builds at +0xc.
+        e.with_stack(0x28, |e, exception| {
             e.call(RUNTIME_ERROR_FROM_STRING, &args![exception, string]);
             e.mem.set_u32(exception.addr(), vtable);
             e.call(CXX_THROW_EXCEPTION, &args![exception, throw_info]);

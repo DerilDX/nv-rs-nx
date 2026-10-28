@@ -9022,7 +9022,13 @@ pub fn fn_00e606c0(e: &mut Engine, this: Ptr, out: Ptr) {
 /// Writes the vertices (thiscall, `RET 4`): for each of the `word[+0x1c]` 16-byte vectors at the
 /// address in `this + 0x18` copies the vector to `out` and then stores the float at `this + 0x10` in
 /// its fourth lane (through the x87 stack).
-pub fn fn_00e606e0(e: &mut Engine, this: Ptr, out: Ptr) {
+/// Answers `EAX` at the RET 00e60722: `out`, loaded at 00e606e7. The RTTI-less vtable `010ece2c`
+/// holds this at slot +0x30 and hkpShape::castRayBundleImpl (00c9e400) at +0x28; +0x30 is
+/// getCollisionSpheresImpl (`const hkSphere*` in the Xbox PDB) in the hkpBoxShape, hkpSphereShape
+/// and hkpCapsuleShape vtables, so this is taken as that method (the class is unconfirmed).
+/// hkpConvexTransformShape::getCollisionSpheresImpl reads it through its child shape's slot
+/// +0x30 (`MOV EDI,EAX` at 00d5df2f).
+pub fn fn_00e606e0(e: &mut Engine, this: Ptr, out: Ptr) -> u32 {
     e.with_stack(0x200, |e, frame| {
         let mut esp = frame.addr() + 0x100;
         e.mem.set_u32(esp.wrapping_add(4), out.addr());
@@ -9104,7 +9110,7 @@ pub fn fn_00e606e0(e: &mut Engine, this: Ptr, out: Ptr) {
                     esp = ebp; // 00e6071f
                     ebp = e.mem.u32(esp);
                     esp = esp.wrapping_add(4); // 00e60721
-                    return; // 00e60722
+                    return eax; // 00e60722
                 }
                 _ => unreachable!("no block at {pc:08x}"),
             }
@@ -10325,7 +10331,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e60680, fn_00e60680(Ptr, i32) -> i32),
         entry!(0x00e60690, fn_00e60690(Ptr, u32, u32) -> u32),
         entry!(0x00e606c0, fn_00e606c0(Ptr, Ptr)),
-        entry!(0x00e606e0, fn_00e606e0(Ptr, Ptr)),
+        entry!(0x00e606e0, fn_00e606e0(Ptr, Ptr) -> u32),
         entry!(0x00e60730, fn_00e60730(Ptr, Ptr, i32, Ptr)),
         entry!(0x00e607c0, fn_00e607c0(Ptr, f32) -> Ptr),
         entry!(0x00e60800, fn_00e60800(Ptr, Ptr, f32, Ptr)),
@@ -10385,6 +10391,23 @@ mod tests {
         let mut e = Engine::new();
         fn_00e5cee0(&mut e);
         assert_eq!(e.call(0x00e5_cee0, &args![]).u32(), 0);
+    }
+
+    #[test]
+    fn collision_spheres_00e606e0_answer_the_buffer() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x20);
+        let vectors = e.mem.alloc(0x20);
+        e.mem.set_u32(this + 0x18, vectors);
+        e.mem.set_u32(this + 0x1c, 2);
+        e.mem.set_f32(this + 0x10, 0.5);
+        let out = e.mem.alloc(0x20);
+        // EAX is `out` (00e606e7) at the RET 00e60722; 00d5df2f reads it.
+        assert_eq!(e.call(0x00e6_06e0, &args![this, out]).u32(), out);
+        assert_eq!(e.mem.f32(out + 0x1c), 0.5);
+        // No vectors: still `out`.
+        e.mem.set_u32(this + 0x1c, 0);
+        assert_eq!(e.call(0x00e6_06e0, &args![this, out]).u32(), out);
     }
 
     #[test]

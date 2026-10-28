@@ -429,7 +429,9 @@ fn iterator_words(e: &Engine, iterator: u32) -> (u32, u32) {
 /// exception object from it (`00b09480`) and throws it (`_CxxThrowException`); the throw does
 /// not return in the exe.
 fn throw_formatted(e: &mut Engine, format: u32, value: u32) {
-    e.with_stack(0x40, |e, frame| {
+    // The message string at +0, the 0x28-byte exception 00b09480 builds (std::exception and
+    // its string at +0xc) at +0x20, so the frame runs to +0x48.
+    e.with_stack(0x48, |e, frame| {
         let message = frame;
         let object: Ptr = Ptr::new(frame.addr() + 0x20);
         let text = idv_format_string(e, message, Ptr::new(format), &[value]);
@@ -442,7 +444,9 @@ fn throw_formatted(e: &mut Engine, format: u32, value: u32) {
 /// built from its text (`0044a4c0`), the exception object from it (`00b09480`) and thrown; the
 /// throw does not return in the exe.
 fn throw_default_reached(e: &mut Engine) {
-    e.with_stack(0x40, |e, frame| {
+    // The message string at +0, the 0x28-byte exception 00b09480 builds (std::exception and
+    // its string at +0xc) at +0x20, so the frame runs to +0x48.
+    e.with_stack(0x48, |e, frame| {
         let message = frame;
         let object: Ptr = Ptr::new(frame.addr() + 0x20);
         e.call(STRING_FROM_CHARS, &args![message, DEFAULT_REACHED_MESSAGE]);
